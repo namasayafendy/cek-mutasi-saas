@@ -1,22 +1,43 @@
-import { Construction } from "lucide-react";
+import { redirect } from "next/navigation";
+import Link from "next/link";
+import { getAccountContext } from "@/lib/supabase/context";
+import { createClient } from "@/lib/supabase/server";
+import { BanksClient } from "./banks-client";
+import type { Bank } from "@/lib/types";
 
-export default function BanksPage() {
+export default async function BanksPage() {
+  const ctx = await getAccountContext();
+  if (!ctx) redirect("/login");
+  if (ctx.member.role !== "owner") {
+    return (
+      <div className="card p-5 border-amber-200 bg-amber-50 text-amber-800 text-sm">
+        Hanya owner yang bisa kelola bank.{" "}
+        <Link href="/dashboard" className="font-medium underline">
+          Kembali ke Dashboard
+        </Link>
+      </div>
+    );
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("banks")
+    .select("*")
+    .order("urutan", { ascending: true })
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    return (
+      <div className="card p-5 border-red-200 bg-red-50 text-red-800 text-sm">
+        Gagal memuat bank: {error.message}
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Bank & Rekening</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Atur rekening bank/e-wallet yang Anda pakai untuk terima/kirim transferan.
-        </p>
-      </div>
-      <div className="card p-8 text-center">
-        <Construction className="h-10 w-10 mx-auto text-slate-400" />
-        <h2 className="mt-3 font-medium text-slate-900">Sedang dibangun</h2>
-        <p className="mt-1 text-sm text-slate-600 max-w-md mx-auto">
-          Halaman ini akan dirilis di Phase 1C. CRUD bank, parser per format, multi-rekening
-          merge vs separate mode.
-        </p>
-      </div>
-    </div>
+    <BanksClient
+      initialBanks={(data ?? []) as Bank[]}
+      accountId={ctx.account.id}
+    />
   );
 }
