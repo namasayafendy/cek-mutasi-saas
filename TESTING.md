@@ -181,3 +181,17 @@ Test scenarios untuk persistensi sesi dan halaman history:
 
 ### Parser BCA KlikBCA HTML — DEFER
 Parser HTML ditunda ke Phase 2.3 karena butuh refactor viewer/highlight (HTML beda dari PDF, tidak bisa dipakai langsung dengan pdfjs/pdf-lib).
+
+---
+
+## Phase 2.3 — KlikBCA HTML Parser (with synthetic PDF)
+
+KlikBCA download dalam format HTML, di-convert ke synthetic PDF supaya pipeline viewer/highlight/output existing tetap work.
+
+- ⏳ Tambah bank "BCA — KlikBCA (web)" di /banks (status Ready)
+- ⏳ Upload `samples/klikbca.html` → 3 rows parsed (1 CR Rp 1.020.000, 2 DB total Rp 30.750)
+- ⏳ Match dengan summary HTML: "Mutasi Kredit 1.020.000,00", "Mutasi Debet 30.750,00"
+- ⏳ Synthetic PDF di-generate dengan layout table rapi (header brand, account info, table dengan alternate row, badge CR hijau/DB merah)
+- ⏳ Highlight overlay jalan di synthetic PDF (saat input + match)
+- ⏳ Download hasil = synthetic PDF + lampiran rekap
+- ⏳ Account info tersaji di header PDF: "BCA KlikBCA — Mutasi Rekening", No Rek, Nama, Periode

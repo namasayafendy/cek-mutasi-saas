@@ -51,8 +51,8 @@ export const PARSER_REGISTRY: ParserSpec[] = [
     kode: "BCA",
     label: "BCA — KlikBCA (web)",
     format: "html",
-    status: "coming_soon",
-    hint: "File HTML dari klikbca.com (custom date range, paling fleksibel).",
+    status: "ready",
+    hint: "File HTML dari klikbca.com Mutasi Rekening (custom date range). Hasil cek akan dikonversi ke PDF table format.",
     category: "bank",
   },
   {
