@@ -46,12 +46,14 @@ export function CheckClient({
   banks,
   jenis,
   accountId,
+  userId,
   settings,
 }: {
   outlets: Outlet[];
   banks: Bank[];
   jenis: Jenis;
   accountId: string;
+  userId: string;
   settings: AccountSettings | null;
 }) {
   const router = useRouter();
@@ -155,13 +157,42 @@ export function CheckClient({
       a.remove();
       URL.revokeObjectURL(url);
 
-      // Update last_input_date in account_settings (jenis-specific)
-      if (matchedInputs.length > 0) {
+      // Save session ke history
+      if (parsed && activeBank && matchedInputs.length > 0) {
+        const supabase = createClient();
+        const { saveSession } = await import("@/lib/sessions/save");
+
+        // Hitung period mutasi (first/last tanggal di transactions)
+        const txDates = parsed.transactions.map((t) => t.tanggalDate.getTime());
+        const periodStart = txDates.length > 0 ? new Date(Math.min(...txDates)) : null;
+        const periodEnd = txDates.length > 0 ? new Date(Math.max(...txDates)) : null;
+        const pdfTotalAmount = parsed.transactions.reduce(
+          (s, t) => s + t.kredit,
+          0,
+        );
+
+        try {
+          await saveSession(supabase, {
+            accountId,
+            userId,
+            bankId: activeBank.id,
+            jenis,
+            inputs: matchedInputs,
+            summary,
+            pdfTotalAmount,
+            periodStart,
+            periodEnd,
+          });
+        } catch (e) {
+          console.error("Save session failed:", e);
+          // Non-blocking — download still proceeds
+        }
+
+        // Update last_input_date in account_settings (jenis-specific)
         const latestDate = matchedInputs.reduce(
           (max, i) => (i.tanggal.getTime() > max.getTime() ? i.tanggal : max),
           matchedInputs[0].tanggal,
         );
-        const supabase = createClient();
         const updateField =
           jenis === "kredit" ? "last_input_date_kredit" : "last_input_date_debet";
         await supabase

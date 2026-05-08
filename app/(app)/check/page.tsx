@@ -87,6 +87,7 @@ export default async function CheckPage({
       banks={readyBanks}
       jenis={jenis}
       accountId={ctx.account.id}
+      userId={ctx.user.id}
       settings={ctx.settings}
     />
   );

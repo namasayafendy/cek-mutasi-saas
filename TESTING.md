@@ -151,3 +151,19 @@ Test scenarios untuk parser bank tambahan:
 ### Multi-bank di /banks
 - ⏳ Tambah ketiga bank di atas. Dropdown di /check menampilkan ketiganya
 - ⏳ Dedup history tetap jalan per bank (BNI tx tidak dianggap duplicate dengan BSI BYOND tx walau tanggal+nominal sama)
+
+---
+
+## Phase 4.2 — Save Sessions + History Page
+
+Test scenarios untuk persistensi sesi dan halaman history:
+
+- ⏳ Setelah selesai cek mutasi + klik "Selesai & Download PDF", session ter-save ke `cek_sessions`
+- ⏳ Cek_inputs ter-save dengan match_status (matched / no_candidate / all_taken)
+- ⏳ Buka menu **History** di nav → list sesi tampil dengan: Tgl Cek, Jenis (Kredit/Debet badge), Periode Mutasi, count Input/Match/Tidak Match, total nominal match
+- ⏳ Klik "Detail" pada salah satu session → halaman /history/[id] tampil
+- ⏳ Detail page tampil 4 stat cards (Total Input, Match, Tidak Match, Bentrok) + table input lengkap
+- ⏳ Status badge per input row: Match (green), Tidak Match (red), Bentrok (amber dengan list tanggal)
+- ⏳ Cek di Supabase tabel `cek_sessions` dan `cek_inputs` → row sesuai
+- ⏳ Multi-tenant isolation: bikin akun beda, masing-masing tidak bisa lihat session yg lain
+- ⏳ Empty state /history saat belum ada session
