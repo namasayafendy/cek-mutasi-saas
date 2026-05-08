@@ -39,6 +39,7 @@ type AccountRow = {
   brand_name: string | null;
   support_email: string | null;
   support_wa: string | null;
+  staff_limit?: number | null;
   owner_user_id: string;
   created_at: string;
 };
@@ -100,6 +101,7 @@ export default function AccountDetailClient({
   const [brandName, setBrandName] = useState(account.brand_name ?? "");
   const [supportEmail, setSupportEmail] = useState(account.support_email ?? "");
   const [supportWa, setSupportWa] = useState(account.support_wa ?? "");
+  const [staffLimit, setStaffLimit] = useState<number>(account.staff_limit ?? 3);
 
   const owner = members.find((m) => m.role === "owner");
   const staff = members.filter((m) => m.role === "staff");
@@ -161,6 +163,7 @@ export default function AccountDetailClient({
           brand_name: brandName.trim() || undefined,
           support_email: supportEmail.trim() || undefined,
           support_wa: supportWa.trim() || undefined,
+          staff_limit: staffLimit,
         }),
       "Meta updated.",
     );
@@ -350,6 +353,20 @@ export default function AccountDetailClient({
                   className="input mt-0.5"
                 />
               </div>
+              <div>
+                <label className="text-xs text-slate-500">Staff limit</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={staffLimit}
+                  onChange={(e) => setStaffLimit(parseInt(e.target.value, 10) || 0)}
+                  className="input mt-0.5"
+                />
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  Default 3. Naikkan untuk customer enterprise.
+                </p>
+              </div>
             </div>
           ) : (
             <>
@@ -360,6 +377,7 @@ export default function AccountDetailClient({
               <Row label={<><Phone className="inline-block h-3 w-3" /> Support WA</>}>
                 {account.support_wa ?? "—"}
               </Row>
+              <Row label="Staff limit">{account.staff_limit ?? 3}</Row>
             </>
           )}
         </div>

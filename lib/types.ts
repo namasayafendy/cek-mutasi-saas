@@ -18,6 +18,7 @@ export type Account = {
   brand_name: string | null;
   support_email: string | null;
   support_wa: string | null;
+  staff_limit: number;
   created_at: string;
 };
 

@@ -36,6 +36,20 @@ export async function inviteStaff(email: string): Promise<ActionResult> {
 
   const admin = createAdminClient();
 
+  // Phase 8.5: cek staff_limit dulu sebelum invite
+  const { count: staffCount } = await admin
+    .from("team_members")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", ctx.account.id)
+    .eq("role", "staff");
+  const limit = ctx.account.staff_limit ?? 3;
+  if ((staffCount ?? 0) >= limit) {
+    return {
+      ok: false,
+      error: `Sudah mencapai batas ${limit} staff. Hubungi support kalau butuh lebih.`,
+    };
+  }
+
   // 1. Cek apakah email sudah ada di auth.users
   const { data: usersList, error: listErr } = await admin.auth.admin.listUsers();
   if (listErr) {

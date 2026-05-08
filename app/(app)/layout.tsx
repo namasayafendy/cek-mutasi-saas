@@ -4,6 +4,7 @@ import { getAccountContext, isSubscriptionUsable, trialDaysRemaining } from "@/l
 import { LogoutButton } from "./logout-button";
 import { AlertTriangle, Shield } from "lucide-react";
 import { isSuperadminEmail } from "@/lib/supabase/context";
+import { IdleTimeout } from "./idle-timeout";
 
 export default async function AppLayout({
   children,
@@ -21,6 +22,7 @@ export default async function AppLayout({
 
   return (
     <div className="flex flex-1 flex-col">
+      <IdleTimeout />
       {/* Subscription status banner */}
       {!usable && (
         <div className="bg-red-600 text-white text-sm px-4 py-2 text-center">

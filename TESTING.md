@@ -490,3 +490,26 @@ Akses platform-wide untuk Anda monitor semua tenant.
 ### Multi-tenant safety
 - ⏳ Pakai service role client → bypass RLS (intentional, scoped ke superadmin email check)
 - ⏳ Action server selalu re-verify isSuperadminEmail sebelum execute
+
+---
+
+## Phase 8.5 — Staff Limit 3 + Auto-Logout Idle 1 Jam
+
+### Staff limit
+- ⏳ Migration applied: `accounts.staff_limit DEFAULT 3`
+- ⏳ Buka /staff sebagai owner → header "X / 3 staff" tampil
+- ⏳ Sudah ada 3 staff → warning amber "Sudah mencapai batas 3 staff"
+- ⏳ Form invite di-disable (input + button)
+- ⏳ Coba invite via API langsung (bypass UI) → error "Sudah mencapai batas 3 staff"
+- ⏳ Remove 1 staff → form jadi enable lagi, badge update ke "2 / 3 staff"
+- ⏳ Super-admin /superadmin/accounts/[id] → klik Edit Meta → ubah Staff limit ke 5 → save
+- ⏳ Owner /staff sekarang bisa invite sampai 5 staff
+
+### Auto-logout idle
+- ⏳ Login → tunggu 55 menit tanpa aktivitas → modal warning muncul: "Sesi akan berakhir dalam 5:00"
+- ⏳ Countdown ticking realtime (5:00 → 4:59 → ...)
+- ⏳ Klik "Tetap login" → modal hilang, timer reset
+- ⏳ Tunggu 60 menit total tanpa klik → auto-logout, redirect ke /login?reason=idle
+- ⏳ /login tampil banner amber: "Sesi Anda berakhir karena tidak ada aktivitas..."
+- ⏳ Activity events (klik, scroll, keydown, touchstart) reset timer
+- ⏳ Login lagi → kerja normal

@@ -382,6 +382,10 @@ subscription_invoices
 - Onboarding flow (welcome wizard, demo data)
 - Customer support button (email + WA deeplink)
 - Settings & profile page
+- **/privacy page (Privacy Policy)** — bahasa Indonesia, 7 poin teknis (PDF client-side, TLS, AES-256, RLS, audit log, backup, password hash). Compliance UU PDP (UU 27/2022).
+- **/keamanan page (Security)** — landing page selling point: "PDF tidak pernah leave browser", visual flow diagram, FAQ keamanan
+- **Right to deletion** — tombol "Hapus seluruh data saya" di /akun
+- **/tos page** (Terms of Service)
 - Soft launch ke 5-10 beta tester
 - Bug fixes + performance tuning
 

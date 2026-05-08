@@ -38,5 +38,12 @@ export default async function StaffPage() {
     enriched.push({ ...m, email: userRes?.user?.email ?? null });
   }
 
-  return <StaffClient staff={enriched} currentUserId={ctx.user.id} />;
+  return (
+    <StaffClient
+      staff={enriched}
+      currentUserId={ctx.user.id}
+      staffLimit={ctx.account.staff_limit ?? 3}
+      brandSupportEmail={ctx.account.support_email}
+    />
+  );
 }

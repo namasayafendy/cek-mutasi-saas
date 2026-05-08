@@ -29,9 +29,13 @@ type StaffWithEmail = {
 export default function StaffClient({
   staff,
   currentUserId,
+  staffLimit,
+  brandSupportEmail,
 }: {
   staff: StaffWithEmail[];
   currentUserId: string;
+  staffLimit: number;
+  brandSupportEmail: string | null;
 }) {
   const [email, setEmail] = useState("");
   const [pending, startTransition] = useTransition();
@@ -80,6 +84,7 @@ export default function StaffClient({
 
   const owners = staff.filter((s) => s.role === "owner");
   const staffOnly = staff.filter((s) => s.role === "staff");
+  const atLimit = staffOnly.length >= staffLimit;
 
   return (
     <div className="space-y-6">
@@ -96,10 +101,28 @@ export default function StaffClient({
 
       {/* Invite form */}
       <div className="card p-4 space-y-3">
-        <h2 className="font-medium text-slate-900 flex items-center gap-1.5">
-          <UserPlus className="h-4 w-4" />
-          Invite Staff Baru
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="font-medium text-slate-900 flex items-center gap-1.5">
+            <UserPlus className="h-4 w-4" />
+            Invite Staff Baru
+          </h2>
+          <span
+            className={`text-xs px-2 py-0.5 rounded-full ${
+              atLimit
+                ? "bg-amber-50 text-amber-700"
+                : "bg-slate-100 text-slate-600"
+            }`}
+          >
+            {staffOnly.length} / {staffLimit} staff
+          </span>
+        </div>
+        {atLimit && (
+          <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+            Sudah mencapai batas <strong>{staffLimit} staff</strong>. Untuk tambah lebih, remove
+            staff yang tidak aktif atau hubungi support
+            {brandSupportEmail ? <> di <strong>{brandSupportEmail}</strong></> : null}.
+          </div>
+        )}
         <form onSubmit={handleInvite} className="flex flex-col sm:flex-row gap-2">
           <input
             type="email"
@@ -108,9 +131,13 @@ export default function StaffClient({
             onChange={(e) => setEmail(e.target.value)}
             placeholder="staff@contoh.com"
             className="input flex-1"
-            disabled={pending}
+            disabled={pending || atLimit}
           />
-          <button type="submit" className="btn-primary text-sm" disabled={pending}>
+          <button
+            type="submit"
+            className="btn-primary text-sm"
+            disabled={pending || atLimit}
+          >
             {pending ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" /> Memproses…

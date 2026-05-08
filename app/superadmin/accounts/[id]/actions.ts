@@ -181,10 +181,15 @@ export async function resetOwnerPassword(accountId: string): Promise<ActionResul
   return { ok: true };
 }
 
-/** Update brand_name + support contact via superadmin. */
+/** Update brand_name + support contact + staff_limit via superadmin. */
 export async function updateAccountMeta(
   accountId: string,
-  patch: { brand_name?: string; support_email?: string; support_wa?: string },
+  patch: {
+    brand_name?: string;
+    support_email?: string;
+    support_wa?: string;
+    staff_limit?: number;
+  },
 ): Promise<ActionResult> {
   const sa = await requireSuperadmin();
   if (!sa) return { ok: false, error: "Akses ditolak" };
