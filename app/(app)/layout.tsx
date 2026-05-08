@@ -63,6 +63,9 @@ export default async function AppLayout({
                 <Link href="/history" className="text-slate-600 hover:text-slate-900">
                   History
                 </Link>
+                <Link href="/rekap" className="text-slate-600 hover:text-slate-900">
+                  Rekap
+                </Link>
                 {isOwner && (
                   <>
                     <Link href="/outlets" className="text-slate-600 hover:text-slate-900">

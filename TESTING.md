@@ -195,3 +195,68 @@ KlikBCA download dalam format HTML, di-convert ke synthetic PDF supaya pipeline 
 - ⏳ Highlight overlay jalan di synthetic PDF (saat input + match)
 - ⏳ Download hasil = synthetic PDF + lampiran rekap
 - ⏳ Account info tersaji di header PDF: "BCA KlikBCA — Mutasi Rekening", No Rek, Nama, Periode
+
+---
+
+## Phase 5 — Rekap dengan filter
+
+Halaman rekap untuk analisa hasil cek mutasi lintas sesi.
+
+### Akses & navigasi
+- ⏳ Link **Rekap** muncul di nav (samping History)
+- ⏳ Klik link → halaman /rekap terbuka
+- ⏳ Default filter: 30 hari terakhir, semua jenis/bank/outlet/status
+- ⏳ Loading state saat fetch pertama kali
+
+### Filter
+- ⏳ Ubah tanggal Dari/Sampai → data otomatis re-fetch
+- ⏳ Pilih jenis Kredit / Debet → data ter-filter
+- ⏳ Pilih bank tertentu → data ter-filter ke bank itu saja
+- ⏳ Pilih outlet tertentu → data ter-filter ke outlet itu saja
+- ⏳ Pilih status Match → hanya tampil yang matched + manual_claimed
+- ⏳ Pilih status Tidak Ditemukan → hanya tampil no_candidate
+- ⏳ Pilih status Bentrok → hanya tampil all_taken
+- ⏳ Tombol cepat 7 hari / 30 hari / 90 hari / Bulan ini / Bulan lalu set range
+- ⏳ Tombol Reset balik ke default
+
+### Big number cards
+- ⏳ Total Input: count + nominal sum
+- ⏳ Match: count + nominal sum (warna hijau)
+- ⏳ Tidak Ditemukan: count + nominal sum (warna merah)
+- ⏳ Bentrok: count + nominal sum (warna amber)
+- ⏳ Match Rate: % match / total, info manual claim count
+
+### Breakdown per Outlet
+- ⏳ Tampil semua outlet yang punya input di periode filter
+- ⏳ Sorted by nominal match desc
+- ⏳ Color dot sesuai outlet warna_hex
+- ⏳ Outlet "(tanpa outlet)" muncul kalau ada input tanpa outlet_id
+
+### Breakdown per Bank
+- ⏳ Tampil semua bank yang punya input di periode filter
+- ⏳ Sorted by nominal match desc
+- ⏳ Bank "(tanpa bank)" muncul kalau ada input tanpa bank_id
+
+### Detail table
+- ⏳ List semua input sesuai filter, sort by tgl_input desc
+- ⏳ Sticky header table
+- ⏳ Max-height 600px dengan scroll
+- ⏳ Status badge per row (Match/Manual claim/Tidak ada/Bentrok)
+- ⏳ Warning kalau hasil terpotong di 5000 baris
+
+### Export CSV
+- ⏳ Klik Export CSV → file `rekap-YYYY-MM-DD-sd-YYYY-MM-DD.csv` ter-download
+- ⏳ Buka di Excel → kolom utf-8 (BOM) tampil rapih, kolom: Tanggal Input, Jenis, Outlet, Bank, Nominal, Status, Catatan Manual
+- ⏳ Tombol disabled saat loading / data kosong / sedang export
+
+### Export PDF
+- ⏳ Klik Export PDF → file `rekap-YYYY-MM-DD-sd-YYYY-MM-DD.pdf` ter-download
+- ⏳ Header brand_name + tanggal generate
+- ⏳ Filter description: periode, jenis, bank, outlet, status
+- ⏳ 5 summary cards (Total/Match/Tidak/Bentrok/Match Rate)
+- ⏳ Tabel breakdown per outlet & per bank
+- ⏳ Tabel detail input dengan auto-pagination + page number
+- ⏳ Tombol disabled saat loading / data kosong / sedang export
+
+### Multi-tenant isolation
+- ⏳ Akun A tidak melihat data akun B (RLS via cek_inputs.account_id)
