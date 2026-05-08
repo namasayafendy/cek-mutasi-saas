@@ -83,3 +83,16 @@ export function trialDaysRemaining(account: Account): number | null {
 export function requireOwner(ctx: AccountContext): boolean {
   return ctx.member.role === "owner";
 }
+
+/**
+ * Phase 8: cek apakah email termasuk superadmin platform.
+ * SUPERADMIN_EMAILS = comma-separated list di env.
+ */
+export function isSuperadminEmail(email: string | undefined | null): boolean {
+  if (!email) return false;
+  const list = (process.env.SUPERADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  return list.includes(email.toLowerCase());
+}

@@ -2,7 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAccountContext, isSubscriptionUsable, trialDaysRemaining } from "@/lib/supabase/context";
 import { LogoutButton } from "./logout-button";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Shield } from "lucide-react";
+import { isSuperadminEmail } from "@/lib/supabase/context";
 
 export default async function AppLayout({
   children,
@@ -14,6 +15,7 @@ export default async function AppLayout({
 
   const { user, account, member } = ctx;
   const isOwner = member.role === "owner";
+  const isSuperadmin = isSuperadminEmail(user.email);
   const usable = isSubscriptionUsable(account);
   const trialDays = trialDaysRemaining(account);
 
@@ -92,6 +94,15 @@ export default async function AppLayout({
                 <span className="hidden sm:inline text-xs text-slate-500">
                   Trial: {trialDays} hari
                 </span>
+              )}
+              {isSuperadmin && (
+                <Link
+                  href="/superadmin"
+                  className="hidden sm:inline-flex items-center gap-1 text-xs text-purple-700 hover:text-purple-900 font-medium"
+                  title="Super-admin platform"
+                >
+                  <Shield className="h-3.5 w-3.5" /> Admin
+                </Link>
               )}
               <span className="hidden sm:inline text-xs text-slate-500">
                 {user.email}

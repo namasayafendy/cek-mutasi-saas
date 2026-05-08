@@ -443,3 +443,50 @@ Tab ke-3 di /history. Tampil semua parsed_transactions (claimed + unclaimed) sep
 - ⏳ Manual claim transaksi → audit_logs ada entry "tx.manual_claimed" dengan metadata
 - ⏳ Invite staff → audit_logs ada entry "staff.invited"
 - ⏳ Remove staff → audit_logs ada entry "staff.removed"
+
+---
+
+## Phase 8 — Super-admin Dashboard
+
+Akses platform-wide untuk Anda monitor semua tenant.
+
+### Setup
+- ⏳ Set ENV `SUPERADMIN_EMAILS=namasayafendy@gmail.com` di Vercel
+- ⏳ Set ENV `SUBSCRIPTION_PRICE_RP=50000` di Vercel (untuk hitung MRR)
+- ⏳ Login pakai email yang ada di list → muncul tombol "Admin" (icon Shield ungu) di nav kanan atas
+- ⏳ Login pakai email lain → tombol Admin tidak muncul, akses /superadmin → redirect ke /dashboard
+
+### /superadmin (Dashboard)
+- ⏳ 4 cards utama: Total Account, MRR, Conversion %, Churn %
+- ⏳ 5 status cards: Trial aktif, Trial expired, Active, Suspended, Cancelled
+- ⏳ Engagement minggu ini: account aktif + total sesi
+- ⏳ Trial habis dalam 3 hari (preview 8 row + link ke detail)
+- ⏳ Recent signups (30 hari) tabel
+
+### /superadmin/accounts (List)
+- ⏳ Tabel semua account dengan: Brand+Owner email, Status badge, Daftar, Staff count, Sesi 30d, Last activity
+- ⏳ Filter status (all / trial aktif / trial expired / active / suspended / cancelled)
+- ⏳ Search box (brand, email owner, ID)
+- ⏳ Klik row → /superadmin/accounts/[id]
+
+### /superadmin/accounts/[id] (Detail)
+- ⏳ Header: brand, status badge, ID, tanggal daftar
+- ⏳ Admin Tools panel: Extend trial / Activate (manual) / Suspend / Cancel / Reset password owner
+- ⏳ Subscription card: status, trial/period dates, cancelled_at
+- ⏳ Meta card: brand_name, support_email, support_wa — bisa edit inline
+- ⏳ Stats: Owner email, Staff count, Banks, Outlets, Parsed Tx
+- ⏳ Members table: owner + staff dengan email, joined, last_active
+- ⏳ Sesi terbaru (20 row) dengan jenis + match/total + nominal
+- ⏳ Audit log (50 row) dengan timestamp + user + action + metadata
+
+### Tools (cek di Supabase)
+- ⏳ Extend trial → status='trial', trial_ends_at = today+N days, audit log entry
+- ⏳ Activate → status='active', current_period_start/end set, audit log
+- ⏳ Suspend → status='suspended', audit log dengan reason
+- ⏳ Cancel → status='cancelled', cancelled_at set, audit log dengan reason
+- ⏳ Reset password → owner dapat email recovery, audit log
+- ⏳ Update meta → accounts.brand_name/support_email/support_wa updated, audit log
+
+### Multi-tenant safety
+- ⏳ Pakai service role client → bypass RLS (intentional, scoped ke superadmin email check)
+- ⏳ Action server selalu re-verify isSuperadminEmail sebelum execute
