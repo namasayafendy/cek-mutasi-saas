@@ -6,6 +6,7 @@ import { Construction } from "lucide-react";
 export default async function AkunPage() {
   const ctx = await getAccountContext();
   if (!ctx) redirect("/login");
+  if (ctx.member.role !== "owner") redirect("/dashboard");
   const { account, member } = ctx;
 
   const trialDays = trialDaysRemaining(account);

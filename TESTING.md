@@ -362,3 +362,84 @@ Tab ke-3 di /history. Tampil semua parsed_transactions (claimed + unclaimed) sep
 ### Edge cases
 - ⏳ Bank yang belum punya tx: empty state "Tidak ada transaksi"
 - ⏳ Belum ada bank sama sekali: arahkan ke menu Bank
+
+---
+
+## Phase 6 — Staff Management
+
+### /staff page (owner only)
+- ⏳ Link "Staff" muncul di nav untuk owner, hilang untuk staff
+- ⏳ Buka /staff → tampil section Owner + section Staff
+- ⏳ Owner row: email + (Anda) badge + role Owner
+
+### Invite staff — email baru
+- ⏳ Owner masuk email baru (belum pernah pakai aplikasi) → klik Kirim Invite
+- ⏳ Loading → success message "Invite terkirim"
+- ⏳ Staff dapat email dari Supabase dengan magic-link
+- ⏳ Klik link → redirect ke /set-password
+- ⏳ Set password (min 8 char) + konfirmasi → success → auto-redirect ke /dashboard
+- ⏳ Login dengan email + password baru → dashboard normal
+- ⏳ Cek di Supabase: team_members ada entry role=staff, account_id sama dengan owner
+
+### Invite staff — email yang sudah pakai aplikasi (other account)
+- ⏳ Error: "Email ini sudah pakai aplikasi di akun lain. Multi-account belum di-support."
+
+### Invite staff — email yang sudah anggota
+- ⏳ Error: "Email ini sudah jadi anggota tim Anda"
+
+### Resend invite (untuk pending staff)
+- ⏳ Klik "Resend invite" → email magic-link baru terkirim
+- ⏳ Status badge tetap "Pending" sampai staff klik link
+
+### Reset password (untuk staff aktif)
+- ⏳ Klik "Reset password" → email recovery terkirim
+- ⏳ Staff klik link → /set-password → bisa ubah password
+
+### Remove staff
+- ⏳ Klik "Remove" → konfirmasi → staff dihapus dari team_members
+- ⏳ Staff yang di-remove tidak bisa lagi login (atau login dapat error account)
+
+### Permission gating
+- ⏳ Login sebagai staff → nav cuma tampil Dashboard, Cek Mutasi, History, Rekap
+- ⏳ Staff tidak lihat link Outlet, Bank, Aturan, Akun, Staff, Activity
+- ⏳ Staff coba akses /banks via URL → ada UI banner "Hanya owner yang bisa kelola bank"
+- ⏳ Staff coba akses /staff via URL → redirect ke /dashboard
+- ⏳ Staff bisa upload mutasi + cek + download PDF + manual claim (sama seperti owner)
+
+### Multi-tenant
+- ⏳ Staff di akun A tidak melihat data akun B (RLS via account_id)
+
+---
+
+## Phase 6 — Activity Log
+
+### Akses
+- ⏳ Link "Activity" muncul di nav untuk owner saja
+- ⏳ Buka /activity → halaman Activity Log tampil
+
+### Filter
+- ⏳ Filter user (semua / specific user)
+- ⏳ Filter aktivitas (session.created / tx.manual_claimed / staff.invited / staff.removed)
+- ⏳ Range tanggal (default 30 hari)
+- ⏳ Reset balik ke default
+
+### Stats summary
+- ⏳ 4 cards: count session create, manual claim, invite, remove
+- ⏳ Update real-time saat filter berubah
+
+### Detail table
+- ⏳ Sorted by created_at desc
+- ⏳ Kolom: Waktu, User (email + role badge), Aktivitas (icon + label), Detail
+- ⏳ Detail per action:
+  - session.created: jenis · bank · matched/total · nominal · carry-over indicator
+  - tx.manual_claimed: jenis · nominal · outlet · alasan italic
+  - staff.invited: email + mode (existing/new)
+  - staff.removed: confirmation
+- ⏳ Sticky header
+- ⏳ Max 1000 rows dengan warning kalau dipotong
+
+### Audit log writes
+- ⏳ Selesai cek mutasi → audit_logs ada entry "session.created" dengan metadata lengkap
+- ⏳ Manual claim transaksi → audit_logs ada entry "tx.manual_claimed" dengan metadata
+- ⏳ Invite staff → audit_logs ada entry "staff.invited"
+- ⏳ Remove staff → audit_logs ada entry "staff.removed"

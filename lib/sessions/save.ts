@@ -131,5 +131,23 @@ export async function saveSession(
     }
   }
 
+  // Phase 6: tulis audit log untuk session save (untuk activity log staff)
+  await supabase.from("audit_logs").insert({
+    account_id: args.accountId,
+    user_id: args.userId,
+    action: "session.created",
+    target_type: "cek_session",
+    target_id: sessionId,
+    metadata: {
+      jenis: args.jenis,
+      bank_id: args.bankId,
+      total_input: args.inputs.length,
+      total_matched: args.summary.matched,
+      total_nominal_matched: totalNominalMatched,
+      carry_over_used: args.carryOverUsed ?? false,
+      carryover_claimed: carryoverClaimed,
+    },
+  });
+
   return { sessionId, carryoverClaimed };
 }

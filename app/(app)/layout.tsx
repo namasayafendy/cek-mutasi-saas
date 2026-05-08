@@ -77,6 +77,12 @@ export default async function AppLayout({
                     <Link href="/aturan" className="text-slate-600 hover:text-slate-900">
                       Aturan
                     </Link>
+                    <Link href="/staff" className="text-slate-600 hover:text-slate-900">
+                      Staff
+                    </Link>
+                    <Link href="/activity" className="text-slate-600 hover:text-slate-900">
+                      Activity
+                    </Link>
                   </>
                 )}
               </div>

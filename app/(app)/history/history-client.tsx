@@ -568,6 +568,21 @@ function ManualClaimModal({
       return;
     }
 
+    // Phase 6: audit log
+    await supabase.from("audit_logs").insert({
+      account_id: accountId,
+      user_id: userId,
+      action: "tx.manual_claimed",
+      target_type: "parsed_transaction",
+      target_id: tx.id,
+      metadata: {
+        nominal: amount,
+        jenis: isKredit ? "kredit" : "debet",
+        outlet_id: outletId,
+        reason: reason.trim(),
+      },
+    });
+
     setSaving(false);
     onClose();
     router.refresh();

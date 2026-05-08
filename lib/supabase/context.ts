@@ -78,3 +78,8 @@ export function trialDaysRemaining(account: Account): number | null {
   const ms = new Date(account.trial_ends_at).getTime() - Date.now();
   return Math.ceil(ms / (1000 * 60 * 60 * 24));
 }
+
+/** Phase 6: redirect helper untuk halaman owner-only. */
+export function requireOwner(ctx: AccountContext): boolean {
+  return ctx.member.role === "owner";
+}
