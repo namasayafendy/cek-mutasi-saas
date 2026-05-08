@@ -10,20 +10,17 @@ import { createClient } from "@/lib/supabase/server";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
+type TeamMemberLite = {
+  id: string;
+  account_id: string;
+  user_id: string;
+  role: string;
+  joined_at: string | null;
+};
+
 /**
  * Invite staff via email. Pakai Supabase admin invite — kirim magic link
  * untuk verifikasi & set password pertama.
- *
- * Flow:
- * 1. Owner submit email
- * 2. Server cek role owner
- * 3. Cek apakah email udah pernah ada di auth.users
- *    - Kalau sudah ada → cek apakah sudah jadi member di account ini
- *      - Kalau ya → error "sudah anggota"
- *      - Kalau belum → tambah team_member.role=staff (multi-account belum di-support, jadi error)
- *    - Kalau belum ada → invite dengan service role API
- * 4. Auto-create team_member dengan role=staff & invited_at sekarang
- *    (signup trigger di DB tidak akan jalan karena email_confirmed belum ada — kita insert manual)
  */
 export async function inviteStaff(email: string): Promise<ActionResult> {
   const ctx = await getAccountContext();
@@ -50,11 +47,16 @@ export async function inviteStaff(email: string): Promise<ActionResult> {
 
   if (existingUser) {
     // Cek apakah user ini sudah jadi member di account
-    const { data: existingMember } = await admin
+    const { data: existingMemberRaw } = await admin
       .from("team_members")
       .select("id, account_id, role")
       .eq("user_id", existingUser.id)
       .maybeSingle();
+
+    const existingMember = existingMemberRaw as Pick<
+      TeamMemberLite,
+      "id" | "account_id" | "role"
+    > | null;
 
     if (existingMember) {
       if (existingMember.account_id === ctx.account.id) {
@@ -90,13 +92,11 @@ export async function inviteStaff(email: string): Promise<ActionResult> {
     return { ok: true };
   }
 
-  // 2. Email belum ada → kirim invite. Supabase invite akan kirim email magic-link.
-  // Signup trigger di DB akan baca raw_user_meta_data.invited_to_account_id dan
-  // auto-create team_member dengan role=staff (lihat migration 0003).
+  // 2. Email belum ada → kirim invite. Signup trigger di DB akan baca metadata
+  //    dan auto-create team_member (lihat migration 0003).
   const { data: invited, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(
     trimmed,
     {
-      // Setelah klik link di email, redirect ke /set-password supaya user set password
       redirectTo: process.env.NEXT_PUBLIC_SITE_URL
         ? `${process.env.NEXT_PUBLIC_SITE_URL}/set-password`
         : undefined,
@@ -110,13 +110,18 @@ export async function inviteStaff(email: string): Promise<ActionResult> {
     return { ok: false, error: `Gagal kirim invite: ${inviteErr?.message ?? "unknown"}` };
   }
 
-  // 3. Sanity check: pastikan trigger ber-jalan. Kalau team_member tidak ke-create
-  //    (misal metadata tidak ke-passing), fallback ke manual insert.
-  const { data: createdMember } = await admin
+  // 3. Sanity check: pastikan trigger ber-jalan. Kalau team_member tidak ke-create,
+  //    fallback ke manual insert.
+  const { data: createdMemberRaw } = await admin
     .from("team_members")
     .select("id, account_id")
     .eq("user_id", invited.user.id)
     .maybeSingle();
+
+  const createdMember = createdMemberRaw as Pick<
+    TeamMemberLite,
+    "id" | "account_id"
+  > | null;
 
   if (!createdMember) {
     const { error: tmErr } = await admin.from("team_members").insert({
@@ -159,13 +164,17 @@ export async function removeStaff(memberId: string): Promise<ActionResult> {
     return { ok: false, error: "Hanya owner yang bisa remove staff" };
   }
 
-  // Pastikan member ini di account yang sama (RLS sudah cover, tapi double-check)
   const supabase = await createClient();
-  const { data: member } = await supabase
+  const { data: memberRaw } = await supabase
     .from("team_members")
     .select("id, account_id, user_id, role")
     .eq("id", memberId)
     .maybeSingle();
+
+  const member = memberRaw as Pick<
+    TeamMemberLite,
+    "id" | "account_id" | "user_id" | "role"
+  > | null;
 
   if (!member) return { ok: false, error: "Staff tidak ditemukan" };
   if (member.account_id !== ctx.account.id) {
@@ -199,11 +208,16 @@ export async function resendInvite(memberId: string): Promise<ActionResult> {
   }
 
   const admin = createAdminClient();
-  const { data: member } = await admin
+  const { data: memberRaw } = await admin
     .from("team_members")
     .select("id, account_id, user_id, joined_at")
     .eq("id", memberId)
     .maybeSingle();
+
+  const member = memberRaw as Pick<
+    TeamMemberLite,
+    "id" | "account_id" | "user_id" | "joined_at"
+  > | null;
 
   if (!member) return { ok: false, error: "Staff tidak ditemukan" };
   if (member.account_id !== ctx.account.id) {
@@ -221,8 +235,8 @@ export async function resendInvite(memberId: string): Promise<ActionResult> {
       email: targetEmail,
       options: {
         redirectTo: process.env.NEXT_PUBLIC_SITE_URL
-        ? `${process.env.NEXT_PUBLIC_SITE_URL}/set-password`
-        : undefined,
+          ? `${process.env.NEXT_PUBLIC_SITE_URL}/set-password`
+          : undefined,
       },
     });
     if (error) return { ok: false, error: error.message };
