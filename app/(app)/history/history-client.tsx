@@ -13,9 +13,11 @@ import {
   Loader2,
   X,
   AlertCircle,
+  ListChecks,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { formatDateLong, parseDateISO, formatRupiah, formatDateID, toDateISO } from "@/lib/format";
+import MutasiTab from "./mutasi-tab";
 
 type SessionRow = {
   id: string;
@@ -50,7 +52,7 @@ type UnclaimedTx = {
 type OutletLite = { id: string; nama: string; warna_hex: string };
 type BankLite = { id: string; kode: string; label: string | null };
 
-type Tab = "sessions" | "belum-match";
+type Tab = "mutasi" | "sessions" | "belum-match";
 
 export default function HistoryClient({
   sessions,
@@ -71,7 +73,7 @@ export default function HistoryClient({
   sessionsError: string | null;
   unclaimedError: string | null;
 }) {
-  const [tab, setTab] = useState<Tab>("sessions");
+  const [tab, setTab] = useState<Tab>("mutasi");
   const [filterJenis, setFilterJenis] = useState<"all" | "kredit" | "debet">("all");
   const [filterBank, setFilterBank] = useState<string>("all");
   const [claimingTx, setClaimingTx] = useState<UnclaimedTx | null>(null);
@@ -101,6 +103,17 @@ export default function HistoryClient({
       <div className="border-b border-slate-200">
         <nav className="flex gap-6">
           <button
+            onClick={() => setTab("mutasi")}
+            className={`pb-3 px-1 text-sm font-medium border-b-2 -mb-px ${
+              tab === "mutasi"
+                ? "border-slate-900 text-slate-900"
+                : "border-transparent text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            <ListChecks className="inline-block h-4 w-4 mr-1.5 -mt-0.5" />
+            Mutasi
+          </button>
+          <button
             onClick={() => setTab("sessions")}
             className={`pb-3 px-1 text-sm font-medium border-b-2 -mb-px ${
               tab === "sessions"
@@ -129,6 +142,8 @@ export default function HistoryClient({
           </button>
         </nav>
       </div>
+
+      {tab === "mutasi" && <MutasiTab banks={banks} outlets={outlets} />}
 
       {tab === "sessions" && (
         <SessionsTab

@@ -317,3 +317,48 @@ Klaim manual transaksi belum-match dari /history page tab "Belum Match".
 ### Tab "Sesi"
 - ⏳ Tab Sesi tetap jalan seperti semula
 - ⏳ Session yang carry-over_used=true ada badge "⏳"
+
+---
+
+## Tab "Mutasi" — re-konstruksi bank statement
+
+Tab ke-3 di /history. Tampil semua parsed_transactions (claimed + unclaimed) seperti rekening koran tapi dengan highlight per outlet.
+
+### Filter
+- ⏳ Default tab "Mutasi" terbuka pertama saat /history dibuka
+- ⏳ Bank wajib pilih (auto-pick bank pertama)
+- ⏳ Range tanggal default 30 hari terakhir
+- ⏳ Filter Jenis (kredit/debet/all) jalan
+- ⏳ Filter Status (matched/unmatched/all) jalan
+- ⏳ Tombol cepat 7d/30d/90d/Bulan ini/Bulan lalu set range
+- ⏳ Reset balik ke default
+
+### Summary cards
+- ⏳ Total Transaksi
+- ⏳ Total Kredit + nominal yang sudah match
+- ⏳ Total Debet + nominal yang sudah match
+- ⏳ Match / Belum count + match rate %
+
+### Breakdown per Outlet
+- ⏳ Pills berisi semua outlet yang punya match di filter aktif
+- ⏳ Color dot + nama + total nominal + count
+- ⏳ Sorted by nominal desc
+
+### Tabel Mutasi
+- ⏳ Sorted by tanggal asc, jam asc (urut seperti rekening koran asli)
+- ⏳ Kolom: Tgl/Jam, Pengirim/Keterangan, Kredit, Debet, Saldo, Outlet
+- ⏳ Matched rows: background tinted dengan warna outlet (alpha 18%)
+- ⏳ Unmatched rows: background plain
+- ⏳ Outlet column: color dot + nama outlet untuk matched, "belum match" italic untuk unmatched
+- ⏳ Manual claim ada icon Hand biru
+- ⏳ Hover row: tooltip "Outlet · Input tgl · Manual reason"
+- ⏳ No.Ref tampil kalau ada
+- ⏳ Sticky header
+- ⏳ Max 5000 baris dengan warning kalau dipotong
+
+### Multi-tenant isolation
+- ⏳ Akun A tidak melihat parsed_transactions akun B (RLS)
+
+### Edge cases
+- ⏳ Bank yang belum punya tx: empty state "Tidak ada transaksi"
+- ⏳ Belum ada bank sama sekali: arahkan ke menu Bank
