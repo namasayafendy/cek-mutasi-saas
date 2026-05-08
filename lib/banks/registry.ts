@@ -40,8 +40,8 @@ export const PARSER_REGISTRY: ParserSpec[] = [
     kode: "BSI",
     label: "BSI — BYOND (mobile app)",
     format: "pdf",
-    status: "coming_soon",
-    hint: "PDF dari aplikasi BYOND mobile. Layout berbeda dari BSINet.",
+    status: "ready",
+    hint: "PDF dari aplikasi BYOND mobile. Format multi-page dengan summary saldo.",
     category: "bank",
   },
 
@@ -69,11 +69,11 @@ export const PARSER_REGISTRY: ParserSpec[] = [
   {
     parser_id: "MANDIRI_PDF",
     kode: "MANDIRI",
-    label: "Mandiri — Mutasi PDF",
+    label: "Mandiri — e-Statement PDF",
     format: "pdf",
-    status: "coming_soon",
+    status: "ready",
     password_required: true,
-    hint: "PDF Mandiri biasanya password-protected (tanggal lahir DDMMYYYY).",
+    hint: "PDF Mandiri e-Statement bulanan, password biasanya tanggal lahir format DDMMYYYY.",
     category: "bank",
   },
 
@@ -81,9 +81,10 @@ export const PARSER_REGISTRY: ParserSpec[] = [
   {
     parser_id: "BNI_PDF",
     kode: "BNI",
-    label: "BNI — Mutasi PDF",
+    label: "BNI — Mobile Banking PDF",
     format: "pdf",
-    status: "coming_soon",
+    status: "ready",
+    hint: "Export PDF dari BNI Mobile Banking (Histori Transaksi, range tanggal custom).",
     category: "bank",
   },
 

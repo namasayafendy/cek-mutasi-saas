@@ -2,18 +2,20 @@
 
 import type { ParsedDocument, ParseOptions, ParserFn } from "./types";
 import { parseBsiBsinet } from "./bsi-bsinet";
+import { parseBsiByond } from "./bsi-byond";
+import { parseBni } from "./bni";
+import { parseMandiri } from "./mandiri";
 import { getParserSpec } from "@/lib/banks/registry";
 
 const PARSERS: Record<string, ParserFn> = {
   BSI_BSINET_PDF: parseBsiBsinet,
-  // Coming soon — akan diisi di Phase 2
-  // BSI_BYOND_PDF: parseBsiByond,
+  BSI_BYOND_PDF: parseBsiByond,
+  BNI_PDF: parseBni,
+  MANDIRI_PDF: parseMandiri,
+  // Coming soon — akan diisi di Phase 2 lanjutan
   // BCA_KLIKBCA_HTML: parseBcaKlikbca,
   // BCA_ESTATEMENT_PDF: parseBcaEstatement,
-  // MANDIRI_PDF: parseMandiri,
-  // BNI_PDF: parseBni,
   // BRI_PDF: parseBri,
-  // ...
 };
 
 export class ParserNotImplementedError extends Error {

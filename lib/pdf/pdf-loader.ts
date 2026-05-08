@@ -16,12 +16,20 @@ function init() {
  * Buka PDF document. SELALU bikin copy fresh karena pdfjs transfer buffer ke
  * worker (detached). Kalau caller pass Uint8Array yang sama, buffernya jadi
  * tidak bisa dipakai lagi setelah call ini.
+ *
+ * Optional `password` untuk PDF protected (Mandiri).
  */
-export async function getDocument(data: Uint8Array | ArrayBuffer) {
+export async function getDocument(
+  data: Uint8Array | ArrayBuffer,
+  options?: { password?: string },
+) {
   init();
   const src = data instanceof Uint8Array ? data : new Uint8Array(data);
-  const copy = new Uint8Array(src); // fresh copy
-  return await pdfjsLib.getDocument({ data: copy }).promise;
+  const copy = new Uint8Array(src);
+  return await pdfjsLib.getDocument({
+    data: copy,
+    password: options?.password,
+  }).promise;
 }
 
 export { pdfjsLib };
