@@ -186,6 +186,7 @@ export function CheckClient({
       <UploadStep
         banks={banks}
         jenis={jenis}
+        accountId={accountId}
         onParsed={(p, rendered, bank) => {
           setParsed(p);
           setPages(rendered);

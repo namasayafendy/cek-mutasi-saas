@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useRef, useMemo } from "react";
-import { Upload, FileText, Loader2, AlertCircle, Lock } from "lucide-react";
+import { Upload, FileText, Loader2, AlertCircle, Lock, CheckCircle2 } from "lucide-react";
 import { renderAllPages } from "@/lib/pdf/renderer";
 import { parsePdfByParserId, ParserNotImplementedError } from "@/lib/parsers";
+import { persistTransactions, type PersistResult } from "@/lib/parsers/persist";
 import { getParserSpec } from "@/lib/banks/registry";
+import { createClient } from "@/lib/supabase/client";
 import type { ParsedPdf } from "@/lib/pdf/parser";
 import type { RenderedPage } from "@/lib/pdf/renderer";
 import type { Bank, Jenis, PdfTransaction } from "@/lib/types";
@@ -12,10 +14,12 @@ import type { Bank, Jenis, PdfTransaction } from "@/lib/types";
 export function UploadStep({
   banks,
   jenis,
+  accountId,
   onParsed,
 }: {
   banks: Bank[];
   jenis: Jenis;
+  accountId: string;
   onParsed: (parsed: ParsedPdf, rendered: RenderedPage[], bank: Bank) => void;
 }) {
   const [bankId, setBankId] = useState<string>(banks[0]?.id ?? "");
@@ -23,6 +27,7 @@ export function UploadStep({
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
+  const [persistInfo, setPersistInfo] = useState<PersistResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const selectedBank = useMemo(() => banks.find((b) => b.id === bankId), [banks, bankId]);
@@ -32,6 +37,7 @@ export function UploadStep({
 
   async function handleFile(file: File) {
     setError(null);
+    setPersistInfo(null);
     if (!selectedBank || !spec) {
       setError("Pilih bank/e-wallet dulu");
       return;
@@ -47,7 +53,13 @@ export function UploadStep({
         password: password || undefined,
       });
 
-      // Filter rows by jenis (kredit or debet)
+      // Persist all rows to history (auto dedup by no_ref + fingerprint)
+      setProgress("Menyimpan ke history (auto dedup)...");
+      const supabase = createClient();
+      const persisted = await persistTransactions(supabase, accountId, selectedBank.id, doc.rows);
+      setPersistInfo(persisted);
+
+      // Filter rows by jenis untuk matching pool
       const transactions: PdfTransaction[] = doc.rows
         .filter((r) => (jenis === "kredit" ? r.kredit > 0 : r.debet > 0))
         .map((r) => ({
@@ -64,8 +76,8 @@ export function UploadStep({
 
       if (transactions.length === 0) {
         setError(
-          `Tidak ada transaksi ${jenis} terdeteksi di PDF ini. ` +
-            `Pastikan PDF adalah mutasi ${spec.label} dan ada transaksi ${jenis}-nya.`,
+          `Tidak ada transaksi ${jenis} terdeteksi di file ini. ` +
+            `Pastikan file adalah mutasi ${spec.label} dan ada transaksi ${jenis}-nya.`,
         );
         setLoading(false);
         return;
@@ -83,8 +95,7 @@ export function UploadStep({
       console.error(err);
       if (err instanceof ParserNotImplementedError) {
         setError(
-          `Parser untuk ${err.parserId} belum tersedia. Akan dirilis di update berikutnya. ` +
-            `Sementara ini gunakan format yang sudah ready.`,
+          `Parser untuk ${err.parserId} belum tersedia. Akan dirilis di update berikutnya.`,
         );
       } else {
         setError(err instanceof Error ? err.message : "Gagal parse file");
@@ -102,7 +113,7 @@ export function UploadStep({
           </h1>
         </div>
         <div className="card p-5 border-amber-200 bg-amber-50">
-          <h2 className="font-medium text-amber-900">Belum ada bank yang ready</h2>
+          <h2 className="font-medium text-amber-900">Belum ada bank ready</h2>
           <p className="mt-1 text-sm text-amber-800">
             Tambah dulu rekening bank di menu <strong>Bank</strong>. Pilih bank yang status-nya
             &ldquo;Ready&rdquo; supaya bisa upload mutasi.
@@ -141,14 +152,12 @@ export function UploadStep({
               );
             })}
           </select>
-          {spec?.hint && (
-            <p className="mt-1 text-xs text-slate-500">{spec.hint}</p>
-          )}
+          {spec?.hint && <p className="mt-1 text-xs text-slate-500">{spec.hint}</p>}
         </div>
 
         {requiresPassword && (
           <div>
-            <label className="block text-sm font-medium text-slate-700 flex items-center gap-1.5">
+            <label className="text-sm font-medium text-slate-700 flex items-center gap-1.5">
               <Lock className="h-3.5 w-3.5" />
               Password PDF
             </label>
@@ -206,6 +215,24 @@ export function UploadStep({
             <span>{error}</span>
           </div>
         )}
+
+        {persistInfo && (
+          <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-700 flex items-start gap-2">
+            <CheckCircle2 className="h-4 w-4 mt-0.5 flex-shrink-0" />
+            <span>
+              Disimpan ke history: <strong>{persistInfo.newCount} transaksi baru</strong>
+              {persistInfo.dupCount > 0 && (
+                <>, <strong>{persistInfo.dupCount} sudah ada</strong> di history (auto dedup)</>
+              )}
+              {persistInfo.errorCount > 0 && (
+                <span className="text-red-700">
+                  , {persistInfo.errorCount} error
+                </span>
+              )}
+              .
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="card p-5">
@@ -214,12 +241,11 @@ export function UploadStep({
           <li>Pilih bank yang sesuai dengan PDF mutasi yang akan di-upload.</li>
           <li>Upload file mutasi (PDF atau HTML tergantung bank).</li>
           <li>
-            Pilih outlet + tanggal di form input, ketik nominal-nominal transferan satu per baris.
+            Sistem otomatis simpan transaksi ke history.{" "}
+            <strong>Kalau Anda upload mutasi yang overlap (misal tgl 1-3 lalu tgl 3-10),
+            transaksi yang sama tidak akan dobel</strong> — di-dedup pakai No.Referensi.
           </li>
-          <li>
-            Sistem otomatis cocokkan menurut aturan yang Anda set di menu Aturan
-            (lookback, forward window, match mode).
-          </li>
+          <li>Input nominal di form, sistem cocokkan otomatis sesuai aturan di menu Aturan.</li>
           <li>Download PDF mutasi yang sudah ter-highlight + lampiran rekap.</li>
         </ol>
       </div>
