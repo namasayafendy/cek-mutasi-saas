@@ -13,7 +13,13 @@ import { PdfViewer } from "./pdf-viewer";
 import { InputPanel } from "./input-panel";
 import { SummaryPanel } from "./summary-panel";
 
-export function CheckClient({ outlets }: { outlets: Outlet[] }) {
+export function CheckClient({
+  outlets,
+  accountId,
+}: {
+  outlets: Outlet[];
+  accountId: string;
+}) {
   const router = useRouter();
   const [parsed, setParsed] = useState<ParsedPdf | null>(null);
   const [pages, setPages] = useState<RenderedPage[]>([]);
@@ -114,23 +120,22 @@ export function CheckClient({ outlets }: { outlets: Outlet[] }) {
       a.remove();
       URL.revokeObjectURL(url);
 
-      // Update last_input_date in supabase (latest input tanggal)
+      // Update last_input_date_kredit in account_settings
       if (matchedInputs.length > 0) {
         const latestDate = matchedInputs.reduce((max, i) =>
           i.tanggal.getTime() > max.getTime() ? i.tanggal : max,
         matchedInputs[0].tanggal);
         const supabase = createClient();
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (user) {
-          await supabase.from("user_settings").upsert({
-            user_id: user.id,
-            last_input_date: toDateISO(latestDate),
+        // RLS: only owner can update account_settings, but for now treat as
+        // no-op kalau gagal (akan diperbaiki saat staff support penuh di Phase 1B+)
+        await supabase
+          .from("account_settings")
+          .update({
+            last_input_date_kredit: toDateISO(latestDate),
             updated_at: new Date().toISOString(),
-          });
-          router.refresh();
-        }
+          })
+          .eq("account_id", accountId);
+        router.refresh();
       }
     } catch (err) {
       console.error(err);

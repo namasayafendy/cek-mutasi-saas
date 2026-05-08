@@ -1,10 +1,16 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-/**
- * Refresh session di tiap request + redirect kalau belum login.
- * Halaman yang TIDAK butuh auth: /login dan static asset.
- */
+const PUBLIC_PATHS = ["/login", "/daftar", "/tos", "/privacy", "/lupa-password"];
+
+function isPublicPath(path: string): boolean {
+  if (PUBLIC_PATHS.includes(path)) return true;
+  if (path.startsWith("/_next")) return true;
+  if (path.startsWith("/favicon")) return true;
+  if (path.startsWith("/api/health")) return true;
+  return false;
+}
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
@@ -34,20 +40,16 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const isPublic =
-    path === "/login" ||
-    path.startsWith("/_next") ||
-    path.startsWith("/favicon") ||
-    path.startsWith("/api/health");
 
-  if (!user && !isPublic) {
+  if (!user && !isPublicPath(path)) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("next", path);
     return NextResponse.redirect(url);
   }
 
-  if (user && path === "/login") {
+  // Logged in user trying to access /login or /daftar → redirect to dashboard
+  if (user && (path === "/login" || path === "/daftar")) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     url.searchParams.delete("next");

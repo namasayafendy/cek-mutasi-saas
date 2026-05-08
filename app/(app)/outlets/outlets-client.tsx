@@ -7,7 +7,13 @@ import { PALETTE, pickNextColor, findColorLabel } from "@/lib/colors";
 import type { Outlet } from "@/lib/types";
 import { Plus, Trash2, Pencil, X, Check } from "lucide-react";
 
-export function OutletsClient({ initialOutlets }: { initialOutlets: Outlet[] }) {
+export function OutletsClient({
+  initialOutlets,
+  accountId,
+}: {
+  initialOutlets: Outlet[];
+  accountId: string;
+}) {
   const router = useRouter();
   const [outlets, setOutlets] = useState<Outlet[]>(initialOutlets);
   const [adding, setAdding] = useState(false);
@@ -32,17 +38,10 @@ export function OutletsClient({ initialOutlets }: { initialOutlets: Outlet[] }) 
       return;
     }
     const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      setError("Sesi habis, silakan login ulang");
-      return;
-    }
     const { data, error: insertErr } = await supabase
       .from("outlets")
       .insert({
-        user_id: user.id,
+        account_id: accountId,
         nama,
         warna_hex: nextColor.hex,
         urutan_palette: nextColor.index,

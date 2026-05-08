@@ -1,9 +1,14 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getAccountContext } from "@/lib/supabase/context";
 import { createClient } from "@/lib/supabase/server";
 import type { Outlet } from "@/lib/types";
 import { CheckClient } from "./check-client";
 
 export default async function CheckPage() {
+  const ctx = await getAccountContext();
+  if (!ctx) redirect("/login");
+
   const supabase = await createClient();
   const { data: outlets } = await supabase
     .from("outlets")
@@ -33,5 +38,5 @@ export default async function CheckPage() {
     );
   }
 
-  return <CheckClient outlets={outlets as Outlet[]} />;
+  return <CheckClient outlets={outlets as Outlet[]} accountId={ctx.account.id} />;
 }
