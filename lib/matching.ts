@@ -1,42 +1,76 @@
-// Matching algorithm: cocokkan input user dengan transaksi PDF.
-// Aturan:
-// - Nominal harus sama persis (rupiah, integer)
-// - Tanggal di PDF <= tanggal input user
-// - Tanggal di PDF >= tanggal input user - 3 hari (max lookback)
-// - Transaksi yg sudah ke-claim tidak bisa dipakai 2x
-// - Pilih kandidat dengan tanggal terdekat (terbaru tapi tidak melewati input)
-// - Tie-break: no terkecil (urutan kronologis di hari yang sama)
+// Matching algorithm with configurable rules from account_settings.
 
 import type {
   PdfTransaction,
   UserInput,
   MatchResult,
   MatchSummary,
+  MatchMode,
 } from "@/lib/types";
 import { diffDays } from "@/lib/format";
 
-const MAX_LOOKBACK_DAYS = 3;
+export type MatchRules = {
+  lookback_days: number;
+  forward_window_days: number;
+  match_mode: MatchMode;
+  tolerance_rp: number;
+  tolerance_pct: number;
+};
+
+export const DEFAULT_RULES: MatchRules = {
+  lookback_days: 3,
+  forward_window_days: 0,
+  match_mode: "exact",
+  tolerance_rp: 0,
+  tolerance_pct: 0,
+};
+
+function nominalMatches(input: number, candidate: number, rules: MatchRules): boolean {
+  if (rules.match_mode === "exact") return candidate === input;
+  if (rules.match_mode === "tol_rp") {
+    return Math.abs(candidate - input) <= rules.tolerance_rp;
+  }
+  if (rules.match_mode === "tol_pct") {
+    const tol = Math.abs(input * rules.tolerance_pct) / 100;
+    return Math.abs(candidate - input) <= tol;
+  }
+  return false;
+}
 
 export function runMatching(
   inputs: UserInput[],
   transactions: PdfTransaction[],
   outletColors: Map<string, string>,
+  rules: MatchRules = DEFAULT_RULES,
 ): { inputs: UserInput[]; summary: MatchSummary } {
   const claimed = new Set<string>();
   const txKey = (t: PdfTransaction) => `${t.page}-${t.no}`;
 
   const resultInputs: UserInput[] = inputs.map((input) => {
+    // Filter candidates: nominal match (with tolerance) + within date window
     const allCandidates = transactions.filter((tx) => {
-      if (tx.kredit !== input.nominal) return false;
+      if (!nominalMatches(input.nominal, tx.kredit, rules)) return false;
       const days = diffDays(input.tanggal, tx.tanggalDate);
-      return days >= 0 && days <= MAX_LOOKBACK_DAYS;
+      // days >= 0 means tx is on or before input date (lookback)
+      // days < 0 means tx is after input date (forward window)
+      if (days >= 0 && days <= rules.lookback_days) return true;
+      if (days < 0 && Math.abs(days) <= rules.forward_window_days) return true;
+      return false;
     });
+
     const available = allCandidates.filter((tx) => !claimed.has(txKey(tx)));
 
     if (available.length > 0) {
+      // Pilih: tanggal terdekat dengan input. Jika tie, tanggal yg sama atau sebelum (positive days) > setelah.
+      // Then by no (smallest = earlier in same day).
       available.sort((a, b) => {
-        const dDiff = b.tanggalDate.getTime() - a.tanggalDate.getTime();
-        if (dDiff !== 0) return dDiff;
+        const da = diffDays(input.tanggal, a.tanggalDate); // 0 = same, +n = a is earlier, -n = a is later
+        const db = diffDays(input.tanggal, b.tanggalDate);
+        // Prefer absolute closer; when |a|==|b|, prefer earlier (positive days) over later (negative days)
+        const aAbs = Math.abs(da);
+        const bAbs = Math.abs(db);
+        if (aAbs !== bAbs) return aAbs - bAbs;
+        if (da !== db) return db - da; // prefer larger days (more positive = earlier)
         return a.no - b.no;
       });
       const picked = available[0];
@@ -52,8 +86,6 @@ export function runMatching(
     }
 
     if (allCandidates.length > 0) {
-      // Ada kandidat tapi semua sudah dipakai input lain.
-      // Kumpulkan tanggal-tanggal kandidat (urut, unik) supaya user tau kapan-nya.
       const datesSet = new Set<string>();
       for (const c of allCandidates) datesSet.add(c.tanggal);
       const conflictDates = Array.from(datesSet).sort((a, b) => {
