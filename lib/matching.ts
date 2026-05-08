@@ -42,13 +42,21 @@ export function runMatching(
   transactions: PdfTransaction[],
   outletColors: Map<string, string>,
   rules: MatchRules = DEFAULT_RULES,
+  options?: { crossBank?: boolean },
 ): { inputs: UserInput[]; summary: MatchSummary } {
   const claimed = new Set<string>();
-  const txKey = (t: PdfTransaction) => `${t.page}-${t.no}`;
+  // Phase 1E.2: tx key include bankId untuk hindari collision antar bank yang
+  // kebetulan punya page+no sama
+  const txKey = (t: PdfTransaction) => `${t.bankId ?? "_"}-${t.page}-${t.no}`;
+  const crossBank = options?.crossBank ?? false;
 
   const resultInputs: UserInput[] = inputs.map((input) => {
     // Filter candidates: nominal match (with tolerance) + within date window
+    // + bank match (kecuali crossBank=true)
     const allCandidates = transactions.filter((tx) => {
+      if (!crossBank && input.bankId && tx.bankId && input.bankId !== tx.bankId) {
+        return false;
+      }
       if (!nominalMatches(input.nominal, tx.kredit, rules)) return false;
       const days = diffDays(input.tanggal, tx.tanggalDate);
       // days >= 0 means tx is on or before input date (lookback)
@@ -81,6 +89,7 @@ export function runMatching(
         txNo: picked.no,
         txDate: picked.tanggalDate,
         colorHex,
+        txBankId: picked.bankId,
       };
       return { ...input, match };
     }

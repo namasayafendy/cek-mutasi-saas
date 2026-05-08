@@ -167,6 +167,8 @@ export type PdfTransaction = {
   parsedTxId?: string;
   /** Phase 4.3: 'current' = dari PDF yang lagi dilihat, 'carryover' = dari history (highlight di-skip) */
   source?: "current" | "carryover";
+  /** Phase 1E.2: bank yang punya tx ini — dipakai matching pool multi-bank */
+  bankId?: string;
 };
 
 /** User input row during cek mutasi session */
@@ -174,12 +176,14 @@ export type UserInput = {
   id: string;
   tanggal: Date;
   outletId: string;
+  /** Phase 1E.2: bank tujuan match (multi-bank) — wajib */
+  bankId: string;
   nominal: number;
   match?: MatchResult;
 };
 
 export type MatchResult =
-  | { status: "matched"; txNo: number; txDate: Date; colorHex: string }
+  | { status: "matched"; txNo: number; txDate: Date; colorHex: string; txBankId?: string }
   | { status: "no_candidate" }
   | { status: "all_taken"; conflictCount: number; conflictDates: string[] };
 

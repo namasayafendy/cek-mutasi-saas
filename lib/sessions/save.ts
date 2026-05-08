@@ -69,17 +69,21 @@ export async function saveSession(
   const sessionId = sessionData.id;
 
   // 2. Insert cek_inputs (batch)
-  // Phase 4.3: lookup parsedTxId untuk carry-over matches → matched_tx_id
+  // Phase 4.3 + 1E.2: lookup parsedTxId pakai key (bankId+no+date+nominal)
+  // supaya multi-bank tidak collide. Bank dari MatchResult.txBankId (Phase 1E.2).
   const poolByKey = new Map<string, PdfTransaction>();
   if (args.matchingPool) {
     for (const tx of args.matchingPool) {
-      poolByKey.set(`${tx.no}|${tx.tanggalDate.getTime()}|${tx.kredit}`, tx);
+      const k = `${tx.bankId ?? "_"}|${tx.no}|${tx.tanggalDate.getTime()}|${tx.kredit}`;
+      poolByKey.set(k, tx);
     }
   }
 
   function findMatchedTxId(input: UserInput): string | null {
     if (input.match?.status !== "matched") return null;
-    const key = `${input.match.txNo}|${input.match.txDate.getTime()}|${input.nominal}`;
+    // Phase 1E.2: pakai txBankId dari match kalau ada (cross-bank), fallback ke input.bankId
+    const bankId = input.match.txBankId ?? input.bankId;
+    const key = `${bankId ?? "_"}|${input.match.txNo}|${input.match.txDate.getTime()}|${input.nominal}`;
     const tx = poolByKey.get(key);
     return tx?.parsedTxId ?? null;
   }

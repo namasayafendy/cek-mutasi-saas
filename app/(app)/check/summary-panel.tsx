@@ -1,14 +1,28 @@
 "use client";
 
 import { useState } from "react";
-import type { MatchSummary, Outlet, UserInput } from "@/lib/types";
+import type { MatchSummary, Outlet, UserInput, Bank } from "@/lib/types";
 import { formatRupiah, formatDateID } from "@/lib/format";
-import { CheckCircle2, AlertTriangle, XCircle, Trash2, Download, Loader2, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  Trash2,
+  Download,
+  Loader2,
+  ChevronDown,
+  ChevronUp,
+  Globe,
+} from "lucide-react";
 
 export function SummaryPanel({
   summary,
   inputs,
   outlets,
+  banks,
+  crossBank,
+  onCrossBankChange,
+  multiBank,
   onRemove,
   onClearAll,
   onDownload,
@@ -18,6 +32,10 @@ export function SummaryPanel({
   summary: MatchSummary;
   inputs: UserInput[];
   outlets: Outlet[];
+  banks: Bank[];
+  crossBank: boolean;
+  onCrossBankChange: (v: boolean) => void;
+  multiBank: boolean;
   onRemove: (id: string) => void;
   onClearAll: () => void;
   onDownload: () => void;
@@ -27,6 +45,7 @@ export function SummaryPanel({
   const [showInputs, setShowInputs] = useState(true);
   const [showUnclaimed, setShowUnclaimed] = useState(false);
   const outletById = new Map(outlets.map((o) => [o.id, o]));
+  const bankById = new Map(banks.map((b) => [b.id, b]));
 
   return (
     <div className="card p-4 space-y-3">
@@ -64,6 +83,38 @@ export function SummaryPanel({
         </div>
       </div>
 
+      {/* Cross-bank toggle (multi-bank only) */}
+      {multiBank && (
+        <div
+          className={`rounded-md border px-3 py-2 ${
+            crossBank ? "border-purple-200 bg-purple-50" : "border-slate-200 bg-slate-50"
+          }`}
+        >
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={crossBank}
+              onChange={(e) => onCrossBankChange(e.target.checked)}
+              className="mt-0.5"
+            />
+            <div className="text-xs flex-1">
+              <div
+                className={`font-medium flex items-center gap-1 ${
+                  crossBank ? "text-purple-900" : "text-slate-700"
+                }`}
+              >
+                <Globe className="h-3 w-3" /> Cari di semua bank (cross-bank)
+              </div>
+              <div className={crossBank ? "text-purple-700" : "text-slate-500"}>
+                {crossBank
+                  ? "Filter bank di-skip — input bisa match tx dari bank manapun."
+                  : "Default: input cuma cari di bank yang dipilih. Centang ini kalau tahu transferan kadang masuk bank yang berbeda."}
+              </div>
+            </div>
+          </label>
+        </div>
+      )}
+
       <div className="border-t pt-3">
         <button
           onClick={() => setShowInputs((v) => !v)}
@@ -79,19 +130,39 @@ export function SummaryPanel({
             ) : (
               inputs.map((i) => {
                 const o = outletById.get(i.outletId);
+                const bank = bankById.get(i.bankId);
                 const status = i.match?.status;
                 return (
-                  <div key={i.id} className="text-xs px-2 py-1.5 rounded bg-slate-50 hover:bg-slate-100">
+                  <div
+                    key={i.id}
+                    className="text-xs px-2 py-1.5 rounded bg-slate-50 hover:bg-slate-100"
+                  >
                     <div className="flex items-center gap-2">
                       {o && (
-                        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: o.warna_hex }} />
+                        <div
+                          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: o.warna_hex }}
+                        />
                       )}
-                      {status === "matched" && <CheckCircle2 className="h-3.5 w-3.5 text-green-600 flex-shrink-0" />}
-                      {status === "no_candidate" && <XCircle className="h-3.5 w-3.5 text-red-600 flex-shrink-0" />}
-                      {status === "all_taken" && <AlertTriangle className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" />}
+                      {status === "matched" && (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-green-600 flex-shrink-0" />
+                      )}
+                      {status === "no_candidate" && (
+                        <XCircle className="h-3.5 w-3.5 text-red-600 flex-shrink-0" />
+                      )}
+                      {status === "all_taken" && (
+                        <AlertTriangle className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" />
+                      )}
                       <span className="text-slate-700 flex-shrink-0">{formatDateID(i.tanggal)}</span>
                       <span className="text-slate-500 truncate">{o?.nama ?? "?"}</span>
-                      <span className="ml-auto font-mono text-slate-900 flex-shrink-0">{formatRupiah(i.nominal)}</span>
+                      {multiBank && bank && (
+                        <span className="text-[10px] text-slate-400 px-1 rounded bg-white border border-slate-200 flex-shrink-0">
+                          {bank.label || bank.kode}
+                        </span>
+                      )}
+                      <span className="ml-auto font-mono text-slate-900 flex-shrink-0">
+                        {formatRupiah(i.nominal)}
+                      </span>
                       <button
                         onClick={() => onRemove(i.id)}
                         className="text-slate-400 hover:text-red-600 flex-shrink-0"
@@ -120,15 +191,20 @@ export function SummaryPanel({
             className="w-full flex items-center justify-between text-xs font-medium text-slate-700 hover:text-slate-900"
           >
             <span>Tidak di-claim siapa pun ({summary.unclaimed.length})</span>
-            {showUnclaimed ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            {showUnclaimed ? (
+              <ChevronUp className="h-4 w-4" />
+            ) : (
+              <ChevronDown className="h-4 w-4" />
+            )}
           </button>
           {showUnclaimed && (
             <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
               {summary.unclaimed.map((tx) => {
                 const isCarryover = tx.source === "carryover";
+                const bank = tx.bankId ? bankById.get(tx.bankId) : null;
                 return (
                   <div
-                    key={`${tx.page}-${tx.no}`}
+                    key={`${tx.bankId ?? "_"}-${tx.page}-${tx.no}`}
                     className={`flex items-center gap-2 text-xs px-2 py-1 rounded ${
                       isCarryover ? "bg-blue-50/60" : "bg-slate-50"
                     }`}
@@ -142,6 +218,11 @@ export function SummaryPanel({
                       </span>
                     )}
                     <span className="text-slate-700 flex-shrink-0">{tx.tanggal}</span>
+                    {multiBank && bank && (
+                      <span className="text-[10px] text-slate-400 px-1 rounded bg-white border border-slate-200 flex-shrink-0">
+                        {bank.label || bank.kode}
+                      </span>
+                    )}
                     <span className="text-slate-500 truncate">{tx.namaPengirim || "—"}</span>
                     <span className="ml-auto font-mono text-slate-900 flex-shrink-0">
                       {formatRupiah(tx.kredit)}

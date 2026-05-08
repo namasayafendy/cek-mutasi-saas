@@ -11,14 +11,12 @@ import type {
   AccountSettings,
   Jenis,
 } from "@/lib/types";
-import type { ParsedPdf } from "@/lib/pdf/parser";
-import type { RenderedPage } from "@/lib/pdf/renderer";
 import { runMatching, type MatchRules, DEFAULT_RULES } from "@/lib/matching";
 import { createClient } from "@/lib/supabase/client";
 import { toDateISO, formatRupiah } from "@/lib/format";
 import { loadCarryoverPdfTxs } from "@/lib/sessions/carryover";
 import { History as HistoryIcon } from "lucide-react";
-import { UploadStep } from "./upload-step";
+import { UploadStep, type BankUpload } from "./upload-step";
 import { PdfViewer } from "./pdf-viewer";
 import { InputPanel } from "./input-panel";
 import { SummaryPanel } from "./summary-panel";
@@ -59,15 +57,17 @@ export function CheckClient({
   settings: AccountSettings | null;
 }) {
   const router = useRouter();
-  const [parsed, setParsed] = useState<ParsedPdf | null>(null);
-  const [activeBank, setActiveBank] = useState<Bank | null>(null);
-  const [pages, setPages] = useState<RenderedPage[]>([]);
+  const [uploads, setUploads] = useState<BankUpload[]>([]);
+  const [activeBankId, setActiveBankId] = useState<string>("");
   const [inputs, setInputs] = useState<UserInput[]>([]);
   const [generating, setGenerating] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [carryoverTxs, setCarryoverTxs] = useState<PdfTransaction[]>([]);
+  const [carryoverByBank, setCarryoverByBank] = useState<Map<string, PdfTransaction[]>>(
+    new Map(),
+  );
   const [useCarryover, setUseCarryover] = useState(true);
   const [carryoverLoading, setCarryoverLoading] = useState(false);
+  const [crossBank, setCrossBank] = useState(false);
 
   const rules = useMemo(() => rulesFromSettings(settings, jenis), [settings, jenis]);
 
@@ -77,39 +77,42 @@ export function CheckClient({
     return m;
   }, [outlets]);
 
-  // Phase 4.3: load carry-over txs setelah parsing PDF
+  const activeUpload = useMemo(
+    () => uploads.find((u) => u.bank.id === activeBankId) ?? uploads[0] ?? null,
+    [uploads, activeBankId],
+  );
+
+  // Phase 4.3: Load carry-over per bank
   useEffect(() => {
-    if (!parsed || !activeBank) {
-      setCarryoverTxs([]);
+    if (uploads.length === 0) {
+      setCarryoverByBank(new Map());
       return;
     }
     let cancelled = false;
     async function load() {
       setCarryoverLoading(true);
       try {
-        // Hitung period start dari current PDF transactions
-        const txDates = parsed!.transactions.map((t) => t.tanggalDate.getTime());
-        if (txDates.length === 0) {
-          setCarryoverTxs([]);
-          return;
-        }
-        const periodStart = new Date(Math.min(...txDates));
-        // Carryover range: lookback_days sebelum periodStart, sampai 1 hari sebelum periodStart
-        const fromDate = new Date(periodStart);
-        // Lookback agak panjang biar carry-over banyak ke-cover (90 hari atau lookback*3)
-        const lookbackForCarryover = Math.max(rules.lookback_days * 3, 30);
-        fromDate.setUTCDate(fromDate.getUTCDate() - lookbackForCarryover);
-        const beforeDate = new Date(periodStart);
-
         const supabase = createClient();
-        const txs = await loadCarryoverPdfTxs(supabase, {
-          accountId,
-          bankId: activeBank!.id,
-          jenis,
-          fromDate: toDateISO(fromDate),
-          beforeDate: toDateISO(beforeDate),
-        });
-        if (!cancelled) setCarryoverTxs(txs);
+        const result = new Map<string, PdfTransaction[]>();
+        for (const up of uploads) {
+          const txDates = up.parsed.transactions.map((t) => t.tanggalDate.getTime());
+          if (txDates.length === 0) continue;
+          const periodStart = new Date(Math.min(...txDates));
+          const fromDate = new Date(periodStart);
+          const lookbackForCarryover = Math.max(rules.lookback_days * 3, 30);
+          fromDate.setUTCDate(fromDate.getUTCDate() - lookbackForCarryover);
+          const txs = await loadCarryoverPdfTxs(supabase, {
+            accountId,
+            bankId: up.bank.id,
+            jenis,
+            fromDate: toDateISO(fromDate),
+            beforeDate: toDateISO(periodStart),
+          });
+          // Tag carry-over txs dengan bankId
+          const tagged = txs.map((t) => ({ ...t, bankId: up.bank.id }));
+          result.set(up.bank.id, tagged);
+        }
+        if (!cancelled) setCarryoverByBank(result);
       } finally {
         if (!cancelled) setCarryoverLoading(false);
       }
@@ -118,21 +121,42 @@ export function CheckClient({
     return () => {
       cancelled = true;
     };
-  }, [parsed, activeBank, accountId, jenis, rules.lookback_days]);
+  }, [uploads, accountId, jenis, rules.lookback_days]);
 
-  const matchingPool: PdfTransaction[] = useMemo(() => {
-    if (!parsed) return [];
-    const current = parsed.transactions.map((t) => ({ ...t, source: "current" as const }));
-    if (useCarryover && carryoverTxs.length > 0) {
-      return [...current, ...carryoverTxs];
+  const totalCarryoverCount = useMemo(() => {
+    let n = 0;
+    for (const arr of carryoverByBank.values()) n += arr.length;
+    return n;
+  }, [carryoverByBank]);
+
+  const totalCarryoverNominal = useMemo(() => {
+    let n = 0;
+    for (const arr of carryoverByBank.values()) {
+      for (const tx of arr) n += tx.kredit;
     }
-    return current;
-  }, [parsed, useCarryover, carryoverTxs]);
+    return n;
+  }, [carryoverByBank]);
+
+  // Combined matching pool: semua bank current + carryover (kalau enabled)
+  const matchingPool: PdfTransaction[] = useMemo(() => {
+    const pool: PdfTransaction[] = [];
+    for (const up of uploads) {
+      for (const tx of up.parsed.transactions) {
+        pool.push({ ...tx, source: "current", bankId: up.bank.id });
+      }
+    }
+    if (useCarryover) {
+      for (const arr of carryoverByBank.values()) {
+        for (const tx of arr) pool.push(tx);
+      }
+    }
+    return pool;
+  }, [uploads, useCarryover, carryoverByBank]);
 
   const matchResult = useMemo(() => {
-    if (!parsed || inputs.length === 0) {
+    if (uploads.length === 0 || inputs.length === 0) {
       return {
-        inputs: inputs,
+        inputs,
         summary: {
           totalInput: 0,
           matched: 0,
@@ -142,8 +166,8 @@ export function CheckClient({
         } as MatchSummary,
       };
     }
-    return runMatching(inputs, matchingPool, outletColors, rules);
-  }, [inputs, parsed, matchingPool, outletColors, rules]);
+    return runMatching(inputs, matchingPool, outletColors, rules, { crossBank });
+  }, [inputs, uploads.length, matchingPool, outletColors, rules, crossBank]);
 
   const matchedInputs = matchResult.inputs;
   const summary = matchResult.summary;
@@ -163,24 +187,26 @@ export function CheckClient({
 
   const reset = useCallback(() => {
     if (!confirm("Reset total — upload mutasi baru? Input dan PDF saat ini akan hilang.")) return;
-    setParsed(null);
-    setActiveBank(null);
-    setPages([]);
+    setUploads([]);
+    setActiveBankId("");
     setInputs([]);
     setDownloadError(null);
-    setCarryoverTxs([]);
+    setCarryoverByBank(new Map());
     setUseCarryover(true);
+    setCrossBank(false);
   }, []);
 
+  // Build matched tx map per active bank — only highlight in current PDF, skip carry-over
   const matchedTxMap = useMemo(() => {
     const map = new Map<string, string>();
-    if (!parsed) return map;
+    if (!activeUpload) return map;
+    const activeBankId2 = activeUpload.bank.id;
     for (const input of matchedInputs) {
       const m = input.match;
       if (m && m.status === "matched") {
-        // Phase 4.3: cari di parsed.transactions saja (current PDF), skip carry-over
-        // (carry-over txs page-nya 0 dan tidak ada di PDF saat ini, jadi tidak bisa di-highlight)
-        const tx = parsed.transactions.find(
+        // Phase 1E.2: skip kalau match-nya di bank lain (cross-bank case)
+        if (m.txBankId && m.txBankId !== activeBankId2) continue;
+        const tx = activeUpload.parsed.transactions.find(
           (t) =>
             t.no === m.txNo &&
             t.tanggalDate.getTime() === m.txDate.getTime() &&
@@ -192,79 +218,108 @@ export function CheckClient({
       }
     }
     return map;
-  }, [matchedInputs, parsed]);
+  }, [matchedInputs, activeUpload]);
 
   async function handleDownload() {
-    if (!parsed) return;
+    if (uploads.length === 0) return;
     setGenerating(true);
     setDownloadError(null);
     try {
-      const { generateHighlightedPdf } = await import("@/lib/pdf/highlight");
-      const bytes = await generateHighlightedPdf({
-        fileBuffer: parsed.fileBuffer,
-        transactions: parsed.transactions,
+      const { generateMultiBankPdf } = await import("@/lib/pdf/highlight");
+      const bytes = await generateMultiBankPdf({
+        uploads: uploads.map((u) => ({
+          bank: u.bank,
+          fileBuffer: u.parsed.fileBuffer,
+          transactions: u.parsed.transactions,
+        })),
         inputs: matchedInputs,
         summary,
         outlets,
+        jenis,
       });
       const blob = new Blob([new Uint8Array(bytes)], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       const today = toDateISO(new Date());
       a.href = url;
-      a.download = `mutasi-${jenis}-${today}.pdf`;
+      const banksTag = uploads.map((u) => u.bank.kode).join("-");
+      a.download = `mutasi-${jenis}-${banksTag}-${today}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
 
-      // Save session ke history
-      if (parsed && activeBank && matchedInputs.length > 0) {
+      // Save 1 session per bank — supaya history tetap rapi per-bank
+      if (matchedInputs.length > 0) {
         const supabase = createClient();
         const { saveSession } = await import("@/lib/sessions/save");
 
-        // Hitung period mutasi (first/last tanggal di transactions)
-        const txDates = parsed.transactions.map((t) => t.tanggalDate.getTime());
-        const periodStart = txDates.length > 0 ? new Date(Math.min(...txDates)) : null;
-        const periodEnd = txDates.length > 0 ? new Date(Math.max(...txDates)) : null;
-        const pdfTotalAmount = parsed.transactions.reduce(
-          (s, t) => s + t.kredit,
-          0,
-        );
+        for (const up of uploads) {
+          const inputsForBank = matchedInputs.filter((i) => i.bankId === up.bank.id);
+          // Skip bank yang tidak ada input — tidak perlu session
+          if (inputsForBank.length === 0) continue;
+          const carryForBank = (carryoverByBank.get(up.bank.id) ?? []).length;
+          const txDates = up.parsed.transactions.map((t) => t.tanggalDate.getTime());
+          const periodStart = txDates.length > 0 ? new Date(Math.min(...txDates)) : null;
+          const periodEnd = txDates.length > 0 ? new Date(Math.max(...txDates)) : null;
+          const pdfTotalAmount = up.parsed.transactions.reduce((s, t) => s + t.kredit, 0);
 
-        try {
-          await saveSession(supabase, {
-            accountId,
-            userId,
-            bankId: activeBank.id,
-            jenis,
-            inputs: matchedInputs,
-            summary,
-            matchingPool,
-            pdfTotalAmount,
-            periodStart,
-            periodEnd,
-            carryOverUsed: useCarryover && carryoverTxs.length > 0,
-          });
-        } catch (e) {
-          console.error("Save session failed:", e);
-          // Non-blocking — download still proceeds
+          // Build per-bank summary subset
+          const subSummary: MatchSummary = {
+            totalInput: inputsForBank.length,
+            matched: inputsForBank.filter((i) => i.match?.status === "matched").length,
+            noCandidate: inputsForBank.filter((i) => i.match?.status === "no_candidate"),
+            allTaken: inputsForBank.filter((i) => i.match?.status === "all_taken"),
+            unclaimed: matchingPool.filter(
+              (t) =>
+                t.bankId === up.bank.id &&
+                t.source === "current" &&
+                !matchedInputs.some(
+                  (i) =>
+                    i.match?.status === "matched" &&
+                    (i.match.txBankId ?? i.bankId) === up.bank.id &&
+                    i.match.txNo === t.no &&
+                    i.match.txDate.getTime() === t.tanggalDate.getTime(),
+                ),
+            ),
+          };
+
+          try {
+            await saveSession(supabase, {
+              accountId,
+              userId,
+              bankId: up.bank.id,
+              jenis,
+              inputs: inputsForBank,
+              summary: subSummary,
+              matchingPool,
+              pdfTotalAmount,
+              periodStart,
+              periodEnd,
+              carryOverUsed: useCarryover && carryForBank > 0,
+              multiBankUsed: uploads.length > 1,
+            });
+          } catch (e) {
+            console.error("Save session failed for bank:", up.bank.kode, e);
+          }
         }
 
-        // Update last_input_date in account_settings (jenis-specific)
-        const latestDate = matchedInputs.reduce(
-          (max, i) => (i.tanggal.getTime() > max.getTime() ? i.tanggal : max),
-          matchedInputs[0].tanggal,
-        );
-        const updateField =
-          jenis === "kredit" ? "last_input_date_kredit" : "last_input_date_debet";
-        await supabase
-          .from("account_settings")
-          .update({
-            [updateField]: toDateISO(latestDate),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("account_id", accountId);
+        // Update last_input_date untuk jenis yang aktif
+        if (matchedInputs.length > 0) {
+          const latestDate = matchedInputs.reduce(
+            (max, i) => (i.tanggal.getTime() > max.getTime() ? i.tanggal : max),
+            matchedInputs[0].tanggal,
+          );
+          const updateField =
+            jenis === "kredit" ? "last_input_date_kredit" : "last_input_date_debet";
+          await supabase
+            .from("account_settings")
+            .update({
+              [updateField]: toDateISO(latestDate),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("account_id", accountId);
+        }
         router.refresh();
       }
     } catch (err) {
@@ -275,23 +330,22 @@ export function CheckClient({
     }
   }
 
-  if (!parsed) {
+  if (uploads.length === 0) {
     return (
       <UploadStep
         banks={banks}
         jenis={jenis}
         accountId={accountId}
-        onParsed={(p, rendered, bank) => {
-          setParsed(p);
-          setPages(rendered);
-          setActiveBank(bank);
+        onAllReady={(ups) => {
+          setUploads(ups);
+          setActiveBankId(ups[0]?.bank.id ?? "");
         }}
       />
     );
   }
 
-  const totalAmount = parsed.transactions.reduce(
-    (s: number, t: PdfTransaction) => s + t.kredit,
+  const totalAllAmount = uploads.reduce(
+    (s, u) => s + u.parsed.transactions.reduce((s2, t) => s2 + t.kredit, 0),
     0,
   );
 
@@ -301,15 +355,13 @@ export function CheckClient({
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">
             Cek Mutasi {jenis === "kredit" ? "Kredit" : "Debet"}
-            {activeBank && (
-              <span className="ml-2 text-base font-normal text-slate-500">
-                — {activeBank.label || activeBank.kode}
-              </span>
-            )}
+            <span className="ml-2 text-base font-normal text-slate-500">
+              — {uploads.length} bank
+            </span>
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            {parsed.transactions.length} transaksi {jenis} ter-parse dari {parsed.pages.length}{" "}
-            halaman.
+            {uploads.reduce((s, u) => s + u.parsed.transactions.length, 0)} transaksi {jenis} dari{" "}
+            {uploads.length} bank.
             <span className="ml-2 text-xs text-slate-500">
               Aturan: lookback {rules.lookback_days}h, forward {rules.forward_window_days}h,{" "}
               {rules.match_mode}
@@ -325,8 +377,8 @@ export function CheckClient({
         </div>
       </div>
 
-      {/* Phase 4.3: Carry-over banner */}
-      {(carryoverLoading || carryoverTxs.length > 0) && (
+      {/* Carry-over banner */}
+      {(carryoverLoading || totalCarryoverCount > 0) && (
         <div className="card p-3 border-blue-200 bg-blue-50">
           <label className="flex items-start gap-2 cursor-pointer">
             <input
@@ -341,13 +393,12 @@ export function CheckClient({
                 <HistoryIcon className="h-3.5 w-3.5" />
                 {carryoverLoading
                   ? "Mencari transaksi belum ter-claim dari history…"
-                  : `Sertakan ${carryoverTxs.length} transaksi belum ter-claim dari upload sebelumnya`}
+                  : `Sertakan ${totalCarryoverCount} transaksi belum ter-claim dari upload sebelumnya`}
               </div>
-              {!carryoverLoading && carryoverTxs.length > 0 && (
+              {!carryoverLoading && totalCarryoverCount > 0 && (
                 <div className="text-xs text-blue-700 mt-0.5">
-                  Total Rp {formatRupiah(carryoverTxs.reduce((s, t) => s + t.kredit, 0))}.
-                  Berguna kalau Anda upload mutasi terbaru tapi mau cocokkan input lama yang
-                  belum ke-match. Default ON.
+                  Total Rp {formatRupiah(totalCarryoverNominal)} dari {carryoverByBank.size} bank.
+                  Default ON.
                 </div>
               )}
             </div>
@@ -357,21 +408,63 @@ export function CheckClient({
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <div className="card overflow-hidden">
-          <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 text-xs text-slate-600 flex items-center justify-between">
-            <span>Mutasi (highlight realtime)</span>
+          {/* Bank tabs */}
+          {uploads.length > 1 && (
+            <div className="border-b border-slate-200 bg-slate-50 flex items-center gap-1 overflow-x-auto px-2">
+              {uploads.map((u) => {
+                const isActive = u.bank.id === (activeUpload?.bank.id ?? "");
+                return (
+                  <button
+                    key={u.bank.id}
+                    onClick={() => setActiveBankId(u.bank.id)}
+                    className={`px-3 py-2 text-xs font-medium border-b-2 -mb-px whitespace-nowrap ${
+                      isActive
+                        ? "border-slate-900 text-slate-900"
+                        : "border-transparent text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    {u.bank.label || u.bank.kode}
+                    <span className="ml-1.5 text-[10px] text-slate-400">
+                      ({u.parsed.transactions.length})
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="px-4 py-2 border-b border-slate-200 bg-slate-50/50 text-xs text-slate-600 flex items-center justify-between">
             <span>
-              Total {jenis}: Rp {formatRupiah(totalAmount)}
+              Mutasi {activeUpload?.bank.label || activeUpload?.bank.kode || "—"} (highlight realtime)
+            </span>
+            <span>
+              Total {jenis} (semua bank): Rp {formatRupiah(totalAllAmount)}
             </span>
           </div>
-          <PdfViewer pages={pages} matchedTxMap={matchedTxMap} parsed={parsed} />
+          {activeUpload && (
+            <PdfViewer
+              pages={activeUpload.pages}
+              matchedTxMap={matchedTxMap}
+              parsed={activeUpload.parsed}
+            />
+          )}
         </div>
 
         <div className="space-y-4">
-          <InputPanel outlets={outlets} onAdd={addInputs} />
+          <InputPanel
+            outlets={outlets}
+            banks={uploads.map((u) => u.bank)}
+            defaultBankId={activeUpload?.bank.id ?? ""}
+            onAdd={addInputs}
+          />
           <SummaryPanel
             summary={summary}
             inputs={matchedInputs}
             outlets={outlets}
+            banks={uploads.map((u) => u.bank)}
+            crossBank={crossBank}
+            onCrossBankChange={setCrossBank}
+            multiBank={uploads.length > 1}
             onRemove={removeInput}
             onClearAll={clearAll}
             onDownload={handleDownload}

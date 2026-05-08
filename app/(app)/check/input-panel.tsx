@@ -1,21 +1,31 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import type { Outlet, UserInput } from "@/lib/types";
+import { useState, useMemo, useEffect } from "react";
+import type { Outlet, UserInput, Bank } from "@/lib/types";
 import { parseNominal, formatRupiah, parseDateISO, toDateISO } from "@/lib/format";
 import { Plus } from "lucide-react";
 
 export function InputPanel({
   outlets,
+  banks,
+  defaultBankId,
   onAdd,
 }: {
   outlets: Outlet[];
+  banks: Bank[];
+  defaultBankId: string;
   onAdd: (inputs: UserInput[]) => void;
 }) {
   const [outletId, setOutletId] = useState(outlets[0]?.id ?? "");
+  const [bankId, setBankId] = useState(defaultBankId || banks[0]?.id || "");
   const [tanggal, setTanggal] = useState(toDateISO(new Date()));
   const [raw, setRaw] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  // Auto-update bankId saat user pindah tab di viewer (defaultBankId berubah)
+  useEffect(() => {
+    if (defaultBankId) setBankId(defaultBankId);
+  }, [defaultBankId]);
 
   const parsedLines = useMemo(() => {
     return raw
@@ -39,6 +49,10 @@ export function InputPanel({
       setError("Pilih outlet dulu");
       return;
     }
+    if (!bankId) {
+      setError("Pilih bank dulu");
+      return;
+    }
     const dt = parseDateISO(tanggal);
     if (!dt) {
       setError("Tanggal tidak valid");
@@ -58,6 +72,7 @@ export function InputPanel({
       id: `${Date.now()}-${l.idx}-${Math.random().toString(36).slice(2, 7)}`,
       tanggal: dt,
       outletId,
+      bankId,
       nominal: l.nominal!,
     }));
     onAdd(newInputs);
@@ -65,17 +80,42 @@ export function InputPanel({
   }
 
   const selectedOutlet = outlets.find((o) => o.id === outletId);
+  const selectedBank = banks.find((b) => b.id === bankId);
+  const multiBank = banks.length > 1;
 
   return (
     <div className="card p-4 space-y-3">
       <div>
         <h3 className="font-semibold text-slate-900">Input transferan</h3>
         <p className="text-xs text-slate-600 mt-0.5">
-          Pilih outlet + tanggal, lalu ketik nominal-nominal satu per baris.
+          {multiBank
+            ? "Pilih bank tujuan, outlet, tanggal, lalu ketik nominal-nominal."
+            : "Pilih outlet + tanggal, lalu ketik nominal-nominal satu per baris."}
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className={`grid gap-3 ${multiBank ? "grid-cols-3" : "grid-cols-2"}`}>
+        {multiBank && (
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">Bank</label>
+            <select
+              value={bankId}
+              onChange={(e) => setBankId(e.target.value)}
+              className="input-base"
+            >
+              {banks.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.label || b.kode}
+                </option>
+              ))}
+            </select>
+            {selectedBank && (
+              <p className="mt-1 text-[10px] text-slate-500 truncate">
+                {selectedBank.label || selectedBank.kode}
+              </p>
+            )}
+          </div>
+        )}
         <div>
           <label className="block text-xs font-medium text-slate-700 mb-1">Outlet</label>
           <select

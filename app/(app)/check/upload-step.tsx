@@ -1,7 +1,16 @@
 "use client";
 
-import { useState, useRef, useMemo } from "react";
-import { Upload, FileText, Loader2, AlertCircle, Lock, CheckCircle2 } from "lucide-react";
+import { useState, useRef } from "react";
+import {
+  FileText,
+  Loader2,
+  AlertCircle,
+  Lock,
+  CheckCircle2,
+  Plus,
+  Trash2,
+  Play,
+} from "lucide-react";
 import { renderAllPages } from "@/lib/pdf/renderer";
 import { parsePdfByParserId, ParserNotImplementedError } from "@/lib/parsers";
 import {
@@ -16,58 +25,97 @@ import type { ParsedPdf } from "@/lib/pdf/parser";
 import type { RenderedPage } from "@/lib/pdf/renderer";
 import type { Bank, Jenis, PdfTransaction } from "@/lib/types";
 
+export type BankUpload = {
+  bank: Bank;
+  parsed: ParsedPdf;
+  pages: RenderedPage[];
+  persistInfo: PersistResult;
+};
+
+type QueueRow = {
+  id: string;
+  bankId: string;
+  password: string;
+  file: File | null;
+  status: "pending" | "parsing" | "ready" | "error";
+  error?: string;
+  progress?: string;
+  result?: BankUpload;
+};
+
+function makeRowId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
 export function UploadStep({
   banks,
   jenis,
   accountId,
-  onParsed,
+  onAllReady,
 }: {
   banks: Bank[];
   jenis: Jenis;
   accountId: string;
-  onParsed: (parsed: ParsedPdf, rendered: RenderedPage[], bank: Bank) => void;
+  onAllReady: (uploads: BankUpload[]) => void;
 }) {
-  const [bankId, setBankId] = useState<string>(banks[0]?.id ?? "");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState<string>("");
-  const [error, setError] = useState<string | null>(null);
-  const [persistInfo, setPersistInfo] = useState<PersistResult | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [rows, setRows] = useState<QueueRow[]>(() => [
+    { id: makeRowId(), bankId: banks[0]?.id ?? "", password: "", file: null, status: "pending" },
+  ]);
+  const [submitting, setSubmitting] = useState(false);
+  const fileRefs = useRef<Map<string, HTMLInputElement>>(new Map());
 
-  const selectedBank = useMemo(() => banks.find((b) => b.id === bankId), [banks, bankId]);
-  const spec = useMemo(() => (selectedBank ? getParserSpec(selectedBank.parser_id) : undefined), [selectedBank]);
-  const requiresPassword = spec?.password_required ?? false;
-  const fileAccept = spec?.format === "html" ? ".html,text/html" : ".pdf,application/pdf";
+  const allReady = rows.length > 0 && rows.every((r) => r.status === "ready");
+  const anyParsing = rows.some((r) => r.status === "parsing");
 
-  async function handleFile(file: File) {
-    setError(null);
-    setPersistInfo(null);
-    if (!selectedBank || !spec) {
-      setError("Pilih bank/e-wallet dulu");
+  function updateRow(id: string, patch: Partial<QueueRow>) {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }
+
+  function addRow() {
+    const used = new Set(rows.map((r) => r.bankId));
+    const nextBank = banks.find((b) => !used.has(b.id)) ?? banks[0];
+    setRows((prev) => [
+      ...prev,
+      {
+        id: makeRowId(),
+        bankId: nextBank?.id ?? "",
+        password: "",
+        file: null,
+        status: "pending",
+      },
+    ]);
+  }
+
+  function removeRow(id: string) {
+    setRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
+  }
+
+  async function parseRow(row: QueueRow) {
+    const bank = banks.find((b) => b.id === row.bankId);
+    const spec = bank ? getParserSpec(bank.parser_id) : undefined;
+    if (!bank || !spec) {
+      updateRow(row.id, { status: "error", error: "Bank/parser tidak valid" });
       return;
     }
-    if (requiresPassword && !password) {
-      setError("PDF ini butuh password. Isi password di bawah dulu.");
+    if (!row.file) {
+      updateRow(row.id, { status: "error", error: "File belum dipilih" });
       return;
     }
-    setLoading(true);
+    if (spec.password_required && !row.password) {
+      updateRow(row.id, { status: "error", error: "Password wajib untuk PDF ini" });
+      return;
+    }
+    updateRow(row.id, { status: "parsing", progress: `Parsing ${spec.label}...`, error: undefined });
     try {
-      setProgress(`Parsing ${spec.label}...`);
-      const doc = await parsePdfByParserId(file, selectedBank.parser_id, {
-        password: password || undefined,
+      const doc = await parsePdfByParserId(row.file, bank.parser_id, {
+        password: row.password || undefined,
       });
 
-      // Persist all rows to history (auto dedup by no_ref + fingerprint)
-      setProgress("Menyimpan ke history (auto dedup)...");
+      updateRow(row.id, { progress: "Menyimpan ke history (auto dedup)..." });
       const supabase = createClient();
-      const persisted = await persistTransactions(supabase, accountId, selectedBank.id, doc.rows);
-      setPersistInfo(persisted);
+      const persisted = await persistTransactions(supabase, accountId, bank.id, doc.rows);
+      const idMap = await lookupParsedTxIds(supabase, accountId, bank.id, doc.rows);
 
-      // Phase 4.3: lookup parsed_tx IDs supaya match bisa di-link & claimed_by_input_id ke-update
-      const idMap = await lookupParsedTxIds(supabase, accountId, selectedBank.id, doc.rows);
-
-      // Filter rows by jenis untuk matching pool
       const transactions: PdfTransaction[] = doc.rows
         .filter((r) => (jenis === "kredit" ? r.kredit > 0 : r.debet > 0))
         .map((r) => ({
@@ -82,36 +130,67 @@ export function UploadStep({
           bbox: r.bbox,
           parsedTxId: idMap.get(rowLookupKey(r)),
           source: "current",
+          bankId: bank.id,
         }));
 
       if (transactions.length === 0) {
-        setError(
-          `Tidak ada transaksi ${jenis} terdeteksi di file ini. ` +
-            `Pastikan file adalah mutasi ${spec.label} dan ada transaksi ${jenis}-nya.`,
-        );
-        setLoading(false);
+        updateRow(row.id, {
+          status: "error",
+          error: `Tidak ada transaksi ${jenis} di file ini.`,
+          progress: undefined,
+        });
         return;
       }
 
-      setProgress(`Render ${doc.pages.length} halaman...`);
+      updateRow(row.id, { progress: `Render ${doc.pages.length} halaman...` });
+      const pages = await renderAllPages(doc.fileBuffer, 1.4);
+
       const parsed: ParsedPdf = {
         transactions,
         pages: doc.pages,
         fileBuffer: doc.fileBuffer,
       };
-      const rendered = await renderAllPages(doc.fileBuffer, 1.4);
-      onParsed(parsed, rendered, selectedBank);
+
+      updateRow(row.id, {
+        status: "ready",
+        progress: undefined,
+        result: { bank, parsed, pages, persistInfo: persisted },
+      });
     } catch (err) {
       console.error(err);
-      if (err instanceof ParserNotImplementedError) {
-        setError(
-          `Parser untuk ${err.parserId} belum tersedia. Akan dirilis di update berikutnya.`,
-        );
-      } else {
-        setError(err instanceof Error ? err.message : "Gagal parse file");
-      }
-      setLoading(false);
+      const msg =
+        err instanceof ParserNotImplementedError
+          ? `Parser ${err.parserId} belum tersedia.`
+          : err instanceof Error
+            ? err.message
+            : "Gagal parse file";
+      updateRow(row.id, { status: "error", error: msg, progress: undefined });
     }
+  }
+
+  function handleFileChange(rowId: string, file: File | null) {
+    if (!file) return;
+    updateRow(rowId, { file, status: "pending", error: undefined });
+    const row = rows.find((r) => r.id === rowId);
+    const bank = row ? banks.find((b) => b.id === row.bankId) : undefined;
+    const spec = bank ? getParserSpec(bank.parser_id) : undefined;
+    if (!spec?.password_required) {
+      // Auto-parse setelah file dipilih (tidak perlu password)
+      setTimeout(() => {
+        setRows((prev) => {
+          const target = prev.find((x) => x.id === rowId);
+          if (target) parseRow({ ...target, file });
+          return prev;
+        });
+      }, 0);
+    }
+  }
+
+  function handleSubmit() {
+    const ready = rows.filter((r) => r.status === "ready" && r.result).map((r) => r.result!);
+    if (ready.length === 0) return;
+    setSubmitting(true);
+    onAllReady(ready);
   }
 
   if (banks.length === 0) {
@@ -125,8 +204,7 @@ export function UploadStep({
         <div className="card p-5 border-amber-200 bg-amber-50">
           <h2 className="font-medium text-amber-900">Belum ada bank ready</h2>
           <p className="mt-1 text-sm text-amber-800">
-            Tambah dulu rekening bank di menu <strong>Bank</strong>. Pilih bank yang status-nya
-            &ldquo;Ready&rdquo; supaya bisa upload mutasi.
+            Tambah dulu rekening bank di menu <strong>Bank</strong>.
           </p>
         </div>
       </div>
@@ -140,123 +218,196 @@ export function UploadStep({
           Cek Mutasi {jenis === "kredit" ? "Kredit (Transaksi Masuk)" : "Debet (Transaksi Keluar)"}
         </h1>
         <p className="mt-1 text-sm text-slate-600">
-          Pilih bank, lalu upload mutasi. File diproses lokal di browser, tidak di-upload ke server.
+          Tambah rekening bank yang mau di-cek (bisa lebih dari 1), upload mutasinya, lalu klik{" "}
+          <strong>Mulai Cek</strong>. File diproses lokal di browser.
         </p>
       </div>
 
-      <div className="card p-5 space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-slate-700">Bank / E-Wallet</label>
-          <select
-            value={bankId}
-            onChange={(e) => setBankId(e.target.value)}
-            className="input-base mt-1"
-            disabled={loading}
-          >
-            {banks.map((b) => {
-              const sp = getParserSpec(b.parser_id);
-              return (
-                <option key={b.id} value={b.id}>
-                  {b.label || sp?.label || b.kode}
-                </option>
-              );
-            })}
-          </select>
-          {spec?.hint && <p className="mt-1 text-xs text-slate-500">{spec.hint}</p>}
-        </div>
-
-        {requiresPassword && (
-          <div>
-            <label className="text-sm font-medium text-slate-700 flex items-center gap-1.5">
-              <Lock className="h-3.5 w-3.5" />
-              Password PDF
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Misal: tanggal lahir DDMMYYYY"
-              className="input-base mt-1"
-              disabled={loading}
-            />
-            <p className="mt-1 text-xs text-slate-500">
-              Mandiri PDF biasanya pakai password tanggal lahir format DDMMYYYY.
-            </p>
-          </div>
-        )}
-
-        <div className="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center">
-          {loading ? (
-            <div className="flex flex-col items-center gap-3">
-              <Loader2 className="h-10 w-10 text-slate-500 animate-spin" />
-              <p className="text-sm text-slate-700 font-medium">{progress}</p>
-              <p className="text-xs text-slate-500">Sedang memproses...</p>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-3">
-              <div className="p-3 rounded-full bg-slate-100">
-                <FileText className="h-8 w-8 text-slate-600" />
+      <div className="space-y-3">
+        {rows.map((row, idx) => {
+          const bank = banks.find((b) => b.id === row.bankId);
+          const spec = bank ? getParserSpec(bank.parser_id) : undefined;
+          const requiresPassword = spec?.password_required ?? false;
+          const fileAccept = spec?.format === "html" ? ".html,text/html" : ".pdf,application/pdf";
+          const showRemove = rows.length > 1;
+          return (
+            <div key={row.id} className="card p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium text-slate-700">
+                  Bank #{idx + 1}
+                  {row.result && (
+                    <span className="ml-2 text-xs text-green-700">
+                      <CheckCircle2 className="inline-block h-3 w-3 mr-0.5 -mt-0.5" />
+                      {row.result.parsed.transactions.length} transaksi {jenis} siap
+                    </span>
+                  )}
+                </div>
+                {showRemove && (
+                  <button
+                    type="button"
+                    onClick={() => removeRow(row.id)}
+                    className="text-xs text-red-600 hover:text-red-700 inline-flex items-center gap-1"
+                    disabled={row.status === "parsing"}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Hapus
+                  </button>
+                )}
               </div>
-              <div>
-                <h3 className="font-medium text-slate-900">
-                  Upload {spec?.format === "html" ? "HTML" : "PDF"} {spec?.label || ""}
-                </h3>
+
+              <div className={`grid gap-3 ${requiresPassword ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Bank / E-Wallet
+                  </label>
+                  <select
+                    value={row.bankId}
+                    onChange={(e) =>
+                      updateRow(row.id, {
+                        bankId: e.target.value,
+                        status: "pending",
+                        file: null,
+                        result: undefined,
+                        error: undefined,
+                      })
+                    }
+                    className="input-base"
+                    disabled={row.status === "parsing"}
+                  >
+                    {banks.map((b) => {
+                      const sp = getParserSpec(b.parser_id);
+                      return (
+                        <option key={b.id} value={b.id}>
+                          {b.label || sp?.label || b.kode}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  {spec?.hint && <p className="mt-1 text-xs text-slate-500">{spec.hint}</p>}
+                </div>
+
+                {requiresPassword && (
+                  <div>
+                    <label className="text-xs font-medium text-slate-700 mb-1 flex items-center gap-1.5">
+                      <Lock className="h-3 w-3" />
+                      Password PDF
+                    </label>
+                    <input
+                      type="password"
+                      value={row.password}
+                      onChange={(e) => updateRow(row.id, { password: e.target.value })}
+                      placeholder="DDMMYYYY"
+                      className="input-base"
+                      disabled={row.status === "parsing"}
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">File</label>
+                  <input
+                    ref={(el) => {
+                      if (el) fileRefs.current.set(row.id, el);
+                      else fileRefs.current.delete(row.id);
+                    }}
+                    type="file"
+                    accept={fileAccept}
+                    onChange={(e) => handleFileChange(row.id, e.target.files?.[0] ?? null)}
+                    className="hidden"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileRefs.current.get(row.id)?.click()}
+                      className="btn-secondary text-xs flex-1"
+                      disabled={row.status === "parsing"}
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      {row.file ? row.file.name.slice(0, 25) : "Pilih file"}
+                    </button>
+                    {requiresPassword &&
+                      row.file &&
+                      row.password &&
+                      row.status !== "parsing" &&
+                      row.status !== "ready" && (
+                        <button
+                          type="button"
+                          onClick={() => parseRow(row)}
+                          className="btn-primary text-xs px-2 py-1"
+                        >
+                          Parse
+                        </button>
+                      )}
+                  </div>
+                </div>
               </div>
-              <button onClick={() => inputRef.current?.click()} className="btn-primary mt-1">
-                <Upload className="h-4 w-4" /> Pilih File
-              </button>
-              <input
-                ref={inputRef}
-                type="file"
-                accept={fileAccept}
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleFile(file);
-                }}
-              />
+
+              {row.status === "parsing" && (
+                <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700 flex items-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  {row.progress ?? "Memproses..."}
+                </div>
+              )}
+
+              {row.status === "error" && row.error && (
+                <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 flex items-start gap-2">
+                  <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+                  <span>{row.error}</span>
+                </div>
+              )}
+
+              {row.status === "ready" && row.result && (
+                <div className="rounded-md bg-green-50 border border-green-200 px-3 py-2 text-xs text-green-700 flex items-start gap-2">
+                  <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+                  <span>
+                    Dari {row.result.parsed.pages.length} halaman ·{" "}
+                    <strong>{row.result.persistInfo.newCount} baru</strong>
+                    {row.result.persistInfo.dupCount > 0 && (
+                      <>, {row.result.persistInfo.dupCount} sudah ada (auto dedup)</>
+                    )}
+                    .
+                  </span>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-
-        {error && (
-          <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700 flex items-start gap-2">
-            <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
-
-        {persistInfo && (
-          <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-700 flex items-start gap-2">
-            <CheckCircle2 className="h-4 w-4 mt-0.5 flex-shrink-0" />
-            <span>
-              Disimpan ke history: <strong>{persistInfo.newCount} transaksi baru</strong>
-              {persistInfo.dupCount > 0 && (
-                <>, <strong>{persistInfo.dupCount} sudah ada</strong> di history (auto dedup)</>
-              )}
-              {persistInfo.errorCount > 0 && (
-                <span className="text-red-700">
-                  , {persistInfo.errorCount} error
-                </span>
-              )}
-              .
-            </span>
-          </div>
-        )}
+          );
+        })}
       </div>
 
-      <div className="card p-5">
-        <h2 className="text-sm font-semibold text-slate-900">Cara kerja</h2>
-        <ol className="mt-2 space-y-1.5 text-sm text-slate-600 list-decimal list-inside">
-          <li>Pilih bank yang sesuai dengan PDF mutasi yang akan di-upload.</li>
-          <li>Upload file mutasi (PDF atau HTML tergantung bank).</li>
-          <li>
-            Sistem otomatis simpan transaksi ke history.{" "}
-            <strong>Kalau Anda upload mutasi yang overlap (misal tgl 1-3 lalu tgl 3-10),
-            transaksi yang sama tidak akan dobel</strong> — di-dedup pakai No.Referensi.
-          </li>
-          <li>Input nominal di form, sistem cocokkan otomatis sesuai aturan di menu Aturan.</li>
-          <li>Download PDF mutasi yang sudah ter-highlight + lampiran rekap.</li>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <button
+          type="button"
+          onClick={addRow}
+          className="btn-secondary text-sm"
+          disabled={anyParsing || submitting}
+        >
+          <Plus className="h-4 w-4" /> Tambah Bank Lain
+        </button>
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={!allReady || anyParsing || submitting}
+          className="btn-primary text-sm flex-1 sm:flex-initial sm:ml-auto"
+        >
+          {submitting ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" /> Menyiapkan...
+            </>
+          ) : (
+            <>
+              <Play className="h-4 w-4" /> Mulai Cek (
+              {rows.filter((r) => r.status === "ready").length} bank)
+            </>
+          )}
+        </button>
+      </div>
+
+      <div className="card p-5 text-sm text-slate-600">
+        <h2 className="text-sm font-semibold text-slate-900 mb-2">Cara kerja multi-bank</h2>
+        <ol className="space-y-1.5 list-decimal list-inside">
+          <li>Pilih bank, upload mutasinya. Auto-parse + auto-dedup ke history.</li>
+          <li>Klik &quot;Tambah Bank Lain&quot; kalau mau cek lebih dari 1 bank sekaligus.</li>
+          <li>Setelah semua ready, klik &quot;Mulai Cek&quot; untuk masuk halaman input.</li>
+          <li>Di halaman input, pilih bank tujuan setiap nominal. Default ikut tab PDF aktif.</li>
         </ol>
       </div>
     </div>
