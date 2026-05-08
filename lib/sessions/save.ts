@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   UserInput,
   MatchSummary,
+  PdfTransaction,
   Jenis,
 } from "@/lib/types";
 import { toDateISO } from "@/lib/format";
@@ -15,6 +16,8 @@ export type SaveSessionInput = {
   jenis: Jenis;
   inputs: UserInput[];
   summary: MatchSummary;
+  /** Phase 4.3: matching pool (current PDF + carry-over) untuk lookup parsedTxId saat link claim */
+  matchingPool?: PdfTransaction[];
   /** Total nominal di PDF mutasi yang baru di-upload (untuk cek_session.total_nominal_input is misleading; we use tx values) */
   pdfTotalAmount: number;
   /** Periode mutasi (dari first/last tx date di PDF) */
@@ -26,6 +29,7 @@ export type SaveSessionInput = {
 
 export type SavedSession = {
   sessionId: string;
+  carryoverClaimed: number;
 };
 
 export async function saveSession(
@@ -65,6 +69,21 @@ export async function saveSession(
   const sessionId = sessionData.id;
 
   // 2. Insert cek_inputs (batch)
+  // Phase 4.3: lookup parsedTxId untuk carry-over matches → matched_tx_id
+  const poolByKey = new Map<string, PdfTransaction>();
+  if (args.matchingPool) {
+    for (const tx of args.matchingPool) {
+      poolByKey.set(`${tx.no}|${tx.tanggalDate.getTime()}|${tx.kredit}`, tx);
+    }
+  }
+
+  function findMatchedTxId(input: UserInput): string | null {
+    if (input.match?.status !== "matched") return null;
+    const key = `${input.match.txNo}|${input.match.txDate.getTime()}|${input.nominal}`;
+    const tx = poolByKey.get(key);
+    return tx?.parsedTxId ?? null;
+  }
+
   const inputRows = args.inputs.map((i) => ({
     session_id: sessionId,
     account_id: args.accountId,
@@ -74,20 +93,43 @@ export async function saveSession(
     nominal: i.nominal,
     jenis: args.jenis,
     match_status: i.match?.status ?? null,
-    matched_tx_id: null, // akan di-link di round 2 (need lookup parsed_tx by no+date)
+    matched_tx_id: findMatchedTxId(i),
     conflict_count:
       i.match?.status === "all_taken" ? i.match.conflictCount : null,
     conflict_dates:
       i.match?.status === "all_taken" ? i.match.conflictDates : null,
   }));
 
+  let carryoverClaimed = 0;
+
   if (inputRows.length > 0) {
-    const { error: inputsErr } = await supabase.from("cek_inputs").insert(inputRows);
+    const { data: insertedInputs, error: inputsErr } = await supabase
+      .from("cek_inputs")
+      .insert(inputRows)
+      .select("id, matched_tx_id");
+
     if (inputsErr) {
       // Don't fail entire save — session sudah terbuat
       console.error("Gagal save cek_inputs:", inputsErr.message);
+    } else if (insertedInputs && insertedInputs.length > 0) {
+      // Phase 4.3: untuk tiap matched_tx_id (carry-over), update parsed_transactions.claimed_by_input_id
+      const claimUpdates = insertedInputs
+        .filter((row) => row.matched_tx_id)
+        .map((row) => ({ inputId: row.id as string, txId: row.matched_tx_id as string }));
+
+      for (const u of claimUpdates) {
+        const { error: updErr } = await supabase
+          .from("parsed_transactions")
+          .update({
+            claimed_by_input_id: u.inputId,
+            claimed_at: new Date().toISOString(),
+          })
+          .eq("id", u.txId)
+          .is("claimed_by_input_id", null); // race-safe: hanya update kalau masih unclaimed
+        if (!updErr) carryoverClaimed += 1;
+      }
     }
   }
 
-  return { sessionId };
+  return { sessionId, carryoverClaimed };
 }

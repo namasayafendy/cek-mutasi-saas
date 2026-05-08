@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import type {
   Outlet,
@@ -16,6 +16,8 @@ import type { RenderedPage } from "@/lib/pdf/renderer";
 import { runMatching, type MatchRules, DEFAULT_RULES } from "@/lib/matching";
 import { createClient } from "@/lib/supabase/client";
 import { toDateISO, formatRupiah } from "@/lib/format";
+import { loadCarryoverPdfTxs } from "@/lib/sessions/carryover";
+import { History as HistoryIcon } from "lucide-react";
 import { UploadStep } from "./upload-step";
 import { PdfViewer } from "./pdf-viewer";
 import { InputPanel } from "./input-panel";
@@ -63,6 +65,9 @@ export function CheckClient({
   const [inputs, setInputs] = useState<UserInput[]>([]);
   const [generating, setGenerating] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [carryoverTxs, setCarryoverTxs] = useState<PdfTransaction[]>([]);
+  const [useCarryover, setUseCarryover] = useState(true);
+  const [carryoverLoading, setCarryoverLoading] = useState(false);
 
   const rules = useMemo(() => rulesFromSettings(settings, jenis), [settings, jenis]);
 
@@ -71,6 +76,58 @@ export function CheckClient({
     for (const o of outlets) m.set(o.id, o.warna_hex);
     return m;
   }, [outlets]);
+
+  // Phase 4.3: load carry-over txs setelah parsing PDF
+  useEffect(() => {
+    if (!parsed || !activeBank) {
+      setCarryoverTxs([]);
+      return;
+    }
+    let cancelled = false;
+    async function load() {
+      setCarryoverLoading(true);
+      try {
+        // Hitung period start dari current PDF transactions
+        const txDates = parsed!.transactions.map((t) => t.tanggalDate.getTime());
+        if (txDates.length === 0) {
+          setCarryoverTxs([]);
+          return;
+        }
+        const periodStart = new Date(Math.min(...txDates));
+        // Carryover range: lookback_days sebelum periodStart, sampai 1 hari sebelum periodStart
+        const fromDate = new Date(periodStart);
+        // Lookback agak panjang biar carry-over banyak ke-cover (90 hari atau lookback*3)
+        const lookbackForCarryover = Math.max(rules.lookback_days * 3, 30);
+        fromDate.setUTCDate(fromDate.getUTCDate() - lookbackForCarryover);
+        const beforeDate = new Date(periodStart);
+
+        const supabase = createClient();
+        const txs = await loadCarryoverPdfTxs(supabase, {
+          accountId,
+          bankId: activeBank!.id,
+          jenis,
+          fromDate: toDateISO(fromDate),
+          beforeDate: toDateISO(beforeDate),
+        });
+        if (!cancelled) setCarryoverTxs(txs);
+      } finally {
+        if (!cancelled) setCarryoverLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [parsed, activeBank, accountId, jenis, rules.lookback_days]);
+
+  const matchingPool: PdfTransaction[] = useMemo(() => {
+    if (!parsed) return [];
+    const current = parsed.transactions.map((t) => ({ ...t, source: "current" as const }));
+    if (useCarryover && carryoverTxs.length > 0) {
+      return [...current, ...carryoverTxs];
+    }
+    return current;
+  }, [parsed, useCarryover, carryoverTxs]);
 
   const matchResult = useMemo(() => {
     if (!parsed || inputs.length === 0) {
@@ -81,12 +138,12 @@ export function CheckClient({
           matched: 0,
           noCandidate: [],
           allTaken: [],
-          unclaimed: parsed?.transactions ?? [],
+          unclaimed: matchingPool,
         } as MatchSummary,
       };
     }
-    return runMatching(inputs, parsed.transactions, outletColors, rules);
-  }, [inputs, parsed, outletColors, rules]);
+    return runMatching(inputs, matchingPool, outletColors, rules);
+  }, [inputs, parsed, matchingPool, outletColors, rules]);
 
   const matchedInputs = matchResult.inputs;
   const summary = matchResult.summary;
@@ -111,6 +168,8 @@ export function CheckClient({
     setPages([]);
     setInputs([]);
     setDownloadError(null);
+    setCarryoverTxs([]);
+    setUseCarryover(true);
   }, []);
 
   const matchedTxMap = useMemo(() => {
@@ -119,6 +178,8 @@ export function CheckClient({
     for (const input of matchedInputs) {
       const m = input.match;
       if (m && m.status === "matched") {
+        // Phase 4.3: cari di parsed.transactions saja (current PDF), skip carry-over
+        // (carry-over txs page-nya 0 dan tidak ada di PDF saat ini, jadi tidak bisa di-highlight)
         const tx = parsed.transactions.find(
           (t) =>
             t.no === m.txNo &&
@@ -179,9 +240,11 @@ export function CheckClient({
             jenis,
             inputs: matchedInputs,
             summary,
+            matchingPool,
             pdfTotalAmount,
             periodStart,
             periodEnd,
+            carryOverUsed: useCarryover && carryoverTxs.length > 0,
           });
         } catch (e) {
           console.error("Save session failed:", e);
@@ -261,6 +324,36 @@ export function CheckClient({
           </button>
         </div>
       </div>
+
+      {/* Phase 4.3: Carry-over banner */}
+      {(carryoverLoading || carryoverTxs.length > 0) && (
+        <div className="card p-3 border-blue-200 bg-blue-50">
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={useCarryover}
+              onChange={(e) => setUseCarryover(e.target.checked)}
+              className="mt-1"
+              disabled={carryoverLoading}
+            />
+            <div className="text-sm text-blue-900 flex-1">
+              <div className="font-medium flex items-center gap-1.5">
+                <HistoryIcon className="h-3.5 w-3.5" />
+                {carryoverLoading
+                  ? "Mencari transaksi belum ter-claim dari history…"
+                  : `Sertakan ${carryoverTxs.length} transaksi belum ter-claim dari upload sebelumnya`}
+              </div>
+              {!carryoverLoading && carryoverTxs.length > 0 && (
+                <div className="text-xs text-blue-700 mt-0.5">
+                  Total Rp {formatRupiah(carryoverTxs.reduce((s, t) => s + t.kredit, 0))}.
+                  Berguna kalau Anda upload mutasi terbaru tapi mau cocokkan input lama yang
+                  belum ke-match. Default ON.
+                </div>
+              )}
+            </div>
+          </label>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <div className="card overflow-hidden">

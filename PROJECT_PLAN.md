@@ -458,7 +458,7 @@ Setiap fase dianggap selesai kalau:
 ---
 
 
-*Last updated*: 2026-05-08 — Phase 5 (Rekap dengan filter) ready for testing.
+*Last updated*: 2026-05-08 — Phase 5 (Rekap) + Phase 4.3 (Carry-over toggle + Manual claim) ready for testing.
 
 **Phase 0 progress:**
 - [x] Folder commercial dibuat: `D:\cek-mutasi-saas\` (copy dari personal)

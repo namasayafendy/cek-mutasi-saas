@@ -136,6 +136,74 @@ export async function persistTransactions(
 }
 
 /**
+ * Lookup parsed_transactions.id untuk rows yang baru di-persist (atau duplicate).
+ * Returns Map<key, id> di mana key = no_ref atau fingerprint.
+ *
+ * Dipakai supaya saat matching, current-PDF tx bisa di-link ke parsed_tx_id-nya
+ * (untuk update claimed_by_input_id saat session di-save).
+ */
+export async function lookupParsedTxIds(
+  supabase: SupabaseClient,
+  accountId: string,
+  bankId: string,
+  rows: ParsedTxRow[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (rows.length === 0) return map;
+
+  const noRefs = rows
+    .filter((r) => r.noRef)
+    .map((r) => r.noRef as string);
+  const fingerprints = rows
+    .filter((r) => !r.noRef)
+    .map((r) => computeFingerprint(r));
+
+  // Query in chunks supaya URL tidak kepanjangan (Supabase IN clause limit)
+  const CHUNK = 100;
+
+  if (noRefs.length > 0) {
+    for (let i = 0; i < noRefs.length; i += CHUNK) {
+      const slice = noRefs.slice(i, i + CHUNK);
+      const { data, error } = await supabase
+        .from("parsed_transactions")
+        .select("id, no_ref")
+        .eq("account_id", accountId)
+        .eq("bank_id", bankId)
+        .in("no_ref", slice);
+      if (error) continue;
+      for (const row of data ?? []) {
+        if (row.no_ref) map.set(`ref:${row.no_ref}`, row.id);
+      }
+    }
+  }
+
+  if (fingerprints.length > 0) {
+    for (let i = 0; i < fingerprints.length; i += CHUNK) {
+      const slice = fingerprints.slice(i, i + CHUNK);
+      const { data, error } = await supabase
+        .from("parsed_transactions")
+        .select("id, fingerprint")
+        .eq("account_id", accountId)
+        .eq("bank_id", bankId)
+        .in("fingerprint", slice);
+      if (error) continue;
+      for (const row of data ?? []) {
+        if (row.fingerprint) map.set(`fp:${row.fingerprint}`, row.id);
+      }
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Helper: build the lookup key untuk row (sama logic dengan lookupParsedTxIds).
+ */
+export function rowLookupKey(row: ParsedTxRow): string {
+  return row.noRef ? `ref:${row.noRef}` : `fp:${computeFingerprint(row)}`;
+}
+
+/**
  * Load existing parsed transactions (claimed atau unclaimed) untuk bank tertentu
  * dalam rentang tanggal. Dipakai untuk carry-over feature.
  */

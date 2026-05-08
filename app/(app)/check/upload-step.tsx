@@ -4,7 +4,12 @@ import { useState, useRef, useMemo } from "react";
 import { Upload, FileText, Loader2, AlertCircle, Lock, CheckCircle2 } from "lucide-react";
 import { renderAllPages } from "@/lib/pdf/renderer";
 import { parsePdfByParserId, ParserNotImplementedError } from "@/lib/parsers";
-import { persistTransactions, type PersistResult } from "@/lib/parsers/persist";
+import {
+  persistTransactions,
+  lookupParsedTxIds,
+  rowLookupKey,
+  type PersistResult,
+} from "@/lib/parsers/persist";
 import { getParserSpec } from "@/lib/banks/registry";
 import { createClient } from "@/lib/supabase/client";
 import type { ParsedPdf } from "@/lib/pdf/parser";
@@ -59,6 +64,9 @@ export function UploadStep({
       const persisted = await persistTransactions(supabase, accountId, selectedBank.id, doc.rows);
       setPersistInfo(persisted);
 
+      // Phase 4.3: lookup parsed_tx IDs supaya match bisa di-link & claimed_by_input_id ke-update
+      const idMap = await lookupParsedTxIds(supabase, accountId, selectedBank.id, doc.rows);
+
       // Filter rows by jenis untuk matching pool
       const transactions: PdfTransaction[] = doc.rows
         .filter((r) => (jenis === "kredit" ? r.kredit > 0 : r.debet > 0))
@@ -72,6 +80,8 @@ export function UploadStep({
           deskripsi: r.deskripsi,
           kredit: jenis === "kredit" ? r.kredit : r.debet,
           bbox: r.bbox,
+          parsedTxId: idMap.get(rowLookupKey(r)),
+          source: "current",
         }));
 
       if (transactions.length === 0) {

@@ -124,13 +124,31 @@ export function SummaryPanel({
           </button>
           {showUnclaimed && (
             <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
-              {summary.unclaimed.map((tx) => (
-                <div key={`${tx.page}-${tx.no}`} className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-slate-50">
-                  <span className="text-slate-700 flex-shrink-0">{tx.tanggal}</span>
-                  <span className="text-slate-500 truncate">{tx.namaPengirim || "—"}</span>
-                  <span className="ml-auto font-mono text-slate-900 flex-shrink-0">{formatRupiah(tx.kredit)}</span>
-                </div>
-              ))}
+              {summary.unclaimed.map((tx) => {
+                const isCarryover = tx.source === "carryover";
+                return (
+                  <div
+                    key={`${tx.page}-${tx.no}`}
+                    className={`flex items-center gap-2 text-xs px-2 py-1 rounded ${
+                      isCarryover ? "bg-blue-50/60" : "bg-slate-50"
+                    }`}
+                  >
+                    {isCarryover && (
+                      <span
+                        className="inline-flex items-center rounded bg-blue-100 text-blue-700 px-1 text-[10px] font-medium flex-shrink-0"
+                        title="Dari upload sebelumnya (carry-over)"
+                      >
+                        ⏳
+                      </span>
+                    )}
+                    <span className="text-slate-700 flex-shrink-0">{tx.tanggal}</span>
+                    <span className="text-slate-500 truncate">{tx.namaPengirim || "—"}</span>
+                    <span className="ml-auto font-mono text-slate-900 flex-shrink-0">
+                      {formatRupiah(tx.kredit)}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

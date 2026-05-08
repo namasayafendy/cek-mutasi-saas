@@ -163,6 +163,10 @@ export type PdfTransaction = {
     xLeft: number;
     width: number;
   };
+  /** Phase 4.3: parsed_transactions.id — set untuk carry-over txs supaya bisa di-link matched_tx_id */
+  parsedTxId?: string;
+  /** Phase 4.3: 'current' = dari PDF yang lagi dilihat, 'carryover' = dari history (highlight di-skip) */
+  source?: "current" | "carryover";
 };
 
 /** User input row during cek mutasi session */

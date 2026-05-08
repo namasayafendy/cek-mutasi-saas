@@ -260,3 +260,60 @@ Halaman rekap untuk analisa hasil cek mutasi lintas sesi.
 
 ### Multi-tenant isolation
 - ⏳ Akun A tidak melihat data akun B (RLS via cek_inputs.account_id)
+
+---
+
+## Phase 4.3 — Carry-over toggle
+
+Sertakan transaksi belum ter-claim dari upload sebelumnya ke matching pool.
+
+### Setup test
+- ⏳ Upload mutasi BSI periode 1-15 April → input beberapa nominal yang ada di mutasi → match → download
+- ⏳ Sebagian input sengaja TIDAK di-input (ex: ada 5 transaksi tapi hanya input 3)
+- ⏳ Sisa 2 transaksi jadi "unclaimed" di parsed_transactions
+
+### Carry-over flow
+- ⏳ Upload mutasi BSI periode 16-30 April → setelah PDF parse, banner muncul: "Sertakan X transaksi belum ter-claim dari upload sebelumnya"
+- ⏳ Default ON, tampil count + total nominal
+- ⏳ Input nominal yang nyangkut dari periode lalu (misal Rp 1.020.000) → status Match (carry-over tx ke-claim)
+- ⏳ Klik download → session ter-save dengan carry_over_used=true
+- ⏳ Cek di Supabase: parsed_transactions.claimed_by_input_id terisi untuk tx carry-over
+
+### Skip carry-over
+- ⏳ Uncheck banner → carryover txs tidak masuk matching pool → input lama jadi no_candidate
+- ⏳ Re-check banner → matching pool langsung update
+
+### Highlight di PDF
+- ⏳ Carry-over match TIDAK di-highlight di PDF current (page-nya bukan di PDF ini)
+- ⏳ Hanya match dari current PDF yang di-highlight
+- ⏳ Lampiran rekap PDF tetap list semua match (carry-over + current)
+
+---
+
+## Phase 4.3 — Manual claim with reason
+
+Klaim manual transaksi belum-match dari /history page tab "Belum Match".
+
+### Tab "Belum Match"
+- ⏳ Buka /history → tab "Belum Match" tampil dengan badge count
+- ⏳ List parsed_transactions WHERE claimed_by_input_id IS NULL, di rentang 12 bulan
+- ⏳ Filter Jenis (kredit/debet/all) + Bank (specific/all) jalan
+- ⏳ Tampil: tanggal, jam, bank, jenis badge, pengirim/keterangan, nominal, no_ref
+- ⏳ Tombol "Claim manual" per row
+
+### Modal claim
+- ⏳ Klik claim → modal terbuka dengan info tx (tgl, bank, jenis, nominal, pengirim)
+- ⏳ Default tanggal_input = tanggal transaksi
+- ⏳ Outlet dropdown wajib (default: outlet pertama)
+- ⏳ Reason textarea wajib
+- ⏳ Validasi: kosongin reason → error "Alasan wajib diisi"
+- ⏳ Submit → cek_inputs ter-insert dengan session_id NULL, manual_claim_reason terisi
+- ⏳ parsed_transactions.claimed_by_input_id ter-update
+- ⏳ Modal close + page refresh → tx tidak muncul di tab Belum Match lagi
+
+### Empty state
+- ⏳ Kalau semua transaksi sudah claimed → empty state "Semua transaksi sudah ke-match 🎉"
+
+### Tab "Sesi"
+- ⏳ Tab Sesi tetap jalan seperti semula
+- ⏳ Session yang carry-over_used=true ada badge "⏳"
