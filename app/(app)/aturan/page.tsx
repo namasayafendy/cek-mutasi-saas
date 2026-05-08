@@ -1,21 +1,35 @@
-import { Construction } from "lucide-react";
+import { redirect } from "next/navigation";
+import Link from "next/link";
+import { getAccountContext } from "@/lib/supabase/context";
+import { AturanClient } from "./aturan-client";
+import type { AccountSettings } from "@/lib/types";
 
-export default function AturanPage() {
+export default async function AturanPage() {
+  const ctx = await getAccountContext();
+  if (!ctx) redirect("/login");
+  if (ctx.member.role !== "owner") {
+    return (
+      <div className="card p-5 border-amber-200 bg-amber-50 text-amber-800 text-sm">
+        Hanya owner yang bisa atur rules.{" "}
+        <Link href="/dashboard" className="font-medium underline">
+          Kembali ke Dashboard
+        </Link>
+      </div>
+    );
+  }
+
+  if (!ctx.settings) {
+    return (
+      <div className="card p-5 border-red-200 bg-red-50 text-red-800 text-sm">
+        Settings belum ter-create. Logout & login ulang, atau hubungi support.
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Aturan Matching</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Atur lookback period, forward window, match mode (exact / toleransi).
-        </p>
-      </div>
-      <div className="card p-8 text-center">
-        <Construction className="h-10 w-10 mx-auto text-slate-400" />
-        <h2 className="mt-3 font-medium text-slate-900">Sedang dibangun</h2>
-        <p className="mt-1 text-sm text-slate-600 max-w-md mx-auto">
-          Halaman ini akan dirilis di Phase 1D. Sementara default rules: lookback 3 hari, exact match.
-        </p>
-      </div>
-    </div>
+    <AturanClient
+      accountId={ctx.account.id}
+      initialSettings={ctx.settings as AccountSettings}
+    />
   );
 }
