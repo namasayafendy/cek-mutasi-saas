@@ -5,6 +5,7 @@ import { parseBsiBsinet } from "./bsi-bsinet";
 import { parseBsiByond } from "./bsi-byond";
 import { parseBni } from "./bni";
 import { parseMandiri } from "./mandiri";
+import { parseBcaEstatement } from "./bca-estatement";
 import { getParserSpec } from "@/lib/banks/registry";
 
 const PARSERS: Record<string, ParserFn> = {
@@ -12,9 +13,9 @@ const PARSERS: Record<string, ParserFn> = {
   BSI_BYOND_PDF: parseBsiByond,
   BNI_PDF: parseBni,
   MANDIRI_PDF: parseMandiri,
+  BCA_ESTATEMENT_PDF: parseBcaEstatement,
   // Coming soon — akan diisi di Phase 2 lanjutan
   // BCA_KLIKBCA_HTML: parseBcaKlikbca,
-  // BCA_ESTATEMENT_PDF: parseBcaEstatement,
   // BRI_PDF: parseBri,
 };
 

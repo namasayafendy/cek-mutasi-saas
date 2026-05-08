@@ -60,8 +60,8 @@ export const PARSER_REGISTRY: ParserSpec[] = [
     kode: "BCA",
     label: "BCA — e-Statement (PDF bulanan)",
     format: "pdf",
-    status: "coming_soon",
-    hint: "PDF e-statement bulanan dari email BCA.",
+    status: "ready",
+    hint: "PDF e-Statement bulanan dari email BCA. Year auto-detect dari header PERIODE.",
     category: "bank",
   },
 

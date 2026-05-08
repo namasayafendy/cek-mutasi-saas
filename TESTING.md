@@ -167,3 +167,17 @@ Test scenarios untuk persistensi sesi dan halaman history:
 - ⏳ Cek di Supabase tabel `cek_sessions` dan `cek_inputs` → row sesuai
 - ⏳ Multi-tenant isolation: bikin akun beda, masing-masing tidak bisa lihat session yg lain
 - ⏳ Empty state /history saat belum ada session
+
+---
+
+## Phase 2.2 — BCA e-Statement Parser
+
+- ⏳ Tambah bank "BCA — e-Statement (PDF bulanan)" di /banks (status Ready)
+- ⏳ Upload `samples/bca e statment 1 bulan.pdf` → 28 rows parsed
+- ⏳ Total kredit Rp 52.863.000, total debet Rp 50.699.382
+- ⏳ Year (2026) otomatis di-detect dari header PERIODE "APRIL 2026"
+- ⏳ Format US (1,020,000.00) di-handle dengan benar
+- ⏳ "TRANSAKSI DEBIT" rows + "TRSF E-BANKING CR" rows + "BI-FAST DB" rows semua ke-detect kredit/debet dengan benar dari keterangan
+
+### Parser BCA KlikBCA HTML — DEFER
+Parser HTML ditunda ke Phase 2.3 karena butuh refactor viewer/highlight (HTML beda dari PDF, tidak bisa dipakai langsung dengan pdfjs/pdf-lib).
