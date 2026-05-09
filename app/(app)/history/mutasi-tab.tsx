@@ -12,11 +12,13 @@ import {
   Building2,
   TrendingUp,
   TrendingDown,
+  Printer,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { formatRupiah, formatDateID, parseDateISO, toDateISO } from "@/lib/format";
 import { TransactionDetailModal } from "./transaction-detail-modal";
 import { ManualClaimModal, type UnclaimedTx } from "./manual-claim-modal";
+import { downloadMutasiPdf } from "./generate-mutasi-pdf";
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
 type BankLite = { id: string; kode: string; label: string | null; is_active?: boolean };
@@ -90,11 +92,13 @@ export default function MutasiTab({
   outlets,
   accountId,
   userId,
+  brandName,
 }: {
   banks: BankLite[];
   outlets: OutletLite[];
   accountId: string;
   userId: string;
+  brandName: string;
 }) {
   const [view, setView] = useState<"cards" | "detail">("cards");
   const [activeBankId, setActiveBankId] = useState<string>("");
@@ -108,6 +112,7 @@ export default function MutasiTab({
   const [error, setError] = useState<string | null>(null);
   const [selectedTx, setSelectedTx] = useState<MutasiRow | null>(null);
   const [claimingTx, setClaimingTx] = useState<UnclaimedTx | null>(null);
+  const [printing, setPrinting] = useState(false);
 
   const outletMap = useMemo(() => new Map(outlets.map((o) => [o.id, o])), [outlets]);
   const bankMap = useMemo(() => new Map(banks.map((b) => [b.id, b])), [banks]);
@@ -272,6 +277,26 @@ export default function MutasiTab({
     setFilter((p) => ({ ...p, from: toDateISO(start), to: toDateISO(endDate) }));
   }
 
+  async function handlePrint() {
+    if (rows.length === 0 || printing) return;
+    setPrinting(true);
+    try {
+      await downloadMutasiPdf({
+        brandName,
+        bank: bankMap.get(activeBankId) ?? null,
+        filter,
+        rows,
+        inputsMap,
+        outlets,
+      });
+    } catch (err) {
+      console.error("Failed to generate mutasi PDF", err);
+      setError("Gagal generate PDF: " + (err instanceof Error ? err.message : "unknown"));
+    } finally {
+      setPrinting(false);
+    }
+  }
+
   if (banks.length === 0) {
     return (
       <div className="card p-8 text-center">
@@ -413,7 +438,7 @@ export default function MutasiTab({
       )}
 
       <div className="card overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
           <h2 className="font-medium text-slate-900">
             Mutasi Rekening{" "}
             {activeBank && (
@@ -422,10 +447,26 @@ export default function MutasiTab({
               </span>
             )}
           </h2>
-          <span className="text-xs text-slate-500">
-            {rows.length} transaksi
-            {rows.length >= 5000 && " (dipotong di 5000)"}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-500">
+              {rows.length} transaksi
+              {rows.length >= 5000 && " (dipotong di 5000)"}
+            </span>
+            <button
+              type="button"
+              onClick={handlePrint}
+              disabled={printing || loading || rows.length === 0}
+              className="btn-secondary text-xs inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Print PDF hasil filter"
+            >
+              {printing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Printer className="h-3.5 w-3.5" />
+              )}
+              Print PDF
+            </button>
+          </div>
         </div>
         {loading ? (
           <div className="p-8 text-center">

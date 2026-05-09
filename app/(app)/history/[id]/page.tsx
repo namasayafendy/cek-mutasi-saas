@@ -159,6 +159,16 @@ export default async function HistoryDetailPage({
         banks={banks}
         accountId={ctx.account.id}
         userId={ctx.user.id}
+        brandName={ctx.account.brand_name || "CekTransfer"}
+        session={{
+          id: session.id,
+          jenis: session.jenis,
+          period_mutasi_start: session.period_mutasi_start,
+          period_mutasi_end: session.period_mutasi_end,
+          created_at: session.created_at,
+          carry_over_used: session.carry_over_used,
+          multi_bank_used: session.multi_bank_used,
+        }}
       />
 
       <div className="card p-4 text-xs text-slate-500">

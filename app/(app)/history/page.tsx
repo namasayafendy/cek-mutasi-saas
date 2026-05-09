@@ -81,6 +81,7 @@ export default async function HistoryPage() {
       accountId={ctx.account.id}
       sessionsError={sessionsRes.error?.message ?? null}
       unclaimedError={unclaimedRes.error?.message ?? null}
+      brandName={ctx.account.brand_name || "CekTransfer"}
     />
   );
 }

@@ -10,10 +10,13 @@ import {
   History as HistoryIcon,
   Inbox,
   ListChecks,
+  Loader2,
+  Printer,
 } from "lucide-react";
-import { formatDateLong, parseDateISO, formatRupiah, formatDateID } from "@/lib/format";
+import { formatDateLong, parseDateISO, formatRupiah, formatDateID, toDateISO } from "@/lib/format";
 import MutasiTab from "./mutasi-tab";
 import { ManualClaimModal, type UnclaimedTx } from "./manual-claim-modal";
+import { downloadMutasiPdf } from "./generate-mutasi-pdf";
 
 type SessionRow = {
   id: string;
@@ -46,6 +49,7 @@ export default function HistoryClient({
   accountId,
   sessionsError,
   unclaimedError,
+  brandName,
 }: {
   sessions: SessionRow[];
   unclaimed: UnclaimedTx[];
@@ -55,6 +59,7 @@ export default function HistoryClient({
   accountId: string;
   sessionsError: string | null;
   unclaimedError: string | null;
+  brandName: string;
 }) {
   const [tab, setTab] = useState<Tab>("mutasi");
   const [filterJenis, setFilterJenis] = useState<"all" | "kredit" | "debet">("all");
@@ -131,6 +136,7 @@ export default function HistoryClient({
           outlets={outlets}
           accountId={accountId}
           userId={currentUserId}
+          brandName={brandName}
         />
       )}
 
@@ -154,6 +160,7 @@ export default function HistoryClient({
           setFilterBank={setFilterBank}
           onClaim={(tx) => setClaimingTx(tx)}
           error={unclaimedError}
+          brandName={brandName}
         />
       )}
 
@@ -310,6 +317,7 @@ function BelumMatchTab({
   setFilterBank,
   onClaim,
   error,
+  brandName,
 }: {
   unclaimed: UnclaimedTx[];
   totalCount: number;
@@ -321,7 +329,68 @@ function BelumMatchTab({
   setFilterBank: (v: string) => void;
   onClaim: (tx: UnclaimedTx) => void;
   error: string | null;
+  brandName: string;
 }) {
+  const [printing, setPrinting] = useState(false);
+  const [printError, setPrintError] = useState<string | null>(null);
+
+  async function handlePrint() {
+    if (unclaimed.length === 0 || printing) return;
+    setPrinting(true);
+    setPrintError(null);
+    try {
+      // Compute periode dari range tgl tx yang ada (atau pakai 12 bulan terakhir).
+      const tanggals = unclaimed.map((t) => t.tanggal).sort();
+      const from = tanggals[0] ?? toDateISO(new Date());
+      const to = tanggals[tanggals.length - 1] ?? toDateISO(new Date());
+
+      // Convert UnclaimedTx → MutasiRow shape (semua belum match → claimed_by_input_id null)
+      const rows = unclaimed.map((t) => ({
+        id: t.id,
+        bank_id: t.bank_id,
+        no_ref: t.no_ref,
+        tanggal: t.tanggal,
+        jam: t.jam,
+        nominal_kredit: t.nominal_kredit,
+        nominal_debet: t.nominal_debet,
+        nama_pengirim: t.nama_pengirim,
+        nama_penerima: t.nama_penerima,
+        deskripsi: t.deskripsi,
+        saldo: null,
+        claimed_by_input_id: null,
+        manual_claim_reason: null,
+      }));
+
+      // Bank filter: kalau "all" → bank=null, kalau spesifik → ambil dari bankMap
+      const bank =
+        filterBank === "all"
+          ? null
+          : (() => {
+              const b = bankMap.get(filterBank);
+              return b ? { id: b.id, kode: b.kode, label: b.label } : null;
+            })();
+
+      await downloadMutasiPdf({
+        brandName,
+        bank,
+        filter: {
+          from,
+          to,
+          jenis: filterJenis,
+          status: "unmatched",
+        },
+        rows,
+        inputsMap: new Map(),
+        outlets: [],
+      });
+    } catch (err) {
+      console.error("Failed to generate belum-match PDF", err);
+      setPrintError("Gagal generate PDF: " + (err instanceof Error ? err.message : "unknown"));
+    } finally {
+      setPrinting(false);
+    }
+  }
+
   if (error) {
     return (
       <div className="card p-5 border-red-200 bg-red-50 text-red-800 text-sm">
@@ -371,10 +440,29 @@ function BelumMatchTab({
             ))}
           </select>
         </div>
-        <div className="ml-auto text-sm text-slate-600">
-          Menampilkan {unclaimed.length} dari {totalCount} transaksi belum match
+        <div className="ml-auto flex items-center gap-3">
+          <span className="text-sm text-slate-600">
+            Menampilkan {unclaimed.length} dari {totalCount} transaksi belum match
+          </span>
+          <button
+            type="button"
+            onClick={handlePrint}
+            disabled={printing || unclaimed.length === 0}
+            className="btn-secondary text-xs inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Print PDF list belum match"
+          >
+            {printing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Printer className="h-3.5 w-3.5" />
+            )}
+            Print PDF
+          </button>
         </div>
       </div>
+      {printError && (
+        <div className="card p-3 border-red-200 bg-red-50 text-red-800 text-xs">{printError}</div>
+      )}
 
       {unclaimed.length === 0 ? (
         <div className="card p-6 text-center text-sm text-slate-500">

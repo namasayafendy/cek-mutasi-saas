@@ -9,11 +9,17 @@ import {
   Trash2,
   Link2,
   Loader2,
+  Printer,
 } from "lucide-react";
 import { formatRupiah, formatDateID, parseDateISO } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { ManualMatchModal } from "./manual-match-modal";
 import type { InputRow, OutletLite, BankLite } from "./page";
+import {
+  downloadSessionPdf,
+  type SessionInfo,
+  type MatchedTxRow,
+} from "./generate-session-pdf";
 
 export function SessionInputsClient({
   inputs,
@@ -21,12 +27,16 @@ export function SessionInputsClient({
   banks,
   accountId,
   userId,
+  brandName,
+  session,
 }: {
   inputs: InputRow[];
   outlets: OutletLite[];
   banks: BankLite[];
   accountId: string;
   userId: string;
+  brandName: string;
+  session: SessionInfo;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -34,6 +44,57 @@ export function SessionInputsClient({
   const [feedback, setFeedback] = useState<
     { type: "success" | "error"; message: string } | null
   >(null);
+  const [printing, setPrinting] = useState(false);
+
+  async function handlePrint() {
+    if (printing) return;
+    setPrinting(true);
+    setFeedback(null);
+    try {
+      const supabase = createClient();
+      // Fetch matched parsed_transactions for this session
+      const matchedInputIds = inputs
+        .filter((i) => i.match_status === "matched" || i.match_status === "manual_claimed")
+        .map((i) => i.id);
+
+      let matchedTxs: MatchedTxRow[] = [];
+      if (matchedInputIds.length > 0) {
+        const CHUNK = 200;
+        const collected: MatchedTxRow[] = [];
+        for (let i = 0; i < matchedInputIds.length; i += CHUNK) {
+          const slice = matchedInputIds.slice(i, i + CHUNK);
+          const { data, error } = await supabase
+            .from("parsed_transactions")
+            .select(
+              "id, bank_id, tanggal, jam, nominal_kredit, nominal_debet, nama_pengirim, nama_penerima, deskripsi, claimed_by_input_id, manual_claim_reason",
+            )
+            .in("claimed_by_input_id", slice)
+            .order("tanggal", { ascending: true });
+          if (error) throw error;
+          collected.push(...((data ?? []) as MatchedTxRow[]));
+        }
+        matchedTxs = collected;
+      }
+
+      await downloadSessionPdf({
+        brandName,
+        session,
+        inputs,
+        matchedTxs,
+        outlets,
+        banks,
+      });
+      setFeedback({ type: "success", message: "PDF sesi berhasil di-download." });
+    } catch (err) {
+      console.error("Failed to generate session PDF", err);
+      setFeedback({
+        type: "error",
+        message: "Gagal generate PDF: " + (err instanceof Error ? err.message : "unknown"),
+      });
+    } finally {
+      setPrinting(false);
+    }
+  }
 
   const outletMap = new Map(outlets.map((o) => [o.id, o]));
   const bankMap = new Map(banks.map((b) => [b.id, b]));
@@ -89,8 +150,22 @@ export function SessionInputsClient({
       )}
 
       <div className="card overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50">
+        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
           <h2 className="font-medium text-slate-900">Detail Input ({inputs.length})</h2>
+          <button
+            type="button"
+            onClick={handlePrint}
+            disabled={printing || inputs.length === 0}
+            className="btn-secondary text-xs inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Print laporan sesi (PDF lengkap)"
+          >
+            {printing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Printer className="h-3.5 w-3.5" />
+            )}
+            Print Sesi PDF
+          </button>
         </div>
         {inputs.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-500">Belum ada input.</div>
