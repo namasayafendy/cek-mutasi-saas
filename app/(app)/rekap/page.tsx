@@ -23,7 +23,7 @@ export default async function RekapPage() {
     <RekapClient
       outlets={outlets}
       banks={banks}
-      brandName={ctx.account.brand_name || "Cek Mutasi"}
+      brandName={ctx.account.brand_name || "CekTransfer"}
     />
   );
 }

@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { isSuperadminEmail } from "@/lib/supabase/context";
 import { LogoutButton } from "../(app)/logout-button";
 import { Shield, Users, LayoutDashboard } from "lucide-react";
+import { LogoIcon, LogoWordmark } from "@/app/logo";
 
 export default async function SuperadminLayout({
   children,
@@ -29,10 +30,17 @@ export default async function SuperadminLayout({
             <div className="flex items-center gap-6">
               <Link
                 href="/superadmin"
-                className="font-semibold text-slate-900 inline-flex items-center gap-1.5"
+                className="inline-flex items-center gap-2"
+                aria-label="CekTransfer Admin"
               >
-                <Shield className="h-4 w-4 text-purple-700" />
-                Cek Mutasi · Admin
+                <LogoIcon size="md" />
+                <span className="inline-flex items-center gap-1.5">
+                  <LogoWordmark size="md" showTld={false} />
+                  <span className="text-slate-400">·</span>
+                  <span className="inline-flex items-center gap-1 text-sm font-semibold text-purple-700">
+                    <Shield className="h-3.5 w-3.5" /> Admin
+                  </span>
+                </span>
               </Link>
               <div className="hidden sm:flex items-center gap-4 text-sm">
                 <Link

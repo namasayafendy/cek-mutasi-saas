@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Cek Mutasi BSI",
-  description: "Cocokkan transferan tebusan dengan mutasi rekening BSI",
+  title: "CekTransfer — Cek Mutasi Rekening Cepat",
+  description:
+    "Cocokkan transferan customer dengan mutasi rekening dalam hitungan detik. Privacy-first: PDF diproses di browser, tidak pernah di-upload ke server.",
 };
 
 export default function RootLayout({

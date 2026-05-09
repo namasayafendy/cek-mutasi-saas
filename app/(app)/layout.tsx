@@ -5,6 +5,7 @@ import { LogoutButton } from "./logout-button";
 import { AlertTriangle, Shield } from "lucide-react";
 import { isSuperadminEmail } from "@/lib/supabase/context";
 import { IdleTimeout } from "./idle-timeout";
+import { LogoIcon, LogoWordmark } from "@/app/logo";
 
 export default async function AppLayout({
   children,
@@ -54,8 +55,22 @@ export default async function AppLayout({
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-14 items-center justify-between">
             <div className="flex items-center gap-6">
-              <Link href="/dashboard" className="font-semibold text-slate-900">
-                {account.brand_name || "Cek Mutasi"}
+              <Link
+                href="/dashboard"
+                className="inline-flex items-center"
+                aria-label={account.brand_name || "CekTransfer"}
+              >
+                {account.brand_name ? (
+                  <span className="inline-flex items-center gap-2">
+                    <LogoIcon size="md" />
+                    <span className="font-semibold text-slate-900">{account.brand_name}</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-2">
+                    <LogoIcon size="md" />
+                    <LogoWordmark size="md" showTld={false} />
+                  </span>
+                )}
               </Link>
               <div className="hidden sm:flex items-center gap-4 text-sm">
                 <Link href="/dashboard" className="text-slate-600 hover:text-slate-900">
