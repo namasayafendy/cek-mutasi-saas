@@ -34,7 +34,7 @@ type UnclaimedTx = {
 };
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
-type BankLite = { id: string; kode: string; label: string | null };
+type BankLite = { id: string; kode: string; label: string | null; is_active: boolean };
 
 export default async function HistoryPage() {
   const ctx = await getAccountContext();
@@ -63,7 +63,7 @@ export default async function HistoryPage() {
       .order("tanggal", { ascending: false })
       .limit(500),
     supabase.from("outlets").select("id, nama, warna_hex").order("urutan_palette"),
-    supabase.from("banks").select("id, kode, label").order("urutan"),
+    supabase.from("banks").select("id, kode, label, is_active").order("urutan"),
   ]);
 
   const sessions = (sessionsRes.data ?? []) as SessionRow[];

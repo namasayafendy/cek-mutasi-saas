@@ -50,7 +50,7 @@ type UnclaimedTx = {
 };
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
-type BankLite = { id: string; kode: string; label: string | null };
+type BankLite = { id: string; kode: string; label: string | null; is_active?: boolean };
 
 type Tab = "mutasi" | "sessions" | "belum-match";
 

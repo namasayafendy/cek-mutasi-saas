@@ -9,12 +9,18 @@ import {
   Loader2,
   RotateCcw,
   Hand,
+  ChevronLeft,
+  Eye,
+  Building2,
+  TrendingUp,
+  TrendingDown,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { formatRupiah, formatDateID, parseDateISO, toDateISO } from "@/lib/format";
+import { formatRupiah, formatDateID, parseDateISO, toDateISO, formatDateLong } from "@/lib/format";
+import { TransactionDetailModal } from "./transaction-detail-modal";
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
-type BankLite = { id: string; kode: string; label: string | null };
+type BankLite = { id: string; kode: string; label: string | null; is_active: boolean };
 
 type MutasiRow = {
   id: string;
@@ -31,6 +37,7 @@ type MutasiRow = {
   claimed_by_input_id: string | null;
   manual_claim_reason: string | null;
   claimed_at: string | null;
+  created_at: string;
 };
 
 type ClaimedInputInfo = {
@@ -40,22 +47,30 @@ type ClaimedInputInfo = {
   tanggal_input: string;
   manual_claim_reason: string | null;
   manual_claimed_at: string | null;
+  created_at: string;
+};
+
+type BankCardStats = {
+  bankId: string;
+  totalKredit: number;
+  totalDebet: number;
+  saldoAkhir: number | null; // balance terakhir dari tx terbaru
+  txCount: number;
+  lastTxDate: string | null;
 };
 
 type FilterState = {
-  bankId: string;
   from: string;
   to: string;
   jenis: "all" | "kredit" | "debet";
   status: "all" | "matched" | "unmatched";
 };
 
-function getDefault(banks: BankLite[]): FilterState {
+function getDefaultFilter(): FilterState {
   const today = new Date();
   const from = new Date(today);
   from.setDate(from.getDate() - 30);
   return {
-    bankId: banks[0]?.id ?? "",
     from: toDateISO(new Date(Date.UTC(from.getFullYear(), from.getMonth(), from.getDate()))),
     to: toDateISO(new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()))),
     jenis: "all",
@@ -63,12 +78,9 @@ function getDefault(banks: BankLite[]): FilterState {
   };
 }
 
-/**
- * Helper: ubah hex jadi rgba dengan alpha tertentu (untuk row tint).
- */
 function hexToRgba(hex: string, alpha: number): string {
   const m = hex.replace("#", "").match(/^([0-9a-f]{6})$/i);
-  if (!m) return `rgba(203, 213, 225, ${alpha})`; // slate-300 fallback
+  if (!m) return `rgba(203, 213, 225, ${alpha})`;
   const r = parseInt(m[1].slice(0, 2), 16);
   const g = parseInt(m[1].slice(2, 4), 16);
   const b = parseInt(m[1].slice(4, 6), 16);
@@ -82,22 +94,89 @@ export default function MutasiTab({
   banks: BankLite[];
   outlets: OutletLite[];
 }) {
-  const [filter, setFilter] = useState<FilterState>(() => getDefault(banks));
+  const [view, setView] = useState<"cards" | "detail">("cards");
+  const [activeBankId, setActiveBankId] = useState<string>("");
+  const [bankStats, setBankStats] = useState<BankCardStats[]>([]);
+  const [statsLoading, setStatsLoading] = useState(true);
+
+  const [filter, setFilter] = useState<FilterState>(getDefaultFilter);
   const [rows, setRows] = useState<MutasiRow[]>([]);
   const [inputsMap, setInputsMap] = useState<Map<string, ClaimedInputInfo>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedTx, setSelectedTx] = useState<MutasiRow | null>(null);
 
   const outletMap = useMemo(() => new Map(outlets.map((o) => [o.id, o])), [outlets]);
   const bankMap = useMemo(() => new Map(banks.map((b) => [b.id, b])), [banks]);
 
+  // Fetch overall stats per bank (last 12 months) untuk cards view
   useEffect(() => {
-    if (!filter.bankId) {
-      setRows([]);
+    if (banks.length === 0) {
+      setStatsLoading(false);
       return;
     }
     let cancelled = false;
-    async function fetchData() {
+    async function fetchStats() {
+      setStatsLoading(true);
+      const supabase = createClient();
+      const yearAgo = new Date();
+      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+
+      const { data, error } = await supabase
+        .from("parsed_transactions")
+        .select("bank_id, nominal_kredit, nominal_debet, saldo, tanggal, jam")
+        .gte("tanggal", toDateISO(yearAgo))
+        .order("tanggal", { ascending: false })
+        .order("jam", { ascending: false, nullsFirst: false })
+        .limit(50000);
+
+      if (cancelled) return;
+      if (error) {
+        setStatsLoading(false);
+        return;
+      }
+
+      const statsMap = new Map<string, BankCardStats>();
+      for (const b of banks) {
+        statsMap.set(b.id, {
+          bankId: b.id,
+          totalKredit: 0,
+          totalDebet: 0,
+          saldoAkhir: null,
+          txCount: 0,
+          lastTxDate: null,
+        });
+      }
+
+      for (const r of data ?? []) {
+        const bid = r.bank_id as string | null;
+        if (!bid) continue;
+        const s = statsMap.get(bid);
+        if (!s) continue;
+        s.totalKredit += r.nominal_kredit;
+        s.totalDebet += r.nominal_debet;
+        s.txCount += 1;
+        // Saldo akhir: ambil dari tx pertama (most recent karena sudah di-sort desc)
+        if (s.saldoAkhir === null && r.saldo !== null) {
+          s.saldoAkhir = r.saldo;
+          s.lastTxDate = r.tanggal;
+        }
+      }
+
+      setBankStats(Array.from(statsMap.values()));
+      setStatsLoading(false);
+    }
+    fetchStats();
+    return () => {
+      cancelled = true;
+    };
+  }, [banks]);
+
+  // Fetch detail rows when bank is selected and view is detail
+  useEffect(() => {
+    if (view !== "detail" || !activeBankId) return;
+    let cancelled = false;
+    async function fetchRows() {
       setLoading(true);
       setError(null);
       const supabase = createClient();
@@ -105,9 +184,9 @@ export default function MutasiTab({
       const { data, error } = await supabase
         .from("parsed_transactions")
         .select(
-          "id, bank_id, no_ref, tanggal, jam, nominal_kredit, nominal_debet, nama_pengirim, nama_penerima, deskripsi, saldo, claimed_by_input_id, manual_claim_reason, claimed_at",
+          "id, bank_id, no_ref, tanggal, jam, nominal_kredit, nominal_debet, nama_pengirim, nama_penerima, deskripsi, saldo, claimed_by_input_id, manual_claim_reason, claimed_at, created_at",
         )
-        .eq("bank_id", filter.bankId)
+        .eq("bank_id", activeBankId)
         .gte("tanggal", filter.from)
         .lte("tanggal", filter.to)
         .order("tanggal", { ascending: true })
@@ -115,7 +194,6 @@ export default function MutasiTab({
         .limit(5000);
 
       if (cancelled) return;
-
       if (error) {
         setError(error.message);
         setRows([]);
@@ -124,8 +202,6 @@ export default function MutasiTab({
       }
 
       const all = (data ?? []) as MutasiRow[];
-
-      // Apply jenis + status filters client-side (cheaper than rebuilding query)
       const filtered = all.filter((r) => {
         if (filter.jenis === "kredit" && r.nominal_kredit <= 0) return false;
         if (filter.jenis === "debet" && r.nominal_debet <= 0) return false;
@@ -134,20 +210,18 @@ export default function MutasiTab({
         return true;
       });
 
-      // Batch fetch cek_inputs untuk rows yang matched (to get outlet info + manual claim details)
       const inputIds = Array.from(
         new Set(filtered.map((r) => r.claimed_by_input_id).filter((v): v is string => !!v)),
       );
       const newInputsMap = new Map<string, ClaimedInputInfo>();
       if (inputIds.length > 0) {
-        // Chunk supaya URL tidak kepanjangan
         const CHUNK = 200;
         for (let i = 0; i < inputIds.length; i += CHUNK) {
           const slice = inputIds.slice(i, i + CHUNK);
           const { data: ciData, error: ciErr } = await supabase
             .from("cek_inputs")
             .select(
-              "id, outlet_id, session_id, tanggal_input, manual_claim_reason, manual_claimed_at",
+              "id, outlet_id, session_id, tanggal_input, manual_claim_reason, manual_claimed_at, created_at",
             )
             .in("id", slice);
           if (ciErr) continue;
@@ -162,60 +236,23 @@ export default function MutasiTab({
       setInputsMap(newInputsMap);
       setLoading(false);
     }
-    fetchData();
+    fetchRows();
     return () => {
       cancelled = true;
     };
-  }, [filter]);
+  }, [view, activeBankId, filter]);
 
-  // Aggregations untuk footer
-  const stats = useMemo(() => {
-    let totalKredit = 0;
-    let totalDebet = 0;
-    let matchedKredit = 0;
-    let matchedDebet = 0;
-    let unmatchedCount = 0;
-    let matchedCount = 0;
-    const perOutlet = new Map<
-      string,
-      { nama: string; warna: string; nominal: number; count: number }
-    >();
-    for (const r of rows) {
-      totalKredit += r.nominal_kredit;
-      totalDebet += r.nominal_debet;
-      const amount = r.nominal_kredit > 0 ? r.nominal_kredit : r.nominal_debet;
-      if (r.claimed_by_input_id) {
-        matchedCount += 1;
-        if (r.nominal_kredit > 0) matchedKredit += r.nominal_kredit;
-        else matchedDebet += r.nominal_debet;
-        const ci = inputsMap.get(r.claimed_by_input_id);
-        const outletId = ci?.outlet_id ?? "_none";
-        const outlet = ci?.outlet_id ? outletMap.get(ci.outlet_id) : null;
-        if (!perOutlet.has(outletId)) {
-          perOutlet.set(outletId, {
-            nama: outlet?.nama ?? "(tanpa outlet)",
-            warna: outlet?.warna_hex ?? "#cbd5e1",
-            nominal: 0,
-            count: 0,
-          });
-        }
-        const agg = perOutlet.get(outletId)!;
-        agg.nominal += amount;
-        agg.count += 1;
-      } else {
-        unmatchedCount += 1;
-      }
-    }
-    return {
-      totalKredit,
-      totalDebet,
-      matchedKredit,
-      matchedDebet,
-      matchedCount,
-      unmatchedCount,
-      perOutlet: Array.from(perOutlet.values()).sort((a, b) => b.nominal - a.nominal),
-    };
-  }, [rows, inputsMap, outletMap]);
+  function openBankDetail(bankId: string) {
+    setActiveBankId(bankId);
+    setFilter(getDefaultFilter());
+    setView("detail");
+  }
+
+  function backToCards() {
+    setView("cards");
+    setRows([]);
+    setSelectedTx(null);
+  }
 
   function applyPreset(days: number) {
     const today = new Date();
@@ -233,15 +270,7 @@ export default function MutasiTab({
     const target = new Date(today.getFullYear(), today.getMonth() + offset, 1);
     const start = new Date(Date.UTC(target.getFullYear(), target.getMonth(), 1));
     const endDate = new Date(Date.UTC(target.getFullYear(), target.getMonth() + 1, 0));
-    setFilter((p) => ({
-      ...p,
-      from: toDateISO(start),
-      to: toDateISO(endDate),
-    }));
-  }
-
-  function reset() {
-    setFilter(getDefault(banks));
+    setFilter((p) => ({ ...p, from: toDateISO(start), to: toDateISO(endDate) }));
   }
 
   if (banks.length === 0) {
@@ -254,32 +283,60 @@ export default function MutasiTab({
     );
   }
 
-  const selectedBank = bankMap.get(filter.bankId);
+  // ===== CARDS VIEW =====
+  if (view === "cards") {
+    return (
+      <div className="space-y-3">
+        <div className="text-sm text-slate-600">
+          Klik bank untuk lihat rincian mutasi (12 bulan terakhir, atau filter range).
+        </div>
+
+        {statsLoading ? (
+          <div className="card p-8 text-center">
+            <Loader2 className="h-6 w-6 animate-spin text-slate-400 mx-auto" />
+            <p className="mt-2 text-sm text-slate-500">Memuat data bank...</p>
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {banks.map((b) => {
+              const s = bankStats.find((x) => x.bankId === b.id);
+              return (
+                <BankCard
+                  key={b.id}
+                  bank={b}
+                  stats={s}
+                  onView={() => openBankDetail(b.id)}
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ===== DETAIL VIEW =====
+  const activeBank = bankMap.get(activeBankId);
 
   return (
     <div className="space-y-3">
-      {/* Filter */}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={backToCards}
+          className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900"
+        >
+          <ChevronLeft className="h-4 w-4" /> Kembali ke daftar bank
+        </button>
+        <div className="text-sm font-medium text-slate-900">
+          {activeBank ? activeBank.label || activeBank.kode : "—"}
+        </div>
+      </div>
+
       <div className="card p-3 space-y-3">
         <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-          <Filter className="h-4 w-4" /> Filter Mutasi
+          <Filter className="h-4 w-4" /> Filter
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          <div>
-            <label className="text-xs text-slate-500">
-              Bank <span className="text-red-600">*</span>
-            </label>
-            <select
-              className="input mt-1"
-              value={filter.bankId}
-              onChange={(e) => setFilter((p) => ({ ...p, bankId: e.target.value }))}
-            >
-              {banks.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.label || b.kode}
-                </option>
-              ))}
-            </select>
-          </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div>
             <label className="text-xs text-slate-500">Dari</label>
             <input
@@ -343,7 +400,7 @@ export default function MutasiTab({
           <button
             type="button"
             className="chip ml-auto inline-flex items-center gap-1"
-            onClick={reset}
+            onClick={() => setFilter(getDefaultFilter())}
           >
             <RotateCcw className="h-3 w-3" /> Reset
           </button>
@@ -356,98 +413,26 @@ export default function MutasiTab({
         </div>
       )}
 
-      {/* Summary */}
-      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
-        <div className="card p-3">
-          <div className="text-xs text-slate-500">Total Transaksi</div>
-          <div className="mt-1 text-lg font-semibold text-slate-900">
-            {loading ? "…" : rows.length}
-          </div>
-          <div className="text-[11px] text-slate-500 mt-0.5">
-            {selectedBank ? selectedBank.label || selectedBank.kode : ""}
-          </div>
-        </div>
-        <div className="card p-3 bg-green-50 border-green-200">
-          <div className="text-xs text-green-700 flex items-center gap-1">
-            <ArrowDown className="h-3 w-3" /> Total Kredit
-          </div>
-          <div className="mt-1 text-lg font-semibold text-green-700">
-            Rp {formatRupiah(stats.totalKredit)}
-          </div>
-          <div className="text-[11px] text-green-700 mt-0.5">
-            Match Rp {formatRupiah(stats.matchedKredit)}
-          </div>
-        </div>
-        <div className="card p-3 bg-red-50 border-red-200">
-          <div className="text-xs text-red-700 flex items-center gap-1">
-            <ArrowUp className="h-3 w-3" /> Total Debet
-          </div>
-          <div className="mt-1 text-lg font-semibold text-red-700">
-            Rp {formatRupiah(stats.totalDebet)}
-          </div>
-          <div className="text-[11px] text-red-700 mt-0.5">
-            Match Rp {formatRupiah(stats.matchedDebet)}
-          </div>
-        </div>
-        <div className="card p-3 bg-slate-50 border-slate-300">
-          <div className="text-xs text-slate-600">Match / Belum</div>
-          <div className="mt-1 text-lg font-semibold text-slate-900">
-            <span className="text-green-700">{stats.matchedCount}</span> /{" "}
-            <span className="text-amber-700">{stats.unmatchedCount}</span>
-          </div>
-          <div className="text-[11px] text-slate-600 mt-0.5">
-            {rows.length > 0
-              ? `${((stats.matchedCount / rows.length) * 100).toFixed(0)}% claimed`
-              : "—"}
-          </div>
-        </div>
-      </div>
-
-      {/* Per outlet breakdown */}
-      {stats.perOutlet.length > 0 && (
-        <div className="card p-3">
-          <div className="text-xs font-medium text-slate-700 mb-2">Breakdown per Outlet</div>
-          <div className="flex flex-wrap gap-2">
-            {stats.perOutlet.map((o, idx) => (
-              <div
-                key={idx}
-                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 px-2.5 py-1 text-xs"
-              >
-                <span
-                  className="w-2.5 h-2.5 rounded-full"
-                  style={{ backgroundColor: o.warna }}
-                />
-                <span className="text-slate-700">{o.nama}</span>
-                <span className="font-mono text-slate-900 ml-1">
-                  Rp {formatRupiah(o.nominal)}
-                </span>
-                <span className="text-slate-400">({o.count})</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Table */}
+      {/* Tabel mutasi */}
       <div className="card overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
           <h2 className="font-medium text-slate-900">
             Mutasi Rekening{" "}
-            {selectedBank && (
+            {activeBank && (
               <span className="text-sm text-slate-600">
-                — {selectedBank.label || selectedBank.kode}
+                — {activeBank.label || activeBank.kode}
               </span>
             )}
           </h2>
           <span className="text-xs text-slate-500">
             {rows.length} transaksi
-            {rows.length >= 5000 && " (dipotong di 5000, perketat filter)"}
+            {rows.length >= 5000 && " (dipotong di 5000)"}
           </span>
         </div>
         {loading ? (
           <div className="p-8 text-center">
             <Loader2 className="h-6 w-6 animate-spin text-slate-400 mx-auto" />
-            <p className="mt-2 text-sm text-slate-500">Memuat mutasi…</p>
+            <p className="mt-2 text-sm text-slate-500">Memuat mutasi...</p>
           </div>
         ) : rows.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-500">
@@ -487,26 +472,17 @@ export default function MutasiTab({
                     : null;
                   const outlet = ci?.outlet_id ? outletMap.get(ci.outlet_id) : null;
                   const isManual = !!ci?.manual_claim_reason || !!r.manual_claim_reason;
-                  const tooltipParts: string[] = [];
-                  if (outlet) tooltipParts.push(`Outlet: ${outlet.nama}`);
-                  if (ci?.tanggal_input) {
-                    const d = parseDateISO(ci.tanggal_input);
-                    tooltipParts.push(`Input tgl: ${d ? formatDateID(d) : ci.tanggal_input}`);
-                  }
-                  const reason = ci?.manual_claim_reason ?? r.manual_claim_reason;
-                  if (reason) tooltipParts.push(`Manual: ${reason}`);
-                  const tooltip = tooltipParts.join(" · ");
-
-                  const rowStyle = isMatched && outlet
-                    ? { backgroundColor: hexToRgba(outlet.warna_hex, 0.18) }
-                    : undefined;
+                  const rowStyle =
+                    isMatched && outlet
+                      ? { backgroundColor: hexToRgba(outlet.warna_hex, 0.18) }
+                      : undefined;
 
                   return (
                     <tr
                       key={r.id}
                       style={rowStyle}
-                      title={tooltip || undefined}
-                      className={isMatched ? "" : "bg-white"}
+                      className={`cursor-pointer hover:bg-slate-100/40 transition-colors ${isMatched ? "" : "bg-white"}`}
+                      onClick={() => setSelectedTx(r)}
                     >
                       <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
                         <div>{tgl ? formatDateID(tgl) : r.tanggal}</div>
@@ -553,12 +529,10 @@ export default function MutasiTab({
                                 <Hand className="h-3 w-3 text-blue-600 flex-shrink-0" />
                               </span>
                             )}
+                            <CheckCircle2 className="h-3 w-3 text-green-600 -mt-0.5" />
                           </div>
                         ) : (
                           <span className="text-slate-400 italic">belum match</span>
-                        )}
-                        {isMatched && (
-                          <CheckCircle2 className="inline-block h-3 w-3 text-green-600 ml-1 -mt-0.5" />
                         )}
                       </td>
                     </tr>
@@ -569,6 +543,100 @@ export default function MutasiTab({
           </div>
         )}
       </div>
+
+      {/* Popup detail transaksi */}
+      {selectedTx && (
+        <TransactionDetailModal
+          tx={selectedTx}
+          inputInfo={
+            selectedTx.claimed_by_input_id
+              ? inputsMap.get(selectedTx.claimed_by_input_id) ?? null
+              : null
+          }
+          outlet={
+            selectedTx.claimed_by_input_id
+              ? (() => {
+                  const ci = inputsMap.get(selectedTx.claimed_by_input_id);
+                  return ci?.outlet_id ? outletMap.get(ci.outlet_id) ?? null : null;
+                })()
+              : null
+          }
+          bank={selectedTx.bank_id ? bankMap.get(selectedTx.bank_id) ?? null : null}
+          onClose={() => setSelectedTx(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ===== Bank Card Component =====
+
+function BankCard({
+  bank,
+  stats,
+  onView,
+}: {
+  bank: BankLite;
+  stats: BankCardStats | undefined;
+  onView: () => void;
+}) {
+  const totalKredit = stats?.totalKredit ?? 0;
+  const totalDebet = stats?.totalDebet ?? 0;
+  const saldoAkhir = stats?.saldoAkhir ?? null;
+  const txCount = stats?.txCount ?? 0;
+
+  return (
+    <div className="card p-4 space-y-3 hover:shadow-md transition-shadow">
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2">
+          <div className="p-1.5 rounded-md bg-slate-100">
+            <Building2 className="h-4 w-4 text-slate-600" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-slate-900">{bank.label || bank.kode}</h3>
+            <div className="text-[10px] text-slate-500 uppercase">{bank.kode}</div>
+          </div>
+        </div>
+        {bank.is_active ? (
+          <span className="inline-flex items-center gap-0.5 rounded-full bg-green-50 text-green-700 text-[10px] px-1.5 py-0.5">
+            ON
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] px-1.5 py-0.5">
+            OFF
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-1.5 text-sm">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-slate-500 flex items-center gap-1">
+            <TrendingUp className="h-3 w-3 text-green-600" /> Kredit (12 bulan)
+          </span>
+          <span className="font-mono text-green-700">Rp {formatRupiah(totalKredit)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-slate-500 flex items-center gap-1">
+            <TrendingDown className="h-3 w-3 text-red-600" /> Debet (12 bulan)
+          </span>
+          <span className="font-mono text-red-700">Rp {formatRupiah(totalDebet)}</span>
+        </div>
+        {saldoAkhir !== null && (
+          <div className="flex items-center justify-between pt-1.5 border-t border-slate-100">
+            <span className="text-xs text-slate-500">Saldo terakhir</span>
+            <span className="font-mono font-semibold text-slate-900">
+              Rp {formatRupiah(saldoAkhir)}
+            </span>
+          </div>
+        )}
+      </div>
+
+      <button
+        onClick={onView}
+        className="btn-secondary text-xs w-full inline-flex items-center justify-center gap-1.5"
+      >
+        <Eye className="h-3.5 w-3.5" /> View Mutasi ({txCount})
+      </button>
     </div>
   );
 }
