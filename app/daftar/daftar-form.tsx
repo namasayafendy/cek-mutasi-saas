@@ -8,7 +8,6 @@ import { HCaptcha, resetHcaptcha } from "../hcaptcha";
 
 export function DaftarForm() {
   const router = useRouter();
-  const [namaBisnis, setNamaBisnis] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -50,7 +49,6 @@ export function DaftarForm() {
       email,
       password,
       options: {
-        data: { brand_name: namaBisnis },
         emailRedirectTo: `${window.location.origin}/login`,
         captchaToken,
       },
@@ -64,7 +62,8 @@ export function DaftarForm() {
       return;
     }
 
-    // Trigger auto-bikin account + team_member + settings via Postgres trigger
+    // Trigger auto-bikin account + team_member + settings via Postgres trigger.
+    // Owner bisa set brand_name nanti dari menu Akun kalau mau.
     if (data.user && !data.session) {
       setInfo(
         `Akun dibuat. Cek email ${email} untuk verifikasi sebelum login. ` +
@@ -74,15 +73,7 @@ export function DaftarForm() {
       return;
     }
 
-    // Auto-confirmed (jika email confirmation di-disable di Supabase settings)
     if (data.session) {
-      // Update brand_name di accounts (trigger sudah bikin row)
-      if (namaBisnis.trim()) {
-        await supabase
-          .from("accounts")
-          .update({ brand_name: namaBisnis.trim() })
-          .eq("owner_user_id", data.user!.id);
-      }
       router.replace("/dashboard");
       router.refresh();
       return;
@@ -94,21 +85,6 @@ export function DaftarForm() {
   return (
     <div className="card p-6">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="nama-bisnis" className="block text-sm font-medium text-slate-700">
-            Nama Bisnis
-          </label>
-          <input
-            id="nama-bisnis"
-            type="text"
-            required
-            value={namaBisnis}
-            onChange={(e) => setNamaBisnis(e.target.value)}
-            placeholder="Misal: Toko Sembako Pak Bambang"
-            className="input-base mt-1"
-            disabled={loading}
-          />
-        </div>
         <div>
           <label htmlFor="email" className="block text-sm font-medium text-slate-700">
             Email
@@ -167,7 +143,7 @@ export function DaftarForm() {
           />
           <label htmlFor="agree" className="text-xs text-slate-600">
             Saya setuju dengan{" "}
-            <Link href="/tos" className="text-slate-900 hover:underline">
+            <Link href="/terms" className="text-slate-900 hover:underline">
               Syarat Layanan
             </Link>{" "}
             dan{" "}

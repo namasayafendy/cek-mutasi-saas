@@ -28,11 +28,10 @@ export default function TentangPage() {
           Cerita di balik aplikasi
         </h2>
         <p>
-          Aplikasi ini awalnya dibangun untuk kebutuhan internal{" "}
-          <em>Aceh Gadai Syariah</em>, sebuah usaha pegadaian multi-cabang di
-          Aceh. Setiap hari, owner harus mencocokkan ratusan tebusan customer
-          dengan mutasi rekening bank manual baris per baris &mdash; pekerjaan yang
-          memakan waktu berjam-jam dan rawan kesalahan.
+          Aplikasi ini awalnya dibangun untuk kebutuhan internal sebuah usaha
+          pegadaian multi-cabang. Setiap hari, owner harus mencocokkan ratusan
+          tebusan customer dengan mutasi rekening bank manual baris per baris
+          &mdash; pekerjaan yang memakan waktu berjam-jam dan rawan kesalahan.
         </p>
         <p>
           Setelah satu bulan dipakai internal dan terbukti memangkas waktu
@@ -65,7 +64,7 @@ export default function TentangPage() {
           Informasi Perusahaan
         </h2>
         <p>
-          CekTransfer.com dioperasikan dari Aceh, Indonesia. Untuk pertanyaan
+          CekTransfer.com adalah layanan SaaS untuk UMKM Indonesia. Untuk pertanyaan
           umum, kerja sama, atau urusan legal, silakan hubungi kami melalui
           halaman{" "}
           <a href="/kontak" className="text-[#10B981] hover:underline">

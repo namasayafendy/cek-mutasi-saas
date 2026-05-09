@@ -55,7 +55,7 @@ export function PublicFooter() {
       <div className="border-t border-slate-200">
         <div className="mx-auto max-w-6xl px-4 sm:px-6 py-6 flex flex-col sm:flex-row gap-2 items-center justify-between text-xs text-slate-500">
           <p>&copy; {year} CekTransfer.com. Semua hak dilindungi.</p>
-          <p>Made with care in Aceh, Indonesia.</p>
+          <p>Cek mutasi rekening untuk UMKM Indonesia.</p>
         </div>
       </div>
     </footer>

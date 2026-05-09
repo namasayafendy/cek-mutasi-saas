@@ -73,7 +73,7 @@ export default function KontakPage() {
       </div>
 
       <p className="mt-12 text-xs text-slate-500">
-        CekTransfer.com dioperasikan dari Aceh, Indonesia.
+        CekTransfer.com adalah aplikasi SaaS yang dioperasikan dari Indonesia.
       </p>
     </article>
   );
