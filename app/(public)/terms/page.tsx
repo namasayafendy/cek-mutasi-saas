@@ -222,7 +222,7 @@ export default function TermsPage() {
             <a href="mailto:admin@cektransfer.com" className="text-[#10B981] hover:underline">
               admin@cektransfer.com
             </a>{" "}
-            atau via WhatsApp 0812-6540-077.
+            atau via WhatsApp 0822-7780-2886.
           </p>
         </Section>
       </div>

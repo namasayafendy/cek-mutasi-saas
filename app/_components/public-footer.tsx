@@ -39,8 +39,8 @@ export function PublicFooter() {
           <ul className="space-y-2 text-sm text-slate-600">
             <li className="flex items-start gap-2">
               <Phone className="h-4 w-4 mt-0.5 text-[#10B981] flex-shrink-0" />
-              <a href="https://wa.me/628126540077" className="hover:text-[#0F2E1F]">
-                0812-6540-077
+              <a href="https://wa.me/6282277802886" className="hover:text-[#0F2E1F]">
+                0822-7780-2886
               </a>
             </li>
             <li className="flex items-start gap-2">

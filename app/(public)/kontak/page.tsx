@@ -20,15 +20,15 @@ export default function KontakPage() {
         <ContactCard
           icon={<Phone className="h-5 w-5" />}
           title="Telepon &amp; SMS"
-          line="0812-6540-077"
-          href="tel:+6281265400770"
+          line="0822-7780-2886"
+          href="tel:+6282277802886"
           desc="Senin - Sabtu, 09.00 - 18.00 WIB"
         />
         <ContactCard
           icon={<MessageCircle className="h-5 w-5" />}
           title="WhatsApp"
-          line="0812-6540-077"
-          href="https://wa.me/628126540077"
+          line="0822-7780-2886"
+          href="https://wa.me/6282277802886"
           desc="Klik untuk chat langsung di WhatsApp"
         />
         <ContactCard

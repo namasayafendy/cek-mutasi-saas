@@ -162,7 +162,7 @@ const FAQS: { q: string; a: React.ReactNode }[] = [
     q: "Bagaimana cara minta bantuan?",
     a: (
       <p>
-        WhatsApp 0812-6540-077 atau email{" "}
+        WhatsApp 0822-7780-2886 atau email{" "}
         <a href="mailto:admin@cektransfer.com" className="text-[#10B981] hover:underline">
           admin@cektransfer.com
         </a>

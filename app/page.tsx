@@ -182,11 +182,20 @@ export default async function LandingPage() {
               </div>
               <h3 className="text-lg font-semibold text-[#0F2E1F]">CekTransfer Pro</h3>
               <p className="mt-1 text-sm text-slate-500">Cocok untuk UMKM dan multi-cabang</p>
-              <div className="mt-5 flex items-baseline gap-1">
-                <span className="text-4xl font-bold text-[#0F2E1F]">Rp 99.000</span>
-                <span className="text-slate-500">/bulan</span>
+              <div className="mt-5">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <span className="text-4xl font-bold text-[#0F2E1F]">Rp 49.000</span>
+                  <span className="text-slate-500">/bulan</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-white bg-[#10B981] px-2 py-0.5 rounded">
+                    Promo
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <span className="text-sm text-slate-400 line-through">Rp 99.000</span>
+                  <span className="text-xs text-slate-500">harga normal</span>
+                </div>
               </div>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs text-slate-500 mt-3">
                 Sudah termasuk PPN. Trial 7 hari, tanpa kartu kredit.
               </p>
               <ul className="mt-6 space-y-2.5 text-sm text-slate-700">
