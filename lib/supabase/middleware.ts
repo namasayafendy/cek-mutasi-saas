@@ -1,7 +1,23 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/daftar", "/tos", "/privacy", "/lupa-password", "/set-password"];
+const PUBLIC_PATHS = [
+  // Marketing / landing
+  "/",
+  "/tentang",
+  "/kontak",
+  "/faq",
+  // Legal
+  "/privacy",
+  "/terms",
+  "/tos", // legacy alias
+  "/refund",
+  // Auth flows
+  "/login",
+  "/daftar",
+  "/lupa-password",
+  "/set-password",
+];
 
 function isPublicPath(path: string): boolean {
   if (PUBLIC_PATHS.includes(path)) return true;
@@ -100,7 +116,9 @@ export async function updateSession(request: NextRequest) {
     return redirectRes;
   }
 
-  // Logged in user trying to access /login or /daftar → redirect to dashboard
+  // Logged-in user landing on /login or /daftar → redirect to dashboard.
+  // Note: "/" is now a public landing page; it has its own server-side
+  // redirect-when-logged-in inside app/page.tsx, so we don't force it here.
   if (user && (path === "/login" || path === "/daftar")) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
