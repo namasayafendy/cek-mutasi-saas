@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Check,
   Shield,
+  ShieldCheck,
   Zap,
   Building2,
   FileText,
@@ -12,6 +13,7 @@ import {
   Upload,
   Calculator,
   Download,
+  Lock,
 } from "lucide-react";
 import { getAccountContext } from "@/lib/supabase/context";
 import { PublicHeader } from "@/app/_components/public-header";
@@ -30,8 +32,8 @@ export default async function LandingPage() {
       <section className="bg-gradient-to-b from-[#FAFAF7] to-white">
         <div className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28 text-center">
           <div className="inline-flex items-center gap-2 rounded-full bg-[#10B981]/10 border border-[#10B981]/30 px-3 py-1 text-xs font-medium text-[#0F2E1F] mb-6">
-            <Shield className="h-3.5 w-3.5 text-[#10B981]" />
-            Privacy-first &middot; PDF tidak pernah di-upload ke server
+            <Lock className="h-3.5 w-3.5 text-[#10B981]" />
+            Tanpa serahkan username &amp; password banking Anda
           </div>
           <h1 className="text-3xl sm:text-5xl font-bold tracking-tight text-[#0F2E1F] leading-tight">
             Cocokkan transferan customer <br className="hidden sm:block" />
@@ -61,6 +63,27 @@ export default async function LandingPage() {
           <p className="mt-4 text-xs text-slate-500">
             Tidak perlu kartu kredit &middot; Bebas cancel kapan saja
           </p>
+        </div>
+      </section>
+
+      {/* Security highlight banner */}
+      <section className="bg-[#0F2E1F] text-white">
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-10 grid gap-6 sm:grid-cols-3 items-center">
+          <SecurityPoint
+            icon={<Lock className="h-5 w-5" />}
+            title="Tanpa login banking"
+            desc="Anda TIDAK perlu kasih username, password, atau OTP m-banking ke kami."
+          />
+          <SecurityPoint
+            icon={<ShieldCheck className="h-5 w-5" />}
+            title="PDF tetap di perangkat Anda"
+            desc="File mutasi diproses langsung di browser, tidak pernah di-upload ke server."
+          />
+          <SecurityPoint
+            icon={<FileText className="h-5 w-5" />}
+            title="Hanya hasil yang disimpan"
+            desc="Server kami hanya simpan metadata cocokan untuk fitur history."
+          />
         </div>
       </section>
 
@@ -96,6 +119,11 @@ export default async function LandingPage() {
           </div>
           <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             <FeatureCard
+              icon={<Lock className="h-5 w-5" />}
+              title="Tanpa Akses Banking"
+              desc="Anda tidak perlu serahkan username/password m-banking. Cukup upload PDF mutasi yang Anda download sendiri dari banking app."
+            />
+            <FeatureCard
               icon={<Zap className="h-5 w-5" />}
               title="Match Otomatis"
               desc="Sistem cocokkan input customer ke transaksi mutasi berdasarkan tanggal & nominal. Tidak perlu cek manual."
@@ -109,11 +137,6 @@ export default async function LandingPage() {
               icon={<Layers className="h-5 w-5" />}
               title="Multi-Outlet / Cabang"
               desc="Bisnis multi-cabang? Tag tiap input ke outlet, hasil rekap otomatis terpisah per cabang."
-            />
-            <FeatureCard
-              icon={<Shield className="h-5 w-5" />}
-              title="Privacy by Design"
-              desc="PDF mutasi diproses langsung di browser Anda. Server kami hanya menyimpan hasil cocokan, bukan PDF."
             />
             <FeatureCard
               icon={<FileText className="h-5 w-5" />}
@@ -146,7 +169,7 @@ export default async function LandingPage() {
               num="1"
               icon={<Upload className="h-5 w-5" />}
               title="Upload PDF Mutasi"
-              desc="Pilih bank, upload file mutasi yang Anda download dari mobile/internet banking."
+              desc="Pilih bank, upload file mutasi yang Anda download sendiri dari mobile/internet banking. Login banking tetap di tangan Anda."
             />
             <Step
               num="2"
@@ -205,7 +228,7 @@ export default async function LandingPage() {
                 <PriceFeature>Multi-bank (BSI, BCA, BNI, Mandiri, dst)</PriceFeature>
                 <PriceFeature>History &amp; rekap PDF</PriceFeature>
                 <PriceFeature>Manual claim untuk non-customer</PriceFeature>
-                <PriceFeature>Privacy: PDF tidak di-upload ke server</PriceFeature>
+                <PriceFeature>Tanpa login banking &mdash; PDF di-proses di browser</PriceFeature>
                 <PriceFeature>Support email &amp; WhatsApp</PriceFeature>
               </ul>
               <Link
@@ -230,8 +253,8 @@ export default async function LandingPage() {
             Coba CekTransfer hari ini
           </h2>
           <p className="mt-3 text-white/80 max-w-xl mx-auto">
-            Gratis 7 hari. Tidak perlu kartu kredit. Bebas cancel kapan saja
-            &mdash; tidak ada pertanyaan.
+            Gratis 7 hari. Tidak perlu kartu kredit. Tidak perlu login banking.
+            Bebas cancel kapan saja &mdash; tidak ada pertanyaan.
           </p>
           <div className="mt-6 flex flex-col sm:flex-row gap-3 justify-center">
             <Link
@@ -253,6 +276,28 @@ export default async function LandingPage() {
 
       <PublicFooter />
     </>
+  );
+}
+
+function SecurityPoint({
+  icon,
+  title,
+  desc,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  desc: string;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="inline-flex items-center justify-center w-10 h-10 rounded-lg bg-[#10B981]/15 text-[#10B981] flex-shrink-0">
+        {icon}
+      </div>
+      <div>
+        <h3 className="font-semibold">{title}</h3>
+        <p className="mt-0.5 text-sm text-white/70 leading-relaxed">{desc}</p>
+      </div>
+    </div>
   );
 }
 
