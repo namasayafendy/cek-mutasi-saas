@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   ArrowDown,
   ArrowUp,
@@ -10,14 +9,11 @@ import {
   Eye,
   History as HistoryIcon,
   Inbox,
-  Loader2,
-  X,
-  AlertCircle,
   ListChecks,
 } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
-import { formatDateLong, parseDateISO, formatRupiah, formatDateID, toDateISO } from "@/lib/format";
+import { formatDateLong, parseDateISO, formatRupiah, formatDateID } from "@/lib/format";
 import MutasiTab from "./mutasi-tab";
+import { ManualClaimModal, type UnclaimedTx } from "./manual-claim-modal";
 
 type SessionRow = {
   id: string;
@@ -34,19 +30,6 @@ type SessionRow = {
   carry_over_used: boolean | null;
   multi_bank_used: boolean | null;
   created_at: string;
-};
-
-type UnclaimedTx = {
-  id: string;
-  bank_id: string | null;
-  no_ref: string | null;
-  tanggal: string;
-  jam: string | null;
-  nominal_kredit: number;
-  nominal_debet: number;
-  nama_pengirim: string | null;
-  nama_penerima: string | null;
-  deskripsi: string | null;
 };
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
@@ -99,7 +82,6 @@ export default function HistoryClient({
         </p>
       </div>
 
-      {/* Tabs */}
       <div className="border-b border-slate-200">
         <nav className="flex gap-6">
           <button
@@ -143,7 +125,14 @@ export default function HistoryClient({
         </nav>
       </div>
 
-      {tab === "mutasi" && <MutasiTab banks={banks} outlets={outlets} />}
+      {tab === "mutasi" && (
+        <MutasiTab
+          banks={banks}
+          outlets={outlets}
+          accountId={accountId}
+          userId={currentUserId}
+        />
+      )}
 
       {tab === "sessions" && (
         <SessionsTab
@@ -271,10 +260,7 @@ function SessionsTab({
                     </span>
                   )}
                   {s.carry_over_used && (
-                    <span
-                      className="ml-1 inline-flex items-center text-[10px] text-blue-600"
-                      title="Carry-over digunakan"
-                    >
+                    <span className="ml-1 inline-flex items-center text-[10px] text-blue-600" title="Carry-over digunakan">
                       ⏳
                     </span>
                   )}
@@ -471,236 +457,6 @@ function BelumMatchTab({
           </table>
         </div>
       )}
-    </div>
-  );
-}
-
-// ===== Manual claim modal =====
-
-function ManualClaimModal({
-  tx,
-  outlets,
-  banks,
-  accountId,
-  userId,
-  onClose,
-}: {
-  tx: UnclaimedTx;
-  outlets: OutletLite[];
-  banks: BankLite[];
-  accountId: string;
-  userId: string;
-  onClose: () => void;
-}) {
-  const router = useRouter();
-  const isKredit = tx.nominal_kredit > 0;
-  const amount = isKredit ? tx.nominal_kredit : tx.nominal_debet;
-  const txDate = parseDateISO(tx.tanggal);
-
-  const [outletId, setOutletId] = useState<string>(outlets[0]?.id ?? "");
-  const [tanggalInput, setTanggalInput] = useState<string>(
-    txDate ? toDateISO(txDate) : tx.tanggal,
-  );
-  const [reason, setReason] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const bank = tx.bank_id ? banks.find((b) => b.id === tx.bank_id) : null;
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!reason.trim()) {
-      setError("Alasan wajib diisi.");
-      return;
-    }
-    if (!outletId) {
-      setError("Outlet wajib dipilih.");
-      return;
-    }
-
-    setSaving(true);
-    setError(null);
-
-    const supabase = createClient();
-    const now = new Date().toISOString();
-
-    // Insert cek_inputs row dengan session_id null + manual_claim_reason
-    const { data: insertedInput, error: insertErr } = await supabase
-      .from("cek_inputs")
-      .insert({
-        session_id: null,
-        account_id: accountId,
-        tanggal_input: tanggalInput,
-        outlet_id: outletId,
-        bank_id: tx.bank_id,
-        nominal: amount,
-        jenis: isKredit ? "kredit" : "debet",
-        match_status: "manual_claimed",
-        matched_tx_id: tx.id,
-        manual_claim_reason: reason.trim(),
-        manual_claimed_at: now,
-      })
-      .select("id")
-      .single();
-
-    if (insertErr || !insertedInput) {
-      setError(`Gagal claim: ${insertErr?.message ?? "unknown"}`);
-      setSaving(false);
-      return;
-    }
-
-    // Update parsed_transactions.claimed_by_input_id
-    const { error: updateErr } = await supabase
-      .from("parsed_transactions")
-      .update({
-        claimed_by_input_id: insertedInput.id,
-        claimed_at: now,
-        manual_claim_reason: reason.trim(),
-      })
-      .eq("id", tx.id)
-      .is("claimed_by_input_id", null);
-
-    if (updateErr) {
-      setError(
-        `Claim partially failed — input ter-save tapi mark transaksi gagal: ${updateErr.message}`,
-      );
-      setSaving(false);
-      return;
-    }
-
-    // Phase 6: audit log
-    await supabase.from("audit_logs").insert({
-      account_id: accountId,
-      user_id: userId,
-      action: "tx.manual_claimed",
-      target_type: "parsed_transaction",
-      target_id: tx.id,
-      metadata: {
-        nominal: amount,
-        jenis: isKredit ? "kredit" : "debet",
-        outlet_id: outletId,
-        reason: reason.trim(),
-      },
-    });
-
-    setSaving(false);
-    onClose();
-    router.refresh();
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <h2 className="font-semibold text-slate-900">Claim Manual Transaksi</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700" disabled={saving}>
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {/* Tx info */}
-          <div className="rounded-md bg-slate-50 p-3 text-sm">
-            <div className="text-xs text-slate-500">Transaksi</div>
-            <div className="font-medium text-slate-900 mt-0.5">
-              {txDate ? formatDateID(txDate) : tx.tanggal}
-              {tx.jam && <span className="text-slate-500"> {tx.jam}</span>}
-            </div>
-            <div className="text-xs text-slate-700 mt-1">
-              {bank ? bank.label || bank.kode : "—"} ·{" "}
-              {isKredit ? (
-                <span className="text-green-700">Kredit</span>
-              ) : (
-                <span className="text-red-700">Debet</span>
-              )}{" "}
-              · <span className="font-mono">Rp {formatRupiah(amount)}</span>
-            </div>
-            {(tx.nama_pengirim || tx.deskripsi) && (
-              <div className="text-xs text-slate-600 mt-1.5 italic">
-                {tx.nama_pengirim ?? ""} {tx.deskripsi ? `— ${tx.deskripsi}` : ""}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700">
-              Tanggal input <span className="text-slate-400 text-xs">(default: tanggal transaksi)</span>
-            </label>
-            <input
-              type="date"
-              value={tanggalInput}
-              onChange={(e) => setTanggalInput(e.target.value)}
-              className="input mt-1"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700">
-              Outlet <span className="text-red-600">*</span>
-            </label>
-            <select
-              value={outletId}
-              onChange={(e) => setOutletId(e.target.value)}
-              className="input mt-1"
-              required
-            >
-              {outlets.length === 0 && <option value="">— Belum ada outlet —</option>}
-              {outlets.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.nama}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700">
-              Alasan / Catatan <span className="text-red-600">*</span>
-            </label>
-            <textarea
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              rows={3}
-              placeholder="Misal: Customer Pak Budi setor cicilan tapi lupa input. Dibuktikan WA."
-              className="input mt-1 resize-y"
-              required
-            />
-            <p className="mt-1 text-xs text-slate-500">
-              Wajib — biar audit log jelas kenapa transaksi ini di-claim manual.
-            </p>
-          </div>
-
-          {error && (
-            <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700 flex items-start gap-2">
-              <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn-secondary text-sm flex-1"
-              disabled={saving}
-            >
-              Batal
-            </button>
-            <button type="submit" className="btn-primary text-sm flex-1" disabled={saving}>
-              {saving ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" /> Menyimpan…
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="h-4 w-4" /> Claim
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-      </div>
     </div>
   );
 }

@@ -52,12 +52,14 @@ export function TransactionDetailModal({
   outlet,
   bank,
   onClose,
+  onClaimManual,
 }: {
   tx: MutasiRow;
   inputInfo: ClaimedInputInfo | null;
   outlet: OutletLite | null;
   bank: BankLite | null;
   onClose: () => void;
+  onClaimManual?: () => void;
 }) {
   const isKredit = tx.nominal_kredit > 0;
   const amount = isKredit ? tx.nominal_kredit : tx.nominal_debet;
@@ -265,6 +267,14 @@ export function TransactionDetailModal({
             <button onClick={onClose} className="btn-secondary text-sm flex-1">
               Tutup
             </button>
+            {!isMatched && onClaimManual && (
+              <button
+                onClick={onClaimManual}
+                className="btn-primary text-sm flex-1 inline-flex items-center justify-center gap-1.5"
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" /> Claim Manual
+              </button>
+            )}
             {inputInfo?.session_id && (
               <Link
                 href={`/history/${inputInfo.session_id}`}

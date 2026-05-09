@@ -16,6 +16,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { formatRupiah, formatDateID, parseDateISO, toDateISO } from "@/lib/format";
 import { TransactionDetailModal } from "./transaction-detail-modal";
+import { ManualClaimModal, type UnclaimedTx } from "./manual-claim-modal";
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
 type BankLite = { id: string; kode: string; label: string | null; is_active?: boolean };
@@ -87,9 +88,13 @@ function hexToRgba(hex: string, alpha: number): string {
 export default function MutasiTab({
   banks,
   outlets,
+  accountId,
+  userId,
 }: {
   banks: BankLite[];
   outlets: OutletLite[];
+  accountId: string;
+  userId: string;
 }) {
   const [view, setView] = useState<"cards" | "detail">("cards");
   const [activeBankId, setActiveBankId] = useState<string>("");
@@ -102,6 +107,7 @@ export default function MutasiTab({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedTx, setSelectedTx] = useState<MutasiRow | null>(null);
+  const [claimingTx, setClaimingTx] = useState<UnclaimedTx | null>(null);
 
   const outletMap = useMemo(() => new Map(outlets.map((o) => [o.id, o])), [outlets]);
   const bankMap = useMemo(() => new Map(banks.map((b) => [b.id, b])), [banks]);
@@ -554,6 +560,33 @@ export default function MutasiTab({
           }
           bank={selectedTx.bank_id ? bankMap.get(selectedTx.bank_id) ?? null : null}
           onClose={() => setSelectedTx(null)}
+          onClaimManual={() => {
+            // Convert MutasiRow → UnclaimedTx (subset of fields)
+            setClaimingTx({
+              id: selectedTx.id,
+              bank_id: selectedTx.bank_id,
+              no_ref: selectedTx.no_ref,
+              tanggal: selectedTx.tanggal,
+              jam: selectedTx.jam,
+              nominal_kredit: selectedTx.nominal_kredit,
+              nominal_debet: selectedTx.nominal_debet,
+              nama_pengirim: selectedTx.nama_pengirim,
+              nama_penerima: selectedTx.nama_penerima,
+              deskripsi: selectedTx.deskripsi,
+            });
+            setSelectedTx(null);
+          }}
+        />
+      )}
+
+      {claimingTx && (
+        <ManualClaimModal
+          tx={claimingTx}
+          outlets={outlets}
+          banks={banks}
+          accountId={accountId}
+          userId={userId}
+          onClose={() => setClaimingTx(null)}
         />
       )}
     </div>
