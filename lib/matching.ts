@@ -1,4 +1,5 @@
-// Matching algorithm with configurable rules from account_settings.
+// Matching algorithm with per-input rules + cross-bank flag.
+// Phase 9.1: setiap input punya rules-nya sendiri (dari preset MatchRule).
 
 import type {
   PdfTransaction,
@@ -37,30 +38,66 @@ function nominalMatches(input: number, candidate: number, rules: MatchRules): bo
   return false;
 }
 
+export type RunMatchingOptions = {
+  /** Per-input rules getter. Diberi 1 input, harus return rules-nya. */
+  getRulesForInput?: (input: UserInput) => MatchRules;
+  /** Force cross-bank ke semua input (skip filter bank). Untuk leftover re-run. */
+  forceCrossBank?: boolean;
+  /**
+   * "all" (default) — match semua input dari awal.
+   * "leftover-only" — proses HANYA input dengan status no_candidate, sisanya di-keep.
+   */
+  mode?: "all" | "leftover-only";
+};
+
 export function runMatching(
   inputs: UserInput[],
   transactions: PdfTransaction[],
   outletColors: Map<string, string>,
-  rules: MatchRules = DEFAULT_RULES,
-  options?: { crossBank?: boolean },
+  options?: RunMatchingOptions,
 ): { inputs: UserInput[]; summary: MatchSummary } {
+  const getRules = options?.getRulesForInput ?? (() => DEFAULT_RULES);
+  const forceCrossBank = options?.forceCrossBank ?? false;
+  const mode = options?.mode ?? "all";
+
   const claimed = new Set<string>();
-  // Phase 1E.2: tx key include bankId untuk hindari collision antar bank yang
-  // kebetulan punya page+no sama
   const txKey = (t: PdfTransaction) => `${t.bankId ?? "_"}-${t.page}-${t.no}`;
-  const crossBank = options?.crossBank ?? false;
+
+  // Mode leftover-only: tx yang sudah matched di sebelumnya HARUS di-skip
+  if (mode === "leftover-only") {
+    for (const input of inputs) {
+      const m = input.match;
+      if (m?.status === "matched") {
+        const matchedTx = transactions.find(
+          (t) =>
+            t.no === m.txNo &&
+            t.tanggalDate.getTime() === m.txDate.getTime() &&
+            t.kredit === input.nominal &&
+            (!m.txBankId || t.bankId === m.txBankId),
+        );
+        if (matchedTx) claimed.add(txKey(matchedTx));
+      }
+    }
+  }
 
   const resultInputs: UserInput[] = inputs.map((input) => {
-    // Filter candidates: nominal match (with tolerance) + within date window
-    // + bank match (kecuali crossBank=true)
+    if (mode === "leftover-only" && input.match?.status !== "no_candidate") {
+      return input;
+    }
+
+    const rules = getRules(input);
+    // Bank filter:
+    // - input.bankId kosong/null → "Semua bank" → skip filter
+    // - forceCrossBank=true → skip filter (re-run leftover ke semua bank)
+    // - else: filter strict
+    const skipBankFilter = forceCrossBank || !input.bankId;
+
     const allCandidates = transactions.filter((tx) => {
-      if (!crossBank && input.bankId && tx.bankId && input.bankId !== tx.bankId) {
+      if (!skipBankFilter && input.bankId && tx.bankId && input.bankId !== tx.bankId) {
         return false;
       }
       if (!nominalMatches(input.nominal, tx.kredit, rules)) return false;
       const days = diffDays(input.tanggal, tx.tanggalDate);
-      // days >= 0 means tx is on or before input date (lookback)
-      // days < 0 means tx is after input date (forward window)
       if (days >= 0 && days <= rules.lookback_days) return true;
       if (days < 0 && Math.abs(days) <= rules.forward_window_days) return true;
       return false;
@@ -69,16 +106,13 @@ export function runMatching(
     const available = allCandidates.filter((tx) => !claimed.has(txKey(tx)));
 
     if (available.length > 0) {
-      // Pilih: tanggal terdekat dengan input. Jika tie, tanggal yg sama atau sebelum (positive days) > setelah.
-      // Then by no (smallest = earlier in same day).
       available.sort((a, b) => {
-        const da = diffDays(input.tanggal, a.tanggalDate); // 0 = same, +n = a is earlier, -n = a is later
+        const da = diffDays(input.tanggal, a.tanggalDate);
         const db = diffDays(input.tanggal, b.tanggalDate);
-        // Prefer absolute closer; when |a|==|b|, prefer earlier (positive days) over later (negative days)
         const aAbs = Math.abs(da);
         const bAbs = Math.abs(db);
         if (aAbs !== bAbs) return aAbs - bAbs;
-        if (da !== db) return db - da; // prefer larger days (more positive = earlier)
+        if (da !== db) return db - da;
         return a.no - b.no;
       });
       const picked = available[0];

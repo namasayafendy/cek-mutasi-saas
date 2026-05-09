@@ -93,11 +93,18 @@ export async function saveSession(
     account_id: args.accountId,
     tanggal_input: toDateISO(i.tanggal),
     outlet_id: i.outletId || null,
-    bank_id: args.bankId,
+    // Phase 9.1: bank_id dari input (kalau "" = "Semua bank" → simpan null).
+    // Kalau matched cross-bank, simpan bank tujuan match (txBankId) supaya
+    // /history Mutasi tab benar.
+    bank_id:
+      i.match?.status === "matched" && i.match.txBankId
+        ? i.match.txBankId
+        : i.bankId || args.bankId,
     nominal: i.nominal,
     jenis: args.jenis,
     match_status: i.match?.status ?? null,
     matched_tx_id: findMatchedTxId(i),
+    match_rule_id: i.matchRuleId || null,
     conflict_count:
       i.match?.status === "all_taken" ? i.match.conflictCount : null,
     conflict_dates:

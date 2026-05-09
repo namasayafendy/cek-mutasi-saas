@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getAccountContext } from "@/lib/supabase/context";
+import { createClient } from "@/lib/supabase/server";
 import { AturanClient } from "./aturan-client";
-import type { AccountSettings } from "@/lib/types";
+import type { MatchRulePreset } from "@/lib/types";
 
 export default async function AturanPage() {
   const ctx = await getAccountContext();
@@ -18,18 +19,14 @@ export default async function AturanPage() {
     );
   }
 
-  if (!ctx.settings) {
-    return (
-      <div className="card p-5 border-red-200 bg-red-50 text-red-800 text-sm">
-        Settings belum ter-create. Logout & login ulang, atau hubungi support.
-      </div>
-    );
-  }
+  const supabase = await createClient();
+  const { data: rulesData } = await supabase
+    .from("match_rules")
+    .select("*")
+    .is("deleted_at", null)
+    .order("is_default", { ascending: false })
+    .order("created_at", { ascending: true });
+  const rules = (rulesData ?? []) as MatchRulePreset[];
 
-  return (
-    <AturanClient
-      accountId={ctx.account.id}
-      initialSettings={ctx.settings as AccountSettings}
-    />
-  );
+  return <AturanClient initialRules={rules} accountId={ctx.account.id} />;
 }

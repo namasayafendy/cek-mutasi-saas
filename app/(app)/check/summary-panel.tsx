@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { MatchSummary, Outlet, UserInput, Bank } from "@/lib/types";
+import type { MatchSummary, Outlet, UserInput, Bank, MatchRulePreset } from "@/lib/types";
 import { formatRupiah, formatDateID } from "@/lib/format";
 import {
   CheckCircle2,
@@ -20,8 +20,7 @@ export function SummaryPanel({
   inputs,
   outlets,
   banks,
-  crossBank,
-  onCrossBankChange,
+  rules,
   multiBank,
   onRemove,
   onClearAll,
@@ -33,8 +32,7 @@ export function SummaryPanel({
   inputs: UserInput[];
   outlets: Outlet[];
   banks: Bank[];
-  crossBank: boolean;
-  onCrossBankChange: (v: boolean) => void;
+  rules: MatchRulePreset[];
   multiBank: boolean;
   onRemove: (id: string) => void;
   onClearAll: () => void;
@@ -46,6 +44,7 @@ export function SummaryPanel({
   const [showUnclaimed, setShowUnclaimed] = useState(false);
   const outletById = new Map(outlets.map((o) => [o.id, o]));
   const bankById = new Map(banks.map((b) => [b.id, b]));
+  const ruleById = new Map(rules.map((r) => [r.id, r]));
 
   return (
     <div className="card p-4 space-y-3">
@@ -83,38 +82,6 @@ export function SummaryPanel({
         </div>
       </div>
 
-      {/* Cross-bank toggle (multi-bank only) */}
-      {multiBank && (
-        <div
-          className={`rounded-md border px-3 py-2 ${
-            crossBank ? "border-purple-200 bg-purple-50" : "border-slate-200 bg-slate-50"
-          }`}
-        >
-          <label className="flex items-start gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={crossBank}
-              onChange={(e) => onCrossBankChange(e.target.checked)}
-              className="mt-0.5"
-            />
-            <div className="text-xs flex-1">
-              <div
-                className={`font-medium flex items-center gap-1 ${
-                  crossBank ? "text-purple-900" : "text-slate-700"
-                }`}
-              >
-                <Globe className="h-3 w-3" /> Cari di semua bank (cross-bank)
-              </div>
-              <div className={crossBank ? "text-purple-700" : "text-slate-500"}>
-                {crossBank
-                  ? "Filter bank di-skip — input bisa match tx dari bank manapun."
-                  : "Default: input cuma cari di bank yang dipilih. Centang ini kalau tahu transferan kadang masuk bank yang berbeda."}
-              </div>
-            </div>
-          </label>
-        </div>
-      )}
-
       <div className="border-t pt-3">
         <button
           onClick={() => setShowInputs((v) => !v)}
@@ -130,8 +97,10 @@ export function SummaryPanel({
             ) : (
               inputs.map((i) => {
                 const o = outletById.get(i.outletId);
-                const bank = bankById.get(i.bankId);
+                const bank = i.bankId ? bankById.get(i.bankId) : null;
+                const rule = ruleById.get(i.matchRuleId);
                 const status = i.match?.status;
+                const isAllBank = !i.bankId;
                 return (
                   <div
                     key={i.id}
@@ -155,9 +124,28 @@ export function SummaryPanel({
                       )}
                       <span className="text-slate-700 flex-shrink-0">{formatDateID(i.tanggal)}</span>
                       <span className="text-slate-500 truncate">{o?.nama ?? "?"}</span>
-                      {multiBank && bank && (
-                        <span className="text-[10px] text-slate-400 px-1 rounded bg-white border border-slate-200 flex-shrink-0">
-                          {bank.label || bank.kode}
+                      {multiBank && (
+                        <span
+                          className={`text-[10px] px-1 rounded border flex-shrink-0 ${
+                            isAllBank
+                              ? "bg-purple-50 border-purple-200 text-purple-700"
+                              : "bg-white border-slate-200 text-slate-400"
+                          }`}
+                          title={isAllBank ? "Cross-bank (semua bank)" : bank?.label || bank?.kode}
+                        >
+                          {isAllBank ? (
+                            <Globe className="inline-block h-2.5 w-2.5" />
+                          ) : (
+                            bank?.label || bank?.kode || "?"
+                          )}
+                        </span>
+                      )}
+                      {rule && (
+                        <span
+                          className="text-[10px] text-slate-400 px-1 rounded bg-white border border-slate-200 flex-shrink-0"
+                          title={`Aturan: ${rule.name}`}
+                        >
+                          {rule.name.length > 8 ? rule.name.slice(0, 8) + "…" : rule.name}
                         </span>
                       )}
                       <span className="ml-auto font-mono text-slate-900 flex-shrink-0">

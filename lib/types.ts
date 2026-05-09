@@ -37,6 +37,23 @@ export type TeamMember = {
 
 export type MatchMode = "exact" | "tol_rp" | "tol_pct";
 
+/** Phase 9.1: Named Match Rules preset */
+export type MatchRulePreset = {
+  id: string;
+  account_id: string;
+  name: string;
+  jenis: "kredit" | "debet" | "both";
+  lookback_days: number;
+  forward_window_days: number;
+  match_mode: MatchMode;
+  tolerance_rp: number;
+  tolerance_pct: number;
+  is_default: boolean;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AccountSettings = {
   account_id: string;
   lookback_days_kredit: number;
@@ -177,8 +194,10 @@ export type UserInput = {
   id: string;
   tanggal: Date;
   outletId: string;
-  /** Phase 1E.2: bank tujuan match (multi-bank) — wajib */
+  /** Phase 1E.2: bank tujuan match (multi-bank). Empty string = "Semua bank" (cross-bank) */
   bankId: string;
+  /** Phase 9.1: named rule preset yang dipakai untuk matching input ini */
+  matchRuleId: string;
   nominal: number;
   match?: MatchResult;
 };

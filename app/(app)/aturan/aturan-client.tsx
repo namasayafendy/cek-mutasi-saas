@@ -2,316 +2,481 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  X,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  Settings,
+  Star,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import type { AccountSettings, MatchMode } from "@/lib/types";
-import { Save, ArrowDown, ArrowUp, Equal, Minus, Percent, Palette } from "lucide-react";
+import { formatRupiah } from "@/lib/format";
+import type { MatchRulePreset, MatchMode } from "@/lib/types";
 
-type Jenis = "kredit" | "debet";
+type RuleForm = {
+  id?: string;
+  name: string;
+  jenis: "kredit" | "debet" | "both";
+  lookback_days: number;
+  forward_window_days: number;
+  match_mode: MatchMode;
+  tolerance_rp: number;
+  tolerance_pct: number;
+};
 
-const PRESET_LOOKBACK = [0, 1, 3, 7];
+const EMPTY_FORM: RuleForm = {
+  name: "",
+  jenis: "kredit",
+  lookback_days: 3,
+  forward_window_days: 0,
+  match_mode: "exact",
+  tolerance_rp: 0,
+  tolerance_pct: 0,
+};
 
 export function AturanClient({
+  initialRules,
   accountId,
-  initialSettings,
 }: {
+  initialRules: MatchRulePreset[];
   accountId: string;
-  initialSettings: AccountSettings;
 }) {
   const router = useRouter();
-  const [settings, setSettings] = useState<AccountSettings>(initialSettings);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-  const [, startTransition] = useTransition();
+  const [editing, setEditing] = useState<RuleForm | null>(null);
+  const [pending, startTransition] = useTransition();
+  const [feedback, setFeedback] = useState<
+    { type: "success" | "error"; message: string } | null
+  >(null);
 
-  function update<K extends keyof AccountSettings>(key: K, value: AccountSettings[K]) {
-    setSettings((prev) => ({ ...prev, [key]: value }));
-    setSuccess(false);
+  function startNew() {
+    setEditing({ ...EMPTY_FORM });
+    setFeedback(null);
   }
 
-  async function handleSave() {
-    setError(null);
-    setSuccess(false);
-    setSaving(true);
-    const supabase = createClient();
-    const { error: updErr } = await supabase
-      .from("account_settings")
-      .update({
-        lookback_days_kredit: settings.lookback_days_kredit,
-        forward_window_days_kredit: settings.forward_window_days_kredit,
-        match_mode_kredit: settings.match_mode_kredit,
-        match_tolerance_rp_kredit: settings.match_tolerance_rp_kredit,
-        match_tolerance_pct_kredit: settings.match_tolerance_pct_kredit,
-        lookback_days_debet: settings.lookback_days_debet,
-        forward_window_days_debet: settings.forward_window_days_debet,
-        match_mode_debet: settings.match_mode_debet,
-        match_tolerance_rp_debet: settings.match_tolerance_rp_debet,
-        match_tolerance_pct_debet: settings.match_tolerance_pct_debet,
-        debet_highlight_same_color: settings.debet_highlight_same_color,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("account_id", accountId);
-    if (updErr) {
-      setError(updErr.message);
-      setSaving(false);
+  function startEdit(rule: MatchRulePreset) {
+    setEditing({
+      id: rule.id,
+      name: rule.name,
+      jenis: rule.jenis,
+      lookback_days: rule.lookback_days,
+      forward_window_days: rule.forward_window_days,
+      match_mode: rule.match_mode,
+      tolerance_rp: rule.tolerance_rp,
+      tolerance_pct: Number(rule.tolerance_pct),
+    });
+    setFeedback(null);
+  }
+
+  function cancel() {
+    setEditing(null);
+  }
+
+  async function save() {
+    if (!editing) return;
+    if (!editing.name.trim()) {
+      setFeedback({ type: "error", message: "Nama aturan wajib diisi" });
       return;
     }
-    setSuccess(true);
-    setSaving(false);
-    startTransition(() => router.refresh());
+    setFeedback(null);
+    startTransition(async () => {
+      const supabase = createClient();
+      const payload = {
+        account_id: accountId,
+        name: editing.name.trim(),
+        jenis: editing.jenis,
+        lookback_days: editing.lookback_days,
+        forward_window_days: editing.forward_window_days,
+        match_mode: editing.match_mode,
+        tolerance_rp: editing.match_mode === "tol_rp" ? editing.tolerance_rp : 0,
+        tolerance_pct: editing.match_mode === "tol_pct" ? editing.tolerance_pct : 0,
+        updated_at: new Date().toISOString(),
+      };
+
+      let error;
+      if (editing.id) {
+        const res = await supabase
+          .from("match_rules")
+          .update(payload)
+          .eq("id", editing.id);
+        error = res.error;
+      } else {
+        const res = await supabase.from("match_rules").insert(payload);
+        error = res.error;
+      }
+
+      if (error) {
+        setFeedback({
+          type: "error",
+          message: error.message.includes("unique")
+            ? "Nama aturan sudah dipakai. Pilih nama lain."
+            : error.message,
+        });
+        return;
+      }
+      setEditing(null);
+      setFeedback({
+        type: "success",
+        message: editing.id ? "Aturan ter-update." : "Aturan baru ter-tambah.",
+      });
+      router.refresh();
+    });
   }
 
-  function JenisSection({ jenis }: { jenis: Jenis }) {
-    const lookbackKey = jenis === "kredit" ? "lookback_days_kredit" : "lookback_days_debet";
-    const forwardKey = jenis === "kredit" ? "forward_window_days_kredit" : "forward_window_days_debet";
-    const modeKey = jenis === "kredit" ? "match_mode_kredit" : "match_mode_debet";
-    const tolRpKey = jenis === "kredit" ? "match_tolerance_rp_kredit" : "match_tolerance_rp_debet";
-    const tolPctKey = jenis === "kredit" ? "match_tolerance_pct_kredit" : "match_tolerance_pct_debet";
-
-    const lookback = settings[lookbackKey] as number;
-    const forward = settings[forwardKey] as number;
-    const mode = settings[modeKey] as MatchMode;
-    const tolRp = settings[tolRpKey] as number;
-    const tolPct = settings[tolPctKey] as number;
-
-    return (
-      <div className="card p-5 space-y-5">
-        <div className="flex items-center gap-2">
-          {jenis === "kredit" ? (
-            <ArrowDown className="h-5 w-5 text-green-600" />
-          ) : (
-            <ArrowUp className="h-5 w-5 text-red-600" />
-          )}
-          <h2 className="text-lg font-semibold text-slate-900">
-            {jenis === "kredit" ? "Transaksi Masuk (Kredit)" : "Transaksi Keluar (Debet)"}
-          </h2>
-        </div>
-
-        {/* Lookback */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700">
-            Lookback (cari ke belakang max berapa hari)
-          </label>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Misal: input tgl 20 April, lookback 3 hari → cari di mutasi tgl 17-20 April.
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {PRESET_LOOKBACK.map((n) => (
-              <button
-                key={n}
-                onClick={() => update(lookbackKey, n)}
-                className={`px-3 py-1.5 rounded-md text-sm border ${
-                  lookback === n
-                    ? "bg-slate-900 border-slate-900 text-white"
-                    : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                {n === 0 ? "0 hari (exact date)" : `${n} hari`}
-              </button>
-            ))}
-            <div className="inline-flex items-center gap-1.5">
-              <span className="text-xs text-slate-500">atau</span>
-              <input
-                type="number"
-                min={0}
-                max={30}
-                value={!PRESET_LOOKBACK.includes(lookback) ? lookback : ""}
-                placeholder="custom"
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10);
-                  if (!isNaN(v) && v >= 0 && v <= 30) update(lookbackKey, v);
-                }}
-                className="input-base w-24 py-1 text-sm"
-              />
-              <span className="text-xs text-slate-500">hari</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Forward window */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700">
-            Forward window (cari juga ke depan berapa hari)
-          </label>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Misal: customer info bayar tgl 20 April, transferan baru masuk tgl 22. Forward 3 hari
-            akan match itu juga. Default: 0 (off — strict tidak boleh tanggal lebih baru).
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {PRESET_LOOKBACK.map((n) => (
-              <button
-                key={n}
-                onClick={() => update(forwardKey, n)}
-                className={`px-3 py-1.5 rounded-md text-sm border ${
-                  forward === n
-                    ? "bg-slate-900 border-slate-900 text-white"
-                    : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                {n === 0 ? "Off" : `${n} hari`}
-              </button>
-            ))}
-            <div className="inline-flex items-center gap-1.5">
-              <span className="text-xs text-slate-500">atau</span>
-              <input
-                type="number"
-                min={0}
-                max={30}
-                value={!PRESET_LOOKBACK.includes(forward) ? forward : ""}
-                placeholder="custom"
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10);
-                  if (!isNaN(v) && v >= 0 && v <= 30) update(forwardKey, v);
-                }}
-                className="input-base w-24 py-1 text-sm"
-              />
-              <span className="text-xs text-slate-500">hari</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Match mode */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700">Match mode</label>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Cara mencocokkan nominal input dengan transaksi mutasi.
-          </p>
-          <div className="mt-2 grid sm:grid-cols-3 gap-2">
-            <button
-              onClick={() => update(modeKey, "exact")}
-              className={`p-3 rounded-md border text-left ${
-                mode === "exact"
-                  ? "bg-slate-900 border-slate-900 text-white"
-                  : "bg-white border-slate-300 hover:bg-slate-50"
-              }`}
-            >
-              <Equal className="h-4 w-4 mb-1" />
-              <div className="font-medium text-sm">Exact</div>
-              <div className="text-xs opacity-80">Nominal sama persis</div>
-            </button>
-            <button
-              onClick={() => update(modeKey, "tol_rp")}
-              className={`p-3 rounded-md border text-left ${
-                mode === "tol_rp"
-                  ? "bg-slate-900 border-slate-900 text-white"
-                  : "bg-white border-slate-300 hover:bg-slate-50"
-              }`}
-            >
-              <Minus className="h-4 w-4 mb-1" />
-              <div className="font-medium text-sm">Toleransi Rp</div>
-              <div className="text-xs opacity-80">±Rp untuk biaya admin</div>
-            </button>
-            <button
-              onClick={() => update(modeKey, "tol_pct")}
-              className={`p-3 rounded-md border text-left ${
-                mode === "tol_pct"
-                  ? "bg-slate-900 border-slate-900 text-white"
-                  : "bg-white border-slate-300 hover:bg-slate-50"
-              }`}
-            >
-              <Percent className="h-4 w-4 mb-1" />
-              <div className="font-medium text-sm">Toleransi %</div>
-              <div className="text-xs opacity-80">±% (untuk QRIS)</div>
-            </button>
-          </div>
-
-          {mode === "tol_rp" && (
-            <div className="mt-3 flex items-center gap-2">
-              <span className="text-sm text-slate-700">±Rp</span>
-              <input
-                type="number"
-                min={0}
-                value={tolRp}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10);
-                  if (!isNaN(v) && v >= 0) update(tolRpKey, v);
-                }}
-                className="input-base w-32"
-              />
-              <span className="text-xs text-slate-500">
-                Misal 1.000 → terima nominal selisih max Rp 1.000
-              </span>
-            </div>
-          )}
-          {mode === "tol_pct" && (
-            <div className="mt-3 flex items-center gap-2">
-              <span className="text-sm text-slate-700">±</span>
-              <input
-                type="number"
-                min={0}
-                max={100}
-                step="0.1"
-                value={tolPct}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  if (!isNaN(v) && v >= 0 && v <= 100) update(tolPctKey, v);
-                }}
-                className="input-base w-24"
-              />
-              <span className="text-sm text-slate-700">%</span>
-              <span className="text-xs text-slate-500">
-                Misal 0.7 → QRIS biasanya potong 0.7%
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
-    );
+  async function softDelete(rule: MatchRulePreset) {
+    if (rule.is_default) {
+      setFeedback({
+        type: "error",
+        message: "Aturan default tidak bisa dihapus. Edit saja kalau mau ubah.",
+      });
+      return;
+    }
+    if (!confirm(`Hapus aturan "${rule.name}"? Sesi yang sudah dipakai tetap aman.`)) return;
+    setFeedback(null);
+    startTransition(async () => {
+      const supabase = createClient();
+      const { error } = await supabase
+        .from("match_rules")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("id", rule.id);
+      if (error) {
+        setFeedback({ type: "error", message: error.message });
+        return;
+      }
+      setFeedback({ type: "success", message: `"${rule.name}" dihapus.` });
+      router.refresh();
+    });
   }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Aturan Matching</h1>
+        <h1 className="text-2xl font-semibold text-slate-900 flex items-center gap-2">
+          <Settings className="h-6 w-6 text-slate-600" />
+          Aturan Matching
+        </h1>
         <p className="mt-1 text-sm text-slate-600">
-          Atur cara sistem mencocokkan input Anda dengan transaksi di mutasi bank.
-          Bisa diatur beda antara kredit dan debet.
+          Buat preset aturan yang bisa Anda pakai saat cek mutasi. Misal &quot;QRIS&quot;
+          (toleransi % karena fee), &quot;EDC Settle&quot; (forward 1-2 hari), &quot;Manual&quot;
+          (exact match).
         </p>
       </div>
 
-      <JenisSection jenis="kredit" />
-      <JenisSection jenis="debet" />
-
-      {/* Highlight color setting */}
-      <div className="card p-5">
-        <div className="flex items-center gap-2 mb-3">
-          <Palette className="h-5 w-5 text-slate-600" />
-          <h2 className="text-lg font-semibold text-slate-900">Tampilan Highlight</h2>
+      {feedback && (
+        <div
+          className={`card p-3 text-sm flex items-start gap-2 ${
+            feedback.type === "success"
+              ? "border-green-200 bg-green-50 text-green-800"
+              : "border-red-200 bg-red-50 text-red-800"
+          }`}
+        >
+          {feedback.type === "success" ? (
+            <CheckCircle2 className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          ) : (
+            <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          )}
+          <span>{feedback.message}</span>
         </div>
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.debet_highlight_same_color}
-            onChange={(e) => update("debet_highlight_same_color", e.target.checked)}
-            className="mt-1"
-          />
+      )}
+
+      {!editing && (
+        <button onClick={startNew} className="btn-primary text-sm" disabled={pending}>
+          <Plus className="h-4 w-4" /> Tambah Aturan Baru
+        </button>
+      )}
+
+      {editing && (
+        <div className="card p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="font-medium text-slate-900">
+              {editing.id ? "Edit Aturan" : "Aturan Baru"}
+            </h3>
+            <button
+              onClick={cancel}
+              className="text-slate-400 hover:text-slate-700"
+              disabled={pending}
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
           <div>
-            <div className="text-sm font-medium text-slate-900">
-              Pakai warna outlet yang sama untuk kredit & debet
+            <label className="text-xs font-medium text-slate-700">Nama Aturan</label>
+            <input
+              type="text"
+              value={editing.name}
+              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+              placeholder="Misal: QRIS Lippo, EDC BCA, Manual Transfer"
+              className="input mt-1"
+              disabled={pending}
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-slate-700">Jenis</label>
+            <select
+              value={editing.jenis}
+              onChange={(e) =>
+                setEditing({ ...editing, jenis: e.target.value as RuleForm["jenis"] })
+              }
+              className="input mt-1"
+              disabled={pending}
+            >
+              <option value="kredit">Kredit (transaksi masuk)</option>
+              <option value="debet">Debet (transaksi keluar)</option>
+              <option value="both">Keduanya (kredit + debet)</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-slate-700">
+                Lookback (hari ke belakang)
+              </label>
+              <input
+                type="number"
+                min="0"
+                max="90"
+                value={editing.lookback_days}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    lookback_days: parseInt(e.target.value, 10) || 0,
+                  })
+                }
+                className="input mt-1"
+                disabled={pending}
+              />
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                Tx ditemukan kalau ≤ N hari sebelum tgl input
+              </p>
             </div>
-            <div className="text-xs text-slate-500 mt-0.5">
-              Centang: kredit & debet pakai warna outlet sama.
-              Uncheck: debet pakai warna terpisah (akan diatur per-outlet di Phase berikutnya).
+            <div>
+              <label className="text-xs font-medium text-slate-700">
+                Forward (hari ke depan)
+              </label>
+              <input
+                type="number"
+                min="0"
+                max="90"
+                value={editing.forward_window_days}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    forward_window_days: parseInt(e.target.value, 10) || 0,
+                  })
+                }
+                className="input mt-1"
+                disabled={pending}
+              />
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                Untuk QRIS/EDC yang settle besoknya — bisa &gt; 0
+              </p>
             </div>
           </div>
-        </label>
-      </div>
 
-      {/* Save bar (sticky at bottom) */}
-      <div className="sticky bottom-4 flex justify-end">
-        <div className="card p-3 flex items-center gap-3 shadow-md">
-          {error && (
-            <span className="text-sm text-red-700">{error}</span>
+          <div>
+            <label className="text-xs font-medium text-slate-700">Mode Match</label>
+            <div className="grid grid-cols-3 gap-2 mt-1">
+              <ModeCard
+                label="Exact"
+                desc="Nominal harus persis"
+                active={editing.match_mode === "exact"}
+                onClick={() => setEditing({ ...editing, match_mode: "exact" })}
+              />
+              <ModeCard
+                label="Tol Rp"
+                desc="Toleransi ± Rp X"
+                active={editing.match_mode === "tol_rp"}
+                onClick={() => setEditing({ ...editing, match_mode: "tol_rp" })}
+              />
+              <ModeCard
+                label="Tol %"
+                desc="Toleransi ± Y%"
+                active={editing.match_mode === "tol_pct"}
+                onClick={() => setEditing({ ...editing, match_mode: "tol_pct" })}
+              />
+            </div>
+          </div>
+
+          {editing.match_mode === "tol_rp" && (
+            <div>
+              <label className="text-xs font-medium text-slate-700">Toleransi Rupiah</label>
+              <input
+                type="number"
+                min="0"
+                value={editing.tolerance_rp}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    tolerance_rp: parseInt(e.target.value, 10) || 0,
+                  })
+                }
+                className="input mt-1"
+                disabled={pending}
+              />
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                Tx cocok kalau selisih ≤ Rp {formatRupiah(editing.tolerance_rp)} (mis. fee admin)
+              </p>
+            </div>
           )}
-          {success && (
-            <span className="text-sm text-green-700">Tersimpan</span>
+
+          {editing.match_mode === "tol_pct" && (
+            <div>
+              <label className="text-xs font-medium text-slate-700">Toleransi Persen</label>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.1"
+                value={editing.tolerance_pct}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    tolerance_pct: parseFloat(e.target.value) || 0,
+                  })
+                }
+                className="input mt-1"
+                disabled={pending}
+              />
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                Tx cocok kalau selisih ≤ {editing.tolerance_pct}% (mis. QRIS yang potong %)
+              </p>
+            </div>
           )}
-          <button onClick={handleSave} disabled={saving} className="btn-primary">
-            <Save className="h-4 w-4" />
-            {saving ? "Menyimpan..." : "Simpan Perubahan"}
-          </button>
+
+          <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+            <button
+              onClick={cancel}
+              className="btn-secondary text-sm flex-1"
+              disabled={pending}
+            >
+              Batal
+            </button>
+            <button onClick={save} className="btn-primary text-sm flex-1" disabled={pending}>
+              {pending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Menyimpan...
+                </>
+              ) : (
+                "Simpan Aturan"
+              )}
+            </button>
+          </div>
         </div>
+      )}
+
+      <div className="card overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50">
+          <h2 className="font-medium text-slate-900">Aturan Tersimpan ({initialRules.length})</h2>
+        </div>
+        {initialRules.length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-500">
+            Belum ada aturan. Klik &quot;Tambah Aturan Baru&quot; untuk mulai.
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50/50 border-b border-slate-200">
+              <tr>
+                <th className="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">
+                  Nama
+                </th>
+                <th className="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">
+                  Jenis
+                </th>
+                <th className="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">
+                  Aturan
+                </th>
+                <th className="px-4 py-2 text-right text-xs font-semibold uppercase text-slate-500">
+                  Aksi
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200">
+              {initialRules.map((r) => (
+                <tr key={r.id}>
+                  <td className="px-4 py-2 text-slate-900">
+                    <div className="flex items-center gap-1.5">
+                      {r.is_default && (
+                        <Star
+                          className="h-3.5 w-3.5 text-amber-500 fill-amber-500"
+                          aria-label="Default"
+                        />
+                      )}
+                      <span className="font-medium">{r.name}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-2 text-xs">
+                    {r.jenis === "kredit" && (
+                      <span className="text-green-700">Kredit</span>
+                    )}
+                    {r.jenis === "debet" && <span className="text-red-700">Debet</span>}
+                    {r.jenis === "both" && <span className="text-slate-700">Keduanya</span>}
+                  </td>
+                  <td className="px-4 py-2 text-xs text-slate-600">
+                    Lookback {r.lookback_days}h, Forward {r.forward_window_days}h,{" "}
+                    {r.match_mode === "exact" && "Exact"}
+                    {r.match_mode === "tol_rp" && (
+                      <>±Rp {formatRupiah(r.tolerance_rp)}</>
+                    )}
+                    {r.match_mode === "tol_pct" && <>±{Number(r.tolerance_pct)}%</>}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        onClick={() => startEdit(r)}
+                        className="text-xs text-slate-700 hover:text-slate-900 inline-flex items-center gap-1"
+                        disabled={pending}
+                      >
+                        <Pencil className="h-3.5 w-3.5" /> Edit
+                      </button>
+                      {!r.is_default && (
+                        <button
+                          onClick={() => softDelete(r)}
+                          className="text-xs text-red-600 hover:text-red-700 inline-flex items-center gap-1"
+                          disabled={pending}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Hapus
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
+  );
+}
+
+function ModeCard({
+  label,
+  desc,
+  active,
+  onClick,
+}: {
+  label: string;
+  desc: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`text-left p-2 rounded border ${
+        active
+          ? "border-slate-900 bg-slate-50"
+          : "border-slate-200 bg-white hover:border-slate-400"
+      }`}
+    >
+      <div className="text-xs font-medium text-slate-900">{label}</div>
+      <div className="text-[10px] text-slate-500 mt-0.5">{desc}</div>
+    </button>
   );
 }
