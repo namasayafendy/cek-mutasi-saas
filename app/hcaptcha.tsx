@@ -1,7 +1,8 @@
 "use client";
 
-// Wrapper hCaptcha widget — load script + render widget + return token via callback.
-// Tidak pakai @hcaptcha/react-hcaptcha package supaya tidak nambah dependency.
+// Wrapper hCaptcha widget — pakai onload callback (cara yang benar untuk
+// render=explicit). Tanpa ini, ada warning "should not render before js api
+// is fully loaded" dan widget kadang tidak muncul.
 
 import { useEffect, useRef, useState } from "react";
 
@@ -13,6 +14,7 @@ declare global {
       execute: (widgetId?: string) => void;
       remove?: (widgetId: string) => void;
     };
+    __hcaptchaOnLoad?: () => void;
   }
 }
 
@@ -26,22 +28,28 @@ type HCaptchaRenderOptions = {
 };
 
 const SITE_KEY = process.env.NEXT_PUBLIC_HCAPTCHA_SITE_KEY ?? "";
-const SCRIPT_URL = "https://js.hcaptcha.com/1/api.js?render=explicit";
 const SCRIPT_ID = "hcaptcha-script";
+const ONLOAD_NAME = "__hcaptchaOnLoad";
 
 let scriptPromise: Promise<void> | null = null;
 
 function loadHcaptchaScript(): Promise<void> {
   if (typeof window === "undefined") return Promise.resolve();
-  if (window.hcaptcha) return Promise.resolve();
+  // Sudah loaded sebelumnya
+  if (window.hcaptcha?.render) return Promise.resolve();
   if (scriptPromise) return scriptPromise;
 
   scriptPromise = new Promise<void>((resolve, reject) => {
+    // Set callback global SEBELUM script di-append
+    window[ONLOAD_NAME as keyof Window] = (() => {
+      resolve();
+    }) as never;
+
     const existing = document.getElementById(SCRIPT_ID);
     if (existing) {
-      // Wait for it
+      // Sudah ada script tag, tunggu API ready
       const check = () => {
-        if (window.hcaptcha) resolve();
+        if (window.hcaptcha?.render) resolve();
         else setTimeout(check, 100);
       };
       check();
@@ -49,16 +57,9 @@ function loadHcaptchaScript(): Promise<void> {
     }
     const script = document.createElement("script");
     script.id = SCRIPT_ID;
-    script.src = SCRIPT_URL;
+    script.src = `https://js.hcaptcha.com/1/api.js?render=explicit&onload=${ONLOAD_NAME}`;
     script.async = true;
     script.defer = true;
-    script.onload = () => {
-      const wait = () => {
-        if (window.hcaptcha) resolve();
-        else setTimeout(wait, 50);
-      };
-      wait();
-    };
     script.onerror = () => reject(new Error("Failed to load hCaptcha script"));
     document.head.appendChild(script);
   });
@@ -84,7 +85,7 @@ export function HCaptcha({
     let cancelled = false;
     loadHcaptchaScript()
       .then(() => {
-        if (cancelled || !containerRef.current || !window.hcaptcha) return;
+        if (cancelled || !containerRef.current || !window.hcaptcha?.render) return;
         if (widgetIdRef.current) return; // already rendered
         try {
           const id = window.hcaptcha.render(containerRef.current, {
@@ -121,7 +122,6 @@ export function HCaptcha({
         widgetIdRef.current = null;
       }
     };
-    // onVerify / onExpire stable via useCallback di parent
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -133,7 +133,7 @@ export function HCaptcha({
     );
   }
 
-  return <div ref={containerRef} className="flex justify-center" />;
+  return <div ref={containerRef} className="flex justify-center min-h-[78px]" />;
 }
 
 /**
