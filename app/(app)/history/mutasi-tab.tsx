@@ -2,8 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowDown,
-  ArrowUp,
   CheckCircle2,
   Filter,
   Loader2,
@@ -16,11 +14,11 @@ import {
   TrendingDown,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { formatRupiah, formatDateID, parseDateISO, toDateISO, formatDateLong } from "@/lib/format";
+import { formatRupiah, formatDateID, parseDateISO, toDateISO } from "@/lib/format";
 import { TransactionDetailModal } from "./transaction-detail-modal";
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
-type BankLite = { id: string; kode: string; label: string | null; is_active: boolean };
+type BankLite = { id: string; kode: string; label: string | null; is_active?: boolean };
 
 type MutasiRow = {
   id: string;
@@ -54,7 +52,6 @@ type BankCardStats = {
   bankId: string;
   totalKredit: number;
   totalDebet: number;
-  saldoAkhir: number | null; // balance terakhir dari tx terbaru
   txCount: number;
   lastTxDate: string | null;
 };
@@ -124,10 +121,9 @@ export default function MutasiTab({
 
       const { data, error } = await supabase
         .from("parsed_transactions")
-        .select("bank_id, nominal_kredit, nominal_debet, saldo, tanggal, jam")
+        .select("bank_id, nominal_kredit, nominal_debet, tanggal")
         .gte("tanggal", toDateISO(yearAgo))
         .order("tanggal", { ascending: false })
-        .order("jam", { ascending: false, nullsFirst: false })
         .limit(50000);
 
       if (cancelled) return;
@@ -142,7 +138,6 @@ export default function MutasiTab({
           bankId: b.id,
           totalKredit: 0,
           totalDebet: 0,
-          saldoAkhir: null,
           txCount: 0,
           lastTxDate: null,
         });
@@ -156,9 +151,7 @@ export default function MutasiTab({
         s.totalKredit += r.nominal_kredit;
         s.totalDebet += r.nominal_debet;
         s.txCount += 1;
-        // Saldo akhir: ambil dari tx pertama (most recent karena sudah di-sort desc)
-        if (s.saldoAkhir === null && r.saldo !== null) {
-          s.saldoAkhir = r.saldo;
+        if (s.lastTxDate === null) {
           s.lastTxDate = r.tanggal;
         }
       }
@@ -413,7 +406,6 @@ export default function MutasiTab({
         </div>
       )}
 
-      {/* Tabel mutasi */}
       <div className="card overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
           <h2 className="font-medium text-slate-900">
@@ -544,7 +536,6 @@ export default function MutasiTab({
         )}
       </div>
 
-      {/* Popup detail transaksi */}
       {selectedTx && (
         <TransactionDetailModal
           tx={selectedTx}
@@ -582,7 +573,6 @@ function BankCard({
 }) {
   const totalKredit = stats?.totalKredit ?? 0;
   const totalDebet = stats?.totalDebet ?? 0;
-  const saldoAkhir = stats?.saldoAkhir ?? null;
   const txCount = stats?.txCount ?? 0;
 
   return (
@@ -597,13 +587,13 @@ function BankCard({
             <div className="text-[10px] text-slate-500 uppercase">{bank.kode}</div>
           </div>
         </div>
-        {bank.is_active ? (
-          <span className="inline-flex items-center gap-0.5 rounded-full bg-green-50 text-green-700 text-[10px] px-1.5 py-0.5">
-            ON
-          </span>
-        ) : (
+        {bank.is_active === false ? (
           <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] px-1.5 py-0.5">
             OFF
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-0.5 rounded-full bg-green-50 text-green-700 text-[10px] px-1.5 py-0.5">
+            ON
           </span>
         )}
       </div>
@@ -621,14 +611,6 @@ function BankCard({
           </span>
           <span className="font-mono text-red-700">Rp {formatRupiah(totalDebet)}</span>
         </div>
-        {saldoAkhir !== null && (
-          <div className="flex items-center justify-between pt-1.5 border-t border-slate-100">
-            <span className="text-xs text-slate-500">Saldo terakhir</span>
-            <span className="font-mono font-semibold text-slate-900">
-              Rp {formatRupiah(saldoAkhir)}
-            </span>
-          </div>
-        )}
       </div>
 
       <button
