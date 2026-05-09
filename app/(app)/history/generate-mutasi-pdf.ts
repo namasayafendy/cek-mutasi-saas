@@ -17,6 +17,7 @@ import {
   RED,
   BRAND_GREEN,
   BRAND_DARK,
+  type RgbColor,
 } from "@/lib/pdf/builder";
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
@@ -140,7 +141,7 @@ export async function generateMutasiPdf(args: {
   const cardW = (PAGE_W - 2 * MARGIN_X - 3 * 8) / 4;
   const cardH = 50;
   const cardY = b.y - cardH;
-  const cards: { label: string; value: string; sub: string; color: ReturnType<typeof TEXT> }[] = [
+  const cards: { label: string; value: string; sub: string; color: RgbColor }[] = [
     {
       label: "Total Tx",
       value: String(rows.length),

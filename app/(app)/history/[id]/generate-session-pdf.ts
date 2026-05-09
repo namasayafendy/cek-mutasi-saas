@@ -20,6 +20,7 @@ import {
   BLUE,
   BRAND_GREEN,
   BRAND_DARK,
+  type RgbColor,
 } from "@/lib/pdf/builder";
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
@@ -66,7 +67,7 @@ export type MatchedTxRow = {
 
 function inputStatusLabel(s: InputRow["match_status"]): {
   text: string;
-  color: ReturnType<typeof TEXT>;
+  color: RgbColor;
 } {
   if (s === "matched") return { text: "Match", color: GREEN };
   if (s === "manual_claimed") return { text: "Manual claim", color: BLUE };
@@ -155,7 +156,7 @@ export async function generateSessionPdf(args: {
   const cardW = (PAGE_W - 2 * MARGIN_X - 3 * 8) / 4;
   const cardH = 50;
   const cardY = b.y - cardH;
-  const cards: { label: string; value: string; sub: string; color: ReturnType<typeof TEXT> }[] = [
+  const cards: { label: string; value: string; sub: string; color: RgbColor }[] = [
     {
       label: "Total Input",
       value: String(inputs.length),

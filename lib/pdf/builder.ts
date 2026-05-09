@@ -3,6 +3,8 @@
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 
+export type RgbColor = ReturnType<typeof rgb>;
+
 export const PAGE_W = 595;
 export const PAGE_H = 842;
 export const MARGIN_X = 40;
@@ -63,16 +65,16 @@ export class PdfBuilder {
     });
   }
 
-  text(s: string, x: number, y: number, size: number, font: PDFFont, color = TEXT) {
+  text(s: string, x: number, y: number, size: number, font: PDFFont, color: RgbColor = TEXT) {
     this.page.drawText(s, { x, y, size, font, color });
   }
 
-  textRight(s: string, xRight: number, y: number, size: number, font: PDFFont, color = TEXT) {
+  textRight(s: string, xRight: number, y: number, size: number, font: PDFFont, color: RgbColor = TEXT) {
     const w = font.widthOfTextAtSize(s, size);
     this.page.drawText(s, { x: xRight - w, y, size, font, color });
   }
 
-  rect(x: number, y: number, w: number, h: number, fill: ReturnType<typeof rgb>) {
+  rect(x: number, y: number, w: number, h: number, fill: RgbColor) {
     this.page.drawRectangle({ x, y, width: w, height: h, color: fill });
   }
 
@@ -81,7 +83,7 @@ export class PdfBuilder {
     y: number,
     w: number,
     h: number,
-    color: ReturnType<typeof rgb>,
+    color: RgbColor,
     thickness = 0.5,
   ) {
     this.page.drawRectangle({
@@ -94,7 +96,7 @@ export class PdfBuilder {
     });
   }
 
-  hLine(x1: number, x2: number, y: number, color = BORDER) {
+  hLine(x1: number, x2: number, y: number, color: RgbColor = BORDER) {
     this.page.drawLine({
       start: { x: x1, y },
       end: { x: x2, y },
