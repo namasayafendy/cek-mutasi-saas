@@ -393,6 +393,12 @@ subscription_invoices
 
 ## 7. Open Questions / Future Considerations
 
+**Phase 8.7 — Sisa security hardening (post-launch)**:
+- **Cron cleanup**: Auto-delete `parsed_transactions` >12 bulan + `audit_logs` >90 hari pakai Supabase Edge Function (cron). Plus tombol "Hapus seluruh data saya" di /akun (right to deletion, UU PDP).
+- **2FA email OTP**: Enable opt-in di /akun → setiap login, setelah password verify, kirim 6-digit code ke email, verify, baru completed. Trust device cookie 30 hari.
+- **Monitoring dashboard di /superadmin**: DB size, top power users, churn indicators (account active tapi 30 hari tidak dipakai). Mostly cosmetic — Vercel + Supabase dashboard sudah cover yang core.
+- **Sentry error tracking** (gratis di hobby tier).
+
 **Belum diputuskan, simpan untuk fase setelah MVP**:
 
 - WhatsApp reminder proaktif ke customer (butuh customer database / recurring billing rules per customer)

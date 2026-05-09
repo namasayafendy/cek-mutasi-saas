@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAccountContext } from "@/lib/supabase/context";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchUserEmails } from "@/lib/supabase/user-emails";
 import ActivityClient from "./activity-client";
 
 type LogRow = {
@@ -50,12 +51,9 @@ export default async function ActivityPage() {
   const banks = (banksRes.data ?? []) as BankLite[];
   const outlets = (outletsRes.data ?? []) as OutletLite[];
 
-  // Lookup email for each member
-  const userEmails = new Map<string, string>();
-  for (const m of members) {
-    const { data: userRes } = await admin.auth.admin.getUserById(m.user_id);
-    if (userRes?.user?.email) userEmails.set(m.user_id, userRes.user.email);
-  }
+  // Phase 8.6: batch lookup email (avoid N+1)
+  const memberUserIds = members.map((m) => m.user_id);
+  const userEmails = await fetchUserEmails(admin, memberUserIds);
 
   return (
     <ActivityClient

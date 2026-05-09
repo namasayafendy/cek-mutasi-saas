@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchUserEmails } from "@/lib/supabase/user-emails";
 import AccountsClient from "./accounts-client";
 
 type AccountRow = {
@@ -72,23 +73,22 @@ export default async function AccountsListPage() {
     }
   }
 
-  // Lookup owner emails (in batch via getUserById)
-  const ownerEmails = new Map<string, string>();
-  for (const a of accounts) {
-    const ownerUserId = ownerByAccount.get(a.id) ?? a.owner_user_id;
-    if (ownerUserId) {
-      const { data: ur } = await admin.auth.admin.getUserById(ownerUserId);
-      if (ur?.user?.email) ownerEmails.set(a.id, ur.user.email);
-    }
-  }
+  // Phase 8.6: batch lookup email (avoid N+1 — sebelumnya 1000 sequential calls = timeout)
+  const ownerUserIds = accounts
+    .map((a) => ownerByAccount.get(a.id) ?? a.owner_user_id)
+    .filter((v): v is string => !!v);
+  const emailMap = await fetchUserEmails(admin, ownerUserIds);
 
-  const enriched: EnrichedAccount[] = accounts.map((a) => ({
-    ...a,
-    ownerEmail: ownerEmails.get(a.id) ?? null,
-    staffCount: staffCountByAccount.get(a.id) ?? 0,
-    sessionCount30d: sessionCountByAccount.get(a.id) ?? 0,
-    lastSessionAt: lastSessionByAccount.get(a.id) ?? null,
-  }));
+  const enriched: EnrichedAccount[] = accounts.map((a) => {
+    const ownerUserId = ownerByAccount.get(a.id) ?? a.owner_user_id;
+    return {
+      ...a,
+      ownerEmail: ownerUserId ? emailMap.get(ownerUserId) ?? null : null,
+      staffCount: staffCountByAccount.get(a.id) ?? 0,
+      sessionCount30d: sessionCountByAccount.get(a.id) ?? 0,
+      lastSessionAt: lastSessionByAccount.get(a.id) ?? null,
+    };
+  });
 
   return <AccountsClient accounts={enriched} />;
 }

@@ -11,6 +11,56 @@ function isPublicPath(path: string): boolean {
   return false;
 }
 
+/**
+ * Phase 8.6: security headers — CSP + HSTS + X-Frame-Options dll.
+ * CSP-nya cukup permissive untuk pdfjs (worker blob), Tailwind (inline style),
+ * Supabase (connect-src wss/https), Google Fonts dll.
+ */
+function applySecurityHeaders(res: NextResponse) {
+  // Content-Security-Policy
+  const csp = [
+    "default-src 'self'",
+    // Script: Next.js inline + jsdelivr (pdfjs worker) + hCaptcha
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://*.hcaptcha.com https://hcaptcha.com",
+    // Style: Tailwind inline + hCaptcha
+    "style-src 'self' 'unsafe-inline' https://*.hcaptcha.com https://hcaptcha.com",
+    // Image: data + blob untuk PDF render
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    // Supabase WebSocket + REST + Auth + hCaptcha API
+    "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://*.hcaptcha.com https://hcaptcha.com",
+    // pdfjs Web Worker pakai blob URL
+    "worker-src 'self' blob:",
+    // hCaptcha widget render via iframe
+    "frame-src https://*.hcaptcha.com https://hcaptcha.com",
+    "object-src 'none'",
+    // Form action: only same origin
+    "form-action 'self'",
+    // base-uri restrict
+    "base-uri 'self'",
+    // Prevent clickjacking via frame-ancestors
+    "frame-ancestors 'none'",
+  ].join("; ");
+
+  res.headers.set("Content-Security-Policy", csp);
+  // Klasik clickjacking protection (legacy browser fallback)
+  res.headers.set("X-Frame-Options", "DENY");
+  // Stop MIME sniffing
+  res.headers.set("X-Content-Type-Options", "nosniff");
+  // Referrer minimal supaya tidak bocor URL ke 3rd-party
+  res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  // Strict transport security: force HTTPS for 6 bulan
+  res.headers.set(
+    "Strict-Transport-Security",
+    "max-age=15552000; includeSubDomains",
+  );
+  // Permission policy: nonaktifkan akses sensor yang tidak dipakai
+  res.headers.set(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=()",
+  );
+}
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
@@ -45,7 +95,9 @@ export async function updateSession(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("next", path);
-    return NextResponse.redirect(url);
+    const redirectRes = NextResponse.redirect(url);
+    applySecurityHeaders(redirectRes);
+    return redirectRes;
   }
 
   // Logged in user trying to access /login or /daftar → redirect to dashboard
@@ -53,8 +105,11 @@ export async function updateSession(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     url.searchParams.delete("next");
-    return NextResponse.redirect(url);
+    const redirectRes = NextResponse.redirect(url);
+    applySecurityHeaders(redirectRes);
+    return redirectRes;
   }
 
+  applySecurityHeaders(supabaseResponse);
   return supabaseResponse;
 }

@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { HCaptcha, resetHcaptcha } from "../hcaptcha";
 
 export function LoginForm() {
   const router = useRouter();
@@ -12,19 +14,38 @@ export function LoginForm() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleVerify = useCallback((token: string) => {
+    setCaptchaToken(token);
+  }, []);
+  const handleExpire = useCallback(() => {
+    setCaptchaToken(null);
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!captchaToken) {
+      setError("Selesaikan CAPTCHA dulu.");
+      return;
+    }
     setLoading(true);
 
     const supabase = createClient();
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+      options: { captchaToken },
+    });
     if (error) {
       setError(error.message);
       setLoading(false);
+      // Reset CAPTCHA setelah error — token sudah ke-consume
+      resetHcaptcha();
+      setCaptchaToken(null);
       return;
     }
     router.replace(next);
@@ -68,13 +89,26 @@ export function LoginForm() {
             className="input-base mt-1"
             disabled={loading}
           />
+          <div className="mt-1 text-right">
+            <Link
+              href="/lupa-password"
+              className="text-xs text-slate-600 hover:text-slate-900"
+            >
+              Lupa password?
+            </Link>
+          </div>
         </div>
+        <HCaptcha onVerify={handleVerify} onExpire={handleExpire} />
         {error && (
           <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
             {error}
           </div>
         )}
-        <button type="submit" disabled={loading} className="btn-primary w-full">
+        <button
+          type="submit"
+          disabled={loading || !captchaToken}
+          className="btn-primary w-full"
+        >
           {loading ? "Memproses..." : "Login"}
         </button>
       </form>

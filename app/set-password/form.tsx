@@ -68,6 +68,9 @@ export default function SetPasswordForm() {
         .eq("user_id", userData.user.id)
         .is("joined_at", null);
     }
+    // Phase 8.6: invalidate semua other sessions (other devices) — keep current session
+    // Penting karena setelah ganti password, session lama TIDAK auto-expire
+    await supabase.auth.signOut({ scope: "others" });
     setSuccess(true);
     setLoading(false);
     setTimeout(() => router.push("/dashboard"), 1500);

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAccountContext } from "@/lib/supabase/context";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchUserEmails } from "@/lib/supabase/user-emails";
 import StaffClient from "./staff-client";
 
 type StaffRow = {
@@ -31,12 +32,15 @@ export default async function StaffPage() {
 
   const rows = (members ?? []) as StaffRow[];
 
-  // Lookup emails for each user
-  const enriched: StaffWithEmail[] = [];
-  for (const m of rows) {
-    const { data: userRes } = await admin.auth.admin.getUserById(m.user_id);
-    enriched.push({ ...m, email: userRes?.user?.email ?? null });
-  }
+  // Phase 8.6: batch lookup email (avoid N+1)
+  const emailMap = await fetchUserEmails(
+    admin,
+    rows.map((r) => r.user_id),
+  );
+  const enriched: StaffWithEmail[] = rows.map((m) => ({
+    ...m,
+    email: emailMap.get(m.user_id) ?? null,
+  }));
 
   return (
     <StaffClient

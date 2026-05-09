@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchUserEmails } from "@/lib/supabase/user-emails";
 import AccountDetailClient from "./detail-client";
 import { ChevronLeft } from "lucide-react";
 
@@ -14,6 +15,7 @@ type AccountRow = {
   brand_name: string | null;
   support_email: string | null;
   support_wa: string | null;
+  staff_limit?: number | null;
   owner_user_id: string;
   created_at: string;
 };
@@ -115,7 +117,7 @@ export default async function AccountDetailPage({
     manualClaims: manualCount.count ?? 0,
   };
 
-  // Lookup emails for members & session users
+  // Phase 8.6: batch lookup email (avoid N+1)
   const userIds = Array.from(
     new Set([
       ...members.map((m) => m.user_id),
@@ -123,11 +125,8 @@ export default async function AccountDetailPage({
       ...auditLogs.map((l) => l.user_id).filter((v): v is string => !!v),
     ]),
   );
-  const userEmails: Record<string, string> = {};
-  for (const uid of userIds) {
-    const { data: ur } = await admin.auth.admin.getUserById(uid);
-    if (ur?.user?.email) userEmails[uid] = ur.user.email;
-  }
+  const emailMap = await fetchUserEmails(admin, userIds);
+  const userEmails: Record<string, string> = Object.fromEntries(emailMap);
 
   return (
     <div className="space-y-6">

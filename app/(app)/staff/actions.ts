@@ -7,6 +7,7 @@ import { revalidatePath } from "next/cache";
 import { getAccountContext } from "@/lib/supabase/context";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { findUserByEmail } from "@/lib/supabase/user-emails";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -51,13 +52,8 @@ export async function inviteStaff(email: string): Promise<ActionResult> {
   }
 
   // 1. Cek apakah email sudah ada di auth.users
-  const { data: usersList, error: listErr } = await admin.auth.admin.listUsers();
-  if (listErr) {
-    return { ok: false, error: `Gagal cek user: ${listErr.message}` };
-  }
-  const existingUser = usersList?.users?.find(
-    (u) => u.email?.toLowerCase() === trimmed,
-  );
+  // Phase 8.6: pakai findUserByEmail paginated — fix bug listUsers default cuma return 50
+  const existingUser = await findUserByEmail(admin, trimmed);
 
   if (existingUser) {
     // Cek apakah user ini sudah jadi member di account

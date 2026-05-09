@@ -1,0 +1,52 @@
+# Dependabot config — auto-update package supaya CVE security fix cepet masuk.
+# Phase 8.6: terutama untuk pdfjs-dist (security advisories pernah ada CVE)
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Asia/Jakarta"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    # Group related deps supaya tidak terlalu banyak PR
+    groups:
+      pdfjs-and-pdf-lib:
+        patterns:
+          - "pdfjs-dist"
+          - "pdf-lib"
+      supabase:
+        patterns:
+          - "@supabase/*"
+      next-react:
+        patterns:
+          - "next"
+          - "react"
+          - "react-dom"
+          - "@types/react*"
+          - "eslint-config-next"
+      tailwind:
+        patterns:
+          - "tailwindcss"
+          - "@tailwindcss/*"
+      lucide:
+        patterns:
+          - "lucide-react"
+    # Ignore major version bumps (manual review needed)
+    ignore:
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+
+  # GitHub Actions dependencies (kalau nanti ada CI workflow)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"

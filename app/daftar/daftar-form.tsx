@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
+import { HCaptcha, resetHcaptcha } from "../hcaptcha";
 
 export function DaftarForm() {
   const router = useRouter();
@@ -12,9 +13,13 @@ export function DaftarForm() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [agree, setAgree] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+
+  const handleVerify = useCallback((token: string) => setCaptchaToken(token), []);
+  const handleExpire = useCallback(() => setCaptchaToken(null), []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -33,6 +38,10 @@ export function DaftarForm() {
       setError("Konfirmasi password tidak sama");
       return;
     }
+    if (!captchaToken) {
+      setError("Selesaikan CAPTCHA dulu.");
+      return;
+    }
 
     setLoading(true);
 
@@ -43,18 +52,20 @@ export function DaftarForm() {
       options: {
         data: { brand_name: namaBisnis },
         emailRedirectTo: `${window.location.origin}/login`,
+        captchaToken,
       },
     });
 
     if (error) {
       setError(error.message);
       setLoading(false);
+      resetHcaptcha();
+      setCaptchaToken(null);
       return;
     }
 
     // Trigger auto-bikin account + team_member + settings via Postgres trigger
     if (data.user && !data.session) {
-      // Email confirmation required
       setInfo(
         `Akun dibuat. Cek email ${email} untuk verifikasi sebelum login. ` +
           `Pastikan cek folder spam kalau tidak ketemu.`,
@@ -165,6 +176,7 @@ export function DaftarForm() {
             </Link>
           </label>
         </div>
+        <HCaptcha onVerify={handleVerify} onExpire={handleExpire} />
         {error && (
           <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
             {error}
@@ -175,7 +187,11 @@ export function DaftarForm() {
             {info}
           </div>
         )}
-        <button type="submit" disabled={loading} className="btn-primary w-full">
+        <button
+          type="submit"
+          disabled={loading || !captchaToken}
+          className="btn-primary w-full"
+        >
           {loading ? "Memproses..." : "Daftar — Mulai Trial 7 Hari"}
         </button>
       </form>
