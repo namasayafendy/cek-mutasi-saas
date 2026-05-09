@@ -14,6 +14,7 @@ import {
   Calculator,
   Download,
   Lock,
+  Trash2,
 } from "lucide-react";
 import { getAccountContext } from "@/lib/supabase/context";
 import { PublicHeader } from "@/app/_components/public-header";
@@ -80,9 +81,9 @@ export default async function LandingPage() {
             desc="File mutasi diproses langsung di browser, tidak pernah di-upload ke server."
           />
           <SecurityPoint
-            icon={<FileText className="h-5 w-5" />}
-            title="Hanya hasil yang disimpan"
-            desc="Server kami hanya simpan metadata cocokan untuk fitur history."
+            icon={<Trash2 className="h-5 w-5" />}
+            title="Bisa dihapus kapan saja"
+            desc="Metadata hasil pencocokan bisa Anda hapus dari history kapan saja untuk privacy penuh."
           />
         </div>
       </section>
