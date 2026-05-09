@@ -61,7 +61,7 @@ export default async function HistoryDetailPage({
 
   const supabase = await createClient();
   const [sessionRes, inputsRes, outletsRes, banksRes] = await Promise.all([
-    supabase.from("cek_sessions").select("*").eq("id", id).maybeSingle(),
+    supabase.from("cek_sessions").select("*").eq("id", id).is("deleted_at", null).maybeSingle(),
     supabase
       .from("cek_inputs")
       .select("*")

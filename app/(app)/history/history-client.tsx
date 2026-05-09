@@ -12,11 +12,14 @@ import {
   ListChecks,
   Loader2,
   Printer,
+  Trash2,
 } from "lucide-react";
 import { formatDateLong, parseDateISO, formatRupiah, formatDateID, toDateISO } from "@/lib/format";
 import MutasiTab from "./mutasi-tab";
 import { ManualClaimModal, type UnclaimedTx } from "./manual-claim-modal";
 import { downloadMutasiPdf } from "./generate-mutasi-pdf";
+import { DeleteConfirmModal } from "./delete-confirm-modal";
+import { createClient } from "@/lib/supabase/client";
 
 type SessionRow = {
   id: string;
@@ -144,6 +147,7 @@ export default function HistoryClient({
         <SessionsTab
           sessions={sessions}
           currentUserId={currentUserId}
+          accountId={accountId}
           error={sessionsError}
         />
       )}
@@ -183,12 +187,68 @@ export default function HistoryClient({
 function SessionsTab({
   sessions,
   currentUserId,
+  accountId,
   error,
 }: {
   sessions: SessionRow[];
   currentUserId: string;
+  accountId: string;
   error: string | null;
 }) {
+  const [deleteTarget, setDeleteTarget] = useState<SessionRow | null>(null);
+
+  async function handleDeleteSession(s: SessionRow) {
+    const supabase = createClient();
+    const now = new Date().toISOString();
+
+    // Get all input ids in this session (alive + soft-deleted, both fine).
+    const { data: inputs, error: inputErr } = await supabase
+      .from("cek_inputs")
+      .select("id")
+      .eq("session_id", s.id);
+    if (inputErr) throw inputErr;
+    const inputIds = (inputs ?? []).map((r) => r.id);
+
+    // Soft-delete parsed_transactions claimed by these inputs.
+    if (inputIds.length > 0) {
+      const { error: txErr } = await supabase
+        .from("parsed_transactions")
+        .update({ deleted_at: now })
+        .in("claimed_by_input_id", inputIds)
+        .is("deleted_at", null);
+      if (txErr) throw txErr;
+
+      const { error: ciErr } = await supabase
+        .from("cek_inputs")
+        .update({ deleted_at: now })
+        .in("id", inputIds)
+        .is("deleted_at", null);
+      if (ciErr) throw ciErr;
+    }
+
+    // Soft-delete the session itself.
+    const { error: sesErr } = await supabase
+      .from("cek_sessions")
+      .update({ deleted_at: now })
+      .eq("id", s.id);
+    if (sesErr) throw sesErr;
+
+    await supabase.from("audit_logs").insert({
+      account_id: accountId,
+      user_id: currentUserId,
+      action: "history.session_delete",
+      target_type: "cek_session",
+      target_id: s.id,
+      metadata: {
+        deleted_inputs: inputIds.length,
+        jenis: s.jenis,
+      },
+    });
+
+    setDeleteTarget(null);
+    window.location.reload();
+  }
+
   if (error) {
     return (
       <div className="card p-5 border-red-200 bg-red-50 text-red-800 text-sm">
@@ -288,18 +348,51 @@ function SessionsTab({
                   Rp {formatRupiah(s.total_nominal_matched)}
                 </td>
                 <td className="px-4 py-2 text-right">
-                  <Link
-                    href={`/history/${s.id}`}
-                    className="inline-flex items-center gap-1 text-xs text-slate-700 hover:text-slate-900"
-                  >
-                    <Eye className="h-3.5 w-3.5" /> Detail
-                  </Link>
+                  <div className="inline-flex items-center gap-3">
+                    <Link
+                      href={`/history/${s.id}`}
+                      className="inline-flex items-center gap-1 text-xs text-slate-700 hover:text-slate-900"
+                    >
+                      <Eye className="h-3.5 w-3.5" /> Detail
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTarget(s)}
+                      className="inline-flex items-center gap-1 text-xs text-red-600 hover:text-red-800"
+                      title="Hapus sesi ini (privacy)"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Hapus
+                    </button>
+                  </div>
                 </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      {deleteTarget && (
+        <DeleteConfirmModal
+          title="Hapus Sesi Cek Mutasi"
+          description="Anda akan menghapus sesi ini beserta semua input dan transaksi mutasi yang ke-claim di dalamnya."
+          details={[
+            {
+              label: "Jenis",
+              value: deleteTarget.jenis === "kredit" ? "Kredit" : "Debet",
+            },
+            {
+              label: "Tanggal",
+              value: new Date(deleteTarget.created_at).toLocaleDateString("id-ID"),
+            },
+            { label: "Total input", value: String(deleteTarget.total_input) },
+            {
+              label: "Total nominal",
+              value: `Rp ${formatRupiah(deleteTarget.total_nominal_matched)}`,
+            },
+          ]}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => handleDeleteSession(deleteTarget)}
+        />
+      )}
     </div>
   );
 }

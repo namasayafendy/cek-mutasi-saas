@@ -13,12 +13,14 @@ import {
   TrendingUp,
   TrendingDown,
   Printer,
+  Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { formatRupiah, formatDateID, parseDateISO, toDateISO } from "@/lib/format";
 import { TransactionDetailModal } from "./transaction-detail-modal";
 import { ManualClaimModal, type UnclaimedTx } from "./manual-claim-modal";
 import { downloadMutasiPdf } from "./generate-mutasi-pdf";
+import { DeleteConfirmModal } from "./delete-confirm-modal";
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
 type BankLite = { id: string; kode: string; label: string | null; is_active?: boolean };
@@ -113,6 +115,7 @@ export default function MutasiTab({
   const [selectedTx, setSelectedTx] = useState<MutasiRow | null>(null);
   const [claimingTx, setClaimingTx] = useState<UnclaimedTx | null>(null);
   const [printing, setPrinting] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
 
   const outletMap = useMemo(() => new Map(outlets.map((o) => [o.id, o])), [outlets]);
   const bankMap = useMemo(() => new Map(banks.map((b) => [b.id, b])), [banks]);
@@ -133,6 +136,7 @@ export default function MutasiTab({
       const { data, error } = await supabase
         .from("parsed_transactions")
         .select("bank_id, nominal_kredit, nominal_debet, tanggal")
+        .is("deleted_at", null)
         .gte("tanggal", toDateISO(yearAgo))
         .order("tanggal", { ascending: false })
         .limit(50000);
@@ -191,6 +195,7 @@ export default function MutasiTab({
           "id, bank_id, no_ref, tanggal, jam, nominal_kredit, nominal_debet, nama_pengirim, nama_penerima, deskripsi, saldo, claimed_by_input_id, manual_claim_reason, claimed_at, created_at",
         )
         .eq("bank_id", activeBankId)
+        .is("deleted_at", null)
         .gte("tanggal", filter.from)
         .lte("tanggal", filter.to)
         .order("tanggal", { ascending: true })
@@ -295,6 +300,97 @@ export default function MutasiTab({
     } finally {
       setPrinting(false);
     }
+  }
+
+  async function handleRangeDelete() {
+    setError(null);
+    const supabase = createClient();
+    const now = new Date().toISOString();
+
+    // Soft-delete parsed_transactions in (bank, date range).
+    // Also release any claims and soft-delete the corresponding cek_inputs
+    // & cek_sessions whose inputs are now all deleted, so the privacy promise
+    // ("data hilang") is honored end-to-end.
+    const { data: txList, error: txErr } = await supabase
+      .from("parsed_transactions")
+      .select("id, claimed_by_input_id")
+      .eq("bank_id", activeBankId)
+      .is("deleted_at", null)
+      .gte("tanggal", filter.from)
+      .lte("tanggal", filter.to);
+    if (txErr) throw txErr;
+
+    const txIds = (txList ?? []).map((r) => r.id);
+    const claimedInputIds = Array.from(
+      new Set(
+        (txList ?? [])
+          .map((r) => r.claimed_by_input_id)
+          .filter((v): v is string => !!v),
+      ),
+    );
+
+    if (txIds.length > 0) {
+      const { error: e1 } = await supabase
+        .from("parsed_transactions")
+        .update({ deleted_at: now })
+        .in("id", txIds);
+      if (e1) throw e1;
+    }
+
+    // Cascade: soft-delete cek_inputs that referenced these tx
+    if (claimedInputIds.length > 0) {
+      const { error: e2 } = await supabase
+        .from("cek_inputs")
+        .update({ deleted_at: now })
+        .in("id", claimedInputIds);
+      if (e2) throw e2;
+
+      // Cascade further: soft-delete cek_sessions where ALL inputs are now deleted
+      const { data: inputs } = await supabase
+        .from("cek_inputs")
+        .select("session_id")
+        .in("id", claimedInputIds);
+      const sessionIds = Array.from(
+        new Set((inputs ?? []).map((i) => i.session_id).filter((v): v is string => !!v)),
+      );
+      for (const sid of sessionIds) {
+        const { count: aliveCount } = await supabase
+          .from("cek_inputs")
+          .select("id", { count: "exact", head: true })
+          .eq("session_id", sid)
+          .is("deleted_at", null);
+        if ((aliveCount ?? 0) === 0) {
+          await supabase
+            .from("cek_sessions")
+            .update({ deleted_at: now })
+            .eq("id", sid);
+        }
+      }
+    }
+
+    // Audit log
+    await supabase.from("audit_logs").insert({
+      account_id: accountId,
+      user_id: userId,
+      action: "history.range_delete",
+      target_type: "parsed_transactions",
+      target_id: activeBankId,
+      metadata: {
+        bank_id: activeBankId,
+        from: filter.from,
+        to: filter.to,
+        deleted_tx: txIds.length,
+        cascaded_inputs: claimedInputIds.length,
+      },
+    });
+
+    setShowDelete(false);
+    // Refresh by re-running the effect
+    setRows([]);
+    setBankStats((prev) => prev.map((s) => ({ ...s }))); // trigger refresh
+    setActiveBankId(activeBankId); // re-trigger fetchRows
+    // simplest refresh: navigate-replace via location
+    window.location.reload();
   }
 
   if (banks.length === 0) {
@@ -466,6 +562,16 @@ export default function MutasiTab({
               )}
               Print PDF
             </button>
+            <button
+              type="button"
+              onClick={() => setShowDelete(true)}
+              disabled={loading || rows.length === 0}
+              className="text-xs inline-flex items-center gap-1.5 text-red-700 hover:text-red-900 disabled:opacity-50 disabled:cursor-not-allowed border border-red-200 hover:border-red-300 rounded-md px-2.5 py-1.5"
+              title="Hapus data periode ini (privacy)"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Hapus Data
+            </button>
           </div>
         </div>
         {loading ? (
@@ -617,6 +723,20 @@ export default function MutasiTab({
             });
             setSelectedTx(null);
           }}
+        />
+      )}
+
+      {showDelete && activeBank && (
+        <DeleteConfirmModal
+          title="Hapus Data Mutasi Periode Ini"
+          description={`Anda akan menghapus semua transaksi mutasi ${activeBank.label || activeBank.kode} di periode yang difilter, termasuk data input customer dan sesi yang terkait.`}
+          details={[
+            { label: "Bank", value: activeBank.label || activeBank.kode },
+            { label: "Periode", value: `${filter.from} sd ${filter.to}` },
+            { label: "Jumlah transaksi", value: String(rows.length) },
+          ]}
+          onCancel={() => setShowDelete(false)}
+          onConfirm={handleRangeDelete}
         />
       )}
 

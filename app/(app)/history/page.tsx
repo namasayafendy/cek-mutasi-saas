@@ -51,6 +51,7 @@ export default async function HistoryPage() {
     supabase
       .from("cek_sessions")
       .select("*")
+      .is("deleted_at", null)
       .order("created_at", { ascending: false })
       .limit(100),
     supabase
@@ -59,6 +60,7 @@ export default async function HistoryPage() {
         "id, bank_id, no_ref, tanggal, jam, nominal_kredit, nominal_debet, nama_pengirim, nama_penerima, deskripsi",
       )
       .is("claimed_by_input_id", null)
+      .is("deleted_at", null)
       .gte("tanggal", yearAgoIso)
       .order("tanggal", { ascending: false })
       .limit(500),

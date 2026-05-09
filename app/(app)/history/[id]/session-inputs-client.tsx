@@ -69,6 +69,7 @@ export function SessionInputsClient({
               "id, bank_id, tanggal, jam, nominal_kredit, nominal_debet, nama_pengirim, nama_penerima, deskripsi, claimed_by_input_id, manual_claim_reason",
             )
             .in("claimed_by_input_id", slice)
+            .is("deleted_at", null)
             .order("tanggal", { ascending: true });
           if (error) throw error;
           collected.push(...((data ?? []) as MatchedTxRow[]));
