@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { isSuperadminEmail } from "@/lib/supabase/context";
 import { LogoutButton } from "../(app)/logout-button";
-import { Shield, Users, LayoutDashboard } from "lucide-react";
+import { Shield, Users, LayoutDashboard, Gift } from "lucide-react";
 import { LogoIcon, LogoWordmark } from "@/app/logo";
 
 export default async function SuperadminLayout({
@@ -54,6 +54,12 @@ export default async function SuperadminLayout({
                   className="text-slate-600 hover:text-slate-900 inline-flex items-center gap-1"
                 >
                   <Users className="h-3.5 w-3.5" /> Accounts
+                </Link>
+                <Link
+                  href="/superadmin/referral"
+                  className="text-slate-600 hover:text-slate-900 inline-flex items-center gap-1"
+                >
+                  <Gift className="h-3.5 w-3.5" /> Referral
                 </Link>
                 <Link href="/dashboard" className="text-slate-500 hover:text-slate-700 text-xs">
                   ← Kembali ke aplikasi

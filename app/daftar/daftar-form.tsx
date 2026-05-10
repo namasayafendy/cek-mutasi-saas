@@ -4,13 +4,22 @@ import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
+import { CheckCircle2, Gift, Loader2, AlertCircle } from "lucide-react";
 import { HCaptcha, resetHcaptcha } from "../hcaptcha";
+import { redeemReferralCode, validateReferralCode } from "./actions";
 
 export function DaftarForm() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [referral, setReferral] = useState("");
+  const [referralStatus, setReferralStatus] = useState<
+    | { state: "idle" }
+    | { state: "checking" }
+    | { state: "valid"; rewardLabel: string }
+    | { state: "invalid"; message: string }
+  >({ state: "idle" });
   const [agree, setAgree] = useState(false);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -19,6 +28,21 @@ export function DaftarForm() {
 
   const handleVerify = useCallback((token: string) => setCaptchaToken(token), []);
   const handleExpire = useCallback(() => setCaptchaToken(null), []);
+
+  async function checkReferral() {
+    const code = referral.trim();
+    if (!code) {
+      setReferralStatus({ state: "idle" });
+      return;
+    }
+    setReferralStatus({ state: "checking" });
+    const result = await validateReferralCode(code);
+    if (result.ok) {
+      setReferralStatus({ state: "valid", rewardLabel: result.rewardLabel });
+    } else {
+      setReferralStatus({ state: "invalid", message: result.error });
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -39,6 +63,10 @@ export function DaftarForm() {
     }
     if (!captchaToken) {
       setError("Selesaikan CAPTCHA dulu.");
+      return;
+    }
+    if (referral.trim() && referralStatus.state === "invalid") {
+      setError("Kode referral tidak valid. Hapus atau perbaiki dulu.");
       return;
     }
 
@@ -62,18 +90,53 @@ export function DaftarForm() {
       return;
     }
 
-    // Trigger auto-bikin account + team_member + settings via Postgres trigger.
-    // Owner bisa set brand_name nanti dari menu Akun kalau mau.
+    // Apply referral code (if any) — call server action.
+    // We need account_id which is created by trigger after signup; do it
+    // via the active session if user is auto-confirmed, OR defer for manual
+    // verify via email (we'll redeem on first login).
+    let referralMsg = "";
+    if (referral.trim() && data.user && data.session) {
+      // Auto-confirmed: account row exists, can redeem now
+      // Lookup account_id via team_members
+      const { data: tm } = await supabase
+        .from("team_members")
+        .select("account_id")
+        .eq("user_id", data.user.id)
+        .maybeSingle();
+      if (tm?.account_id) {
+        const r = await redeemReferralCode(referral.trim(), data.user.id, tm.account_id);
+        referralMsg = r.ok ? ` Kode referral diterapkan: ${r.reward}.` : ` (Kode gagal: ${r.error})`;
+      }
+    }
+
     if (data.user && !data.session) {
+      // Email confirmation required. Store referral code in URL param so we
+      // can apply on first login (defer redemption).
+      const referralParam = referral.trim()
+        ? `&referral=${encodeURIComponent(referral.trim())}`
+        : "";
+      // Note: Supabase email link goes to emailRedirectTo. We can't customize it,
+      // so we rely on session cookie. For now, just inform user.
       setInfo(
         `Akun dibuat. Cek email ${email} untuk verifikasi sebelum login. ` +
-          `Pastikan cek folder spam kalau tidak ketemu.`,
+          (referral.trim()
+            ? "Kode referral akan diterapkan saat Anda login pertama kali."
+            : "Pastikan cek folder spam kalau tidak ketemu."),
       );
+      // Stash referral in localStorage so first login can apply it
+      if (referral.trim()) {
+        try {
+          localStorage.setItem("pending_referral", referral.trim());
+        } catch {}
+      }
+      // Make linter happy: referralParam declared but not used (link customization deferred)
+      void referralParam;
       setLoading(false);
       return;
     }
 
     if (data.session) {
+      setInfo(`Akun berhasil dibuat.${referralMsg}`);
       router.replace("/dashboard");
       router.refresh();
       return;
@@ -132,6 +195,56 @@ export function DaftarForm() {
             disabled={loading}
           />
         </div>
+
+        {/* Referral code (optional) */}
+        <div>
+          <label htmlFor="referral" className="text-sm font-medium text-slate-700 flex items-center gap-1.5">
+            <Gift className="h-3.5 w-3.5 text-[#10B981]" />
+            Kode Referral{" "}
+            <span className="text-xs text-slate-500 font-normal">(opsional)</span>
+          </label>
+          <div className="mt-1 flex gap-2">
+            <input
+              id="referral"
+              type="text"
+              value={referral}
+              onChange={(e) => {
+                setReferral(e.target.value.toUpperCase());
+                setReferralStatus({ state: "idle" });
+              }}
+              onBlur={checkReferral}
+              placeholder="Misal: TEMAN2026"
+              className="input-base flex-1 uppercase tracking-wider"
+              disabled={loading}
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              onClick={checkReferral}
+              disabled={loading || !referral.trim() || referralStatus.state === "checking"}
+              className="text-xs bg-white hover:bg-[#FAFAF7] text-[#0F2E1F] border border-slate-200 rounded-md px-3 py-2 font-medium transition-colors disabled:opacity-50"
+            >
+              {referralStatus.state === "checking" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                "Cek"
+              )}
+            </button>
+          </div>
+          {referralStatus.state === "valid" && (
+            <div className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-[#10B981] font-medium">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {referralStatus.rewardLabel}
+            </div>
+          )}
+          {referralStatus.state === "invalid" && (
+            <div className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-red-700">
+              <AlertCircle className="h-3.5 w-3.5" />
+              {referralStatus.message}
+            </div>
+          )}
+        </div>
+
         <div className="flex items-start gap-2">
           <input
             id="agree"
