@@ -98,58 +98,121 @@ export default async function HistoryDetailPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link
-          href="/history"
-          className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900"
-        >
-          <ChevronLeft className="h-4 w-4" /> Kembali ke History
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold text-slate-900 flex items-center gap-2">
-          {session.jenis === "kredit" ? (
-            <ArrowDown className="h-5 w-5 text-green-600" />
-          ) : (
-            <ArrowUp className="h-5 w-5 text-red-600" />
-          )}
-          Cek Mutasi {session.jenis === "kredit" ? "Kredit" : "Debet"}
-        </h1>
-        <p className="mt-1 text-sm text-slate-600">
+      <Link
+        href="/history"
+        className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-[#0F2E1F]"
+      >
+        <ChevronLeft className="h-4 w-4" /> Kembali ke History
+      </Link>
+
+      {/* Hero header — themed gradient by jenis */}
+      <div
+        className={`rounded-2xl p-6 sm:p-7 border ${
+          session.jenis === "kredit"
+            ? "bg-gradient-to-br from-[#10B981]/10 via-white to-[#FAFAF7] border-[#10B981]/20"
+            : "bg-gradient-to-br from-[#0F2E1F]/8 via-white to-[#FAFAF7] border-[#0F2E1F]/15"
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          <div
+            className={`inline-flex items-center justify-center w-12 h-12 rounded-xl shadow-md ${
+              session.jenis === "kredit"
+                ? "bg-gradient-to-br from-[#10B981] to-[#059669] text-white"
+                : "bg-gradient-to-br from-[#1a4530] to-[#0F2E1F] text-white"
+            }`}
+          >
+            {session.jenis === "kredit" ? (
+              <ArrowDown className="h-6 w-6" />
+            ) : (
+              <ArrowUp className="h-6 w-6" />
+            )}
+          </div>
+          <div>
+            <div
+              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                session.jenis === "kredit"
+                  ? "bg-[#10B981]/15 text-[#10B981]"
+                  : "bg-[#0F2E1F]/10 text-[#0F2E1F]"
+              }`}
+            >
+              {session.jenis === "kredit" ? "Transaksi Masuk" : "Transaksi Keluar"}
+            </div>
+            <h1 className="mt-1 text-2xl sm:text-3xl font-bold text-[#0F2E1F]">
+              Cek Mutasi {session.jenis === "kredit" ? "Kredit" : "Debet"}
+            </h1>
+          </div>
+        </div>
+        <p className="mt-3 text-sm text-slate-600">
           Dilakukan {formatDateLong(created)}{" "}
           {created.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
           {periodStart && periodEnd && (
             <>
               {" "}
-              · Periode mutasi: {formatDateID(periodStart)} – {formatDateID(periodEnd)}
+              · Periode mutasi:{" "}
+              <strong className="text-[#0F2E1F]">
+                {formatDateID(periodStart)} – {formatDateID(periodEnd)}
+              </strong>
             </>
           )}
         </p>
       </div>
 
-      {/* Summary cards (live count after delete) */}
+      {/* Summary cards — palette themed with depth */}
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
-        <div className="card p-4">
-          <div className="text-xs text-slate-500">Total Input</div>
-          <div className="mt-1 text-lg font-semibold text-slate-900">{inputs.length}</div>
-          <div className="text-xs text-slate-600">Rp {formatRupiah(totalNominalInput)}</div>
-        </div>
-        <div className="card p-4 bg-green-50 border-green-200">
-          <div className="text-xs text-green-700 flex items-center gap-1">
-            <CheckCircle2 className="h-3 w-3" /> Match
+        {/* Total Input — neutral dark */}
+        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-[#FAFAF7] to-white border border-slate-200 p-4 shadow-sm">
+          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-[#0F2E1F]/5" />
+          <div className="relative">
+            <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+              Total Input
+            </div>
+            <div className="mt-2 text-3xl font-bold text-[#0F2E1F]">{inputs.length}</div>
+            <div className="mt-1 text-xs text-slate-600 font-mono">
+              Rp {formatRupiah(totalNominalInput)}
+            </div>
           </div>
-          <div className="mt-1 text-lg font-semibold text-green-700">{matched}</div>
-          <div className="text-xs text-green-700">Rp {formatRupiah(totalNominalMatched)}</div>
         </div>
-        <div className="card p-4 bg-red-50 border-red-200">
-          <div className="text-xs text-red-700 flex items-center gap-1">
-            <XCircle className="h-3 w-3" /> Tidak Match
+
+        {/* Match — emerald */}
+        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-[#10B981]/10 via-white to-[#10B981]/5 border border-[#10B981]/30 p-4 shadow-sm">
+          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-[#10B981]/15" />
+          <div className="relative">
+            <div className="text-xs font-semibold text-[#10B981] uppercase tracking-wider flex items-center gap-1">
+              <CheckCircle2 className="h-3.5 w-3.5" /> Match
+            </div>
+            <div className="mt-2 text-3xl font-bold text-[#10B981]">{matched}</div>
+            <div className="mt-1 text-xs text-[#10B981] font-mono">
+              Rp {formatRupiah(totalNominalMatched)}
+            </div>
           </div>
-          <div className="mt-1 text-lg font-semibold text-red-700">{unmatched}</div>
         </div>
-        <div className="card p-4 bg-amber-50 border-amber-200">
-          <div className="text-xs text-amber-700 flex items-center gap-1">
-            <AlertTriangle className="h-3 w-3" /> Bentrok
+
+        {/* Tidak Match — red */}
+        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-red-50 via-white to-red-50/50 border border-red-200 p-4 shadow-sm">
+          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-red-200/30" />
+          <div className="relative">
+            <div className="text-xs font-semibold text-red-700 uppercase tracking-wider flex items-center gap-1">
+              <XCircle className="h-3.5 w-3.5" /> Tidak Match
+            </div>
+            <div className="mt-2 text-3xl font-bold text-red-700">{unmatched}</div>
+            <div className="mt-1 text-[10px] text-red-600">
+              {unmatched > 0 ? "Perlu tindak lanjut" : "Semua ketemu"}
+            </div>
           </div>
-          <div className="mt-1 text-lg font-semibold text-amber-700">{conflict}</div>
+        </div>
+
+        {/* Bentrok — amber */}
+        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-amber-50 via-white to-amber-50/50 border border-amber-200 p-4 shadow-sm">
+          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-amber-200/40" />
+          <div className="relative">
+            <div className="text-xs font-semibold text-amber-700 uppercase tracking-wider flex items-center gap-1">
+              <AlertTriangle className="h-3.5 w-3.5" /> Bentrok
+            </div>
+            <div className="mt-2 text-3xl font-bold text-amber-700">{conflict}</div>
+            <div className="mt-1 text-[10px] text-amber-600">
+              {conflict > 0 ? "Duplikat tanggal" : "Tidak ada"}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -171,12 +234,17 @@ export default async function HistoryDetailPage({
         }}
       />
 
-      <div className="card p-4 text-xs text-slate-500">
-        <p>
-          {matched} match · {unmatched} tidak ketemu · {conflict} bentrok.
-          {session.carry_over_used && " Carry-over dipakai."}
-          {session.multi_bank_used && " Multi-bank cross-search dipakai."}
-        </p>
+      <div className="rounded-xl border border-slate-200 bg-[#FAFAF7] p-4 text-xs text-slate-600 flex items-center gap-2">
+        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-[#10B981]/10 text-[#10B981] flex-shrink-0">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+        </span>
+        <span>
+          <strong className="text-[#0F2E1F]">{matched}</strong> match ·{" "}
+          <strong className="text-red-700">{unmatched}</strong> tidak ketemu ·{" "}
+          <strong className="text-amber-700">{conflict}</strong> bentrok.
+          {session.carry_over_used && " · Carry-over dipakai."}
+          {session.multi_bank_used && " · Multi-bank cross-search dipakai."}
+        </span>
       </div>
     </div>
   );
