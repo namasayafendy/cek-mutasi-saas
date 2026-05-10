@@ -355,21 +355,25 @@ export default function RekapClient({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+      {/* Hero header */}
+      <div className="rounded-2xl bg-gradient-to-br from-[#FAFAF7] via-white to-[#10B981]/5 border border-slate-200 p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900 flex items-center gap-2">
-            <TrendingUp className="h-6 w-6 text-slate-600" />
+          <div className="inline-flex items-center gap-2 rounded-full bg-[#10B981]/10 border border-[#10B981]/20 px-3 py-1 text-xs font-medium text-[#0F2E1F] mb-2">
+            <TrendingUp className="h-3.5 w-3.5 text-[#10B981]" />
             Rekap
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-[#0F2E1F]">
+            Rekap &amp; Analisa
           </h1>
-          <p className="mt-1 text-sm text-slate-600">
-            Filter dan analisa hasil cek mutasi. Total nominal claimed vs unclaimed, breakdown per
-            outlet & per bank.
+          <p className="mt-1 text-sm text-slate-600 max-w-xl">
+            Filter dan analisa hasil cek mutasi. Total claimed vs unclaimed,
+            breakdown per outlet &amp; per bank, plus export PDF/CSV.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <button
             type="button"
-            className="btn-secondary text-sm inline-flex items-center gap-1"
+            className="text-sm inline-flex items-center gap-1.5 bg-white hover:bg-[#FAFAF7] text-[#0F2E1F] border border-slate-200 rounded-md px-3 py-2 font-medium transition-colors disabled:opacity-50"
             onClick={exportCsv}
             disabled={loading || rows.length === 0 || exporting !== ""}
           >
@@ -378,11 +382,11 @@ export default function RekapClient({
             ) : (
               <FileSpreadsheet className="h-3.5 w-3.5" />
             )}
-            Export CSV
+            CSV
           </button>
           <button
             type="button"
-            className="btn-primary text-sm inline-flex items-center gap-1"
+            className="text-sm inline-flex items-center gap-1.5 bg-[#0F2E1F] hover:bg-[#1a4530] text-white rounded-md px-4 py-2 font-medium transition-colors disabled:bg-slate-300"
             onClick={exportPdf}
             disabled={loading || rows.length === 0 || exporting !== ""}
           >
@@ -509,59 +513,83 @@ export default function RekapClient({
         </div>
       )}
 
-      {/* Big number cards */}
+      {/* Big number cards — palette themed */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
-        <div className="card p-4">
-          <div className="text-xs text-slate-500">Total Input</div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {loading ? "…" : stats.totalInput}
-          </div>
-          <div className="text-xs text-slate-600 mt-1">
-            Rp {formatRupiah(stats.totalNominal)}
-          </div>
-        </div>
-        <div className="card p-4 bg-green-50 border-green-200">
-          <div className="text-xs text-green-700 flex items-center gap-1">
-            <CheckCircle2 className="h-3 w-3" /> Match
-          </div>
-          <div className="mt-1 text-xl font-semibold text-green-700">
-            {loading ? "…" : stats.matched}
-          </div>
-          <div className="text-xs text-green-700 mt-1">
-            Rp {formatRupiah(stats.matchedNominal)}
+        {/* Total Input — neutral */}
+        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-[#FAFAF7] to-white border border-slate-200 p-4 shadow-sm">
+          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-[#0F2E1F]/5" />
+          <div className="relative">
+            <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+              Total Input
+            </div>
+            <div className="mt-2 text-2xl font-bold text-[#0F2E1F]">
+              {loading ? "…" : stats.totalInput}
+            </div>
+            <div className="text-xs text-slate-600 mt-1 font-mono">
+              Rp {formatRupiah(stats.totalNominal)}
+            </div>
           </div>
         </div>
-        <div className="card p-4 bg-red-50 border-red-200">
-          <div className="text-xs text-red-700 flex items-center gap-1">
-            <XCircle className="h-3 w-3" /> Tidak ditemukan
-          </div>
-          <div className="mt-1 text-xl font-semibold text-red-700">
-            {loading ? "…" : stats.unmatched}
-          </div>
-          <div className="text-xs text-red-700 mt-1">
-            Rp {formatRupiah(stats.unmatchedNominal)}
-          </div>
-        </div>
-        <div className="card p-4 bg-amber-50 border-amber-200">
-          <div className="text-xs text-amber-700 flex items-center gap-1">
-            <AlertTriangle className="h-3 w-3" /> Bentrok
-          </div>
-          <div className="mt-1 text-xl font-semibold text-amber-700">
-            {loading ? "…" : stats.conflict}
-          </div>
-          <div className="text-xs text-amber-700 mt-1">
-            Rp {formatRupiah(stats.conflictNominal)}
+        {/* Match — emerald */}
+        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-[#10B981]/10 via-white to-[#10B981]/5 border border-[#10B981]/30 p-4 shadow-sm">
+          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-[#10B981]/15" />
+          <div className="relative">
+            <div className="text-xs font-semibold text-[#10B981] uppercase tracking-wider flex items-center gap-1">
+              <CheckCircle2 className="h-3.5 w-3.5" /> Match
+            </div>
+            <div className="mt-2 text-2xl font-bold text-[#10B981]">
+              {loading ? "…" : stats.matched}
+            </div>
+            <div className="text-xs text-[#10B981] mt-1 font-mono">
+              Rp {formatRupiah(stats.matchedNominal)}
+            </div>
           </div>
         </div>
-        <div className="card p-4 bg-slate-50 border-slate-300">
-          <div className="text-xs text-slate-600">Match Rate</div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {loading ? "…" : `${stats.matchRate.toFixed(1)}%`}
+        {/* Tidak ditemukan — red */}
+        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-red-50 via-white to-red-50/50 border border-red-200 p-4 shadow-sm">
+          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-red-200/30" />
+          <div className="relative">
+            <div className="text-xs font-semibold text-red-700 uppercase tracking-wider flex items-center gap-1">
+              <XCircle className="h-3.5 w-3.5" /> Tidak ditemukan
+            </div>
+            <div className="mt-2 text-2xl font-bold text-red-700">
+              {loading ? "…" : stats.unmatched}
+            </div>
+            <div className="text-xs text-red-600 mt-1 font-mono">
+              Rp {formatRupiah(stats.unmatchedNominal)}
+            </div>
           </div>
-          <div className="text-xs text-slate-600 mt-1">
-            {stats.manualClaim > 0
-              ? `${stats.manualClaim} manual claim`
-              : "auto-match saja"}
+        </div>
+        {/* Bentrok — amber */}
+        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-amber-50 via-white to-amber-50/50 border border-amber-200 p-4 shadow-sm">
+          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-amber-200/40" />
+          <div className="relative">
+            <div className="text-xs font-semibold text-amber-700 uppercase tracking-wider flex items-center gap-1">
+              <AlertTriangle className="h-3.5 w-3.5" /> Bentrok
+            </div>
+            <div className="mt-2 text-2xl font-bold text-amber-700">
+              {loading ? "…" : stats.conflict}
+            </div>
+            <div className="text-xs text-amber-600 mt-1 font-mono">
+              Rp {formatRupiah(stats.conflictNominal)}
+            </div>
+          </div>
+        </div>
+        {/* Match rate — dark forest */}
+        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-[#0F2E1F] to-[#1a4530] text-white p-4 shadow-md">
+          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-[#10B981]/15" />
+          <div className="relative">
+            <div className="text-xs font-semibold text-white/80 uppercase tracking-wider">
+              Match Rate
+            </div>
+            <div className="mt-2 text-2xl font-bold text-[#10B981]">
+              {loading ? "…" : `${stats.matchRate.toFixed(1)}%`}
+            </div>
+            <div className="text-xs text-white/70 mt-1">
+              {stats.manualClaim > 0
+                ? `${stats.manualClaim} manual claim`
+                : "auto-match saja"}
+            </div>
           </div>
         </div>
       </div>

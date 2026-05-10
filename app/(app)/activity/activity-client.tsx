@@ -170,14 +170,18 @@ export default function ActivityClient({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900 flex items-center gap-2">
-          <ActivityIcon className="h-6 w-6 text-slate-600" />
+      {/* Hero header */}
+      <div className="rounded-2xl bg-gradient-to-br from-[#FAFAF7] via-white to-[#10B981]/5 border border-slate-200 p-6">
+        <div className="inline-flex items-center gap-2 rounded-full bg-[#10B981]/10 border border-[#10B981]/20 px-3 py-1 text-xs font-medium text-[#0F2E1F] mb-2">
+          <ActivityIcon className="h-3.5 w-3.5 text-[#10B981]" />
+          Activity
+        </div>
+        <h1 className="text-2xl sm:text-3xl font-bold text-[#0F2E1F]">
           Activity Log
         </h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Riwayat aktivitas semua user di akun ini. Pakai untuk verifikasi staff &
-          troubleshoot. Disimpan 30 hari terakhir.
+        <p className="mt-1 text-sm text-slate-600 max-w-xl">
+          Riwayat aktivitas semua user di akun ini. Pakai untuk verifikasi
+          staff &amp; troubleshoot. Disimpan 30 hari terakhir.
         </p>
       </div>
 
@@ -254,15 +258,22 @@ export default function ActivityClient({
         </div>
       </div>
 
-      {/* Stats summary */}
+      {/* Stats summary — themed cards */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         {Object.keys(ACTION_LABEL).map((act) => (
-          <div key={act} className="card p-3">
-            <div className="text-xs text-slate-500 flex items-center gap-1">
-              <ActionIcon action={act} /> {ACTION_LABEL[act].label}
-            </div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">
-              {stats.get(act) ?? 0}
+          <div
+            key={act}
+            className="relative overflow-hidden rounded-xl bg-gradient-to-br from-[#FAFAF7] to-white border border-slate-200 p-4 shadow-sm"
+          >
+            <div className="absolute -top-6 -right-6 h-16 w-16 rounded-full bg-[#10B981]/5" />
+            <div className="relative">
+              <div className="text-xs font-medium text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                <ActionIcon action={act} />
+                {ACTION_LABEL[act].label}
+              </div>
+              <div className="mt-2 text-2xl font-bold text-[#0F2E1F]">
+                {stats.get(act) ?? 0}
+              </div>
             </div>
           </div>
         ))}
