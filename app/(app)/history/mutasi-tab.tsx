@@ -617,10 +617,15 @@ export default function MutasiTab({
                     : null;
                   const outlet = ci?.outlet_id ? outletMap.get(ci.outlet_id) : null;
                   const isManual = !!ci?.manual_claim_reason || !!r.manual_claim_reason;
-                  const rowStyle =
-                    isMatched && outlet
+                  // Manual claim tanpa outlet (bunga/admin/lain) → highlight abu gelap
+                  // Auto-match / manual claim dengan outlet → highlight warna outlet
+                  const rowStyle = !isMatched
+                    ? undefined
+                    : outlet
                       ? { backgroundColor: hexToRgba(outlet.warna_hex, 0.18) }
-                      : undefined;
+                      : isManual
+                        ? { backgroundColor: hexToRgba("#334155", 0.13) }
+                        : undefined;
 
                   return (
                     <tr
