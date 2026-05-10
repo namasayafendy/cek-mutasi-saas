@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { HCaptcha, resetHcaptcha } from "../hcaptcha";
+import { redeemReferralCode } from "../daftar/actions";
 
 export function LoginForm() {
   const router = useRouter();
@@ -48,6 +49,38 @@ export function LoginForm() {
       setCaptchaToken(null);
       return;
     }
+
+    // Apply pending referral code (if user signed up with one but email
+    // confirmation was required and signup couldn't redeem inline).
+    try {
+      const pending = localStorage.getItem("pending_referral");
+      if (pending) {
+        // Need account_id to redeem. Get it via the active session.
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (user) {
+          const { data: tm } = await supabase
+            .from("team_members")
+            .select("account_id")
+            .eq("user_id", user.id)
+            .maybeSingle();
+          if (tm?.account_id) {
+            const r = await redeemReferralCode(pending, user.id, tm.account_id);
+            if (r.ok) {
+              // Optional: could show a one-time toast on next page.
+              // For now, just log success.
+              console.info(`Referral redeemed: ${r.reward}`);
+            }
+            // Either way, clear the pending code so we don't try again.
+            localStorage.removeItem("pending_referral");
+          }
+        }
+      }
+    } catch {
+      // localStorage might fail in some browsers — non-fatal
+    }
+
     router.replace(next);
     router.refresh();
   }
