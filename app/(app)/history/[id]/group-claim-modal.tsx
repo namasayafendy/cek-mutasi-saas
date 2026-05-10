@@ -1,11 +1,16 @@
 "use client";
 
+// Group Claim Modal — case 2: cocokkan N leftover inputs ke M tx mutasi
+// dengan total bebas (tidak harus exact). Owner pakai ini saat customer bayar
+// jumlahnya tidak match per-input tapi total-nya pas (mis. 2 input 1jt+500rb,
+// settled by 2 tx 700rb+800rb).
+
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { X, Loader2, CheckCircle2, AlertCircle, Search, Globe } from "lucide-react";
+import { X, Loader2, CheckCircle2, AlertCircle, Layers, Globe } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { formatRupiah, formatDateID, parseDateISO, toDateISO } from "@/lib/format";
-import type { InputRow, BankLite } from "./page";
+import type { InputRow, BankLite, OutletLite } from "./page";
 
 type Candidate = {
   id: string;
@@ -20,37 +25,50 @@ type Candidate = {
   deskripsi: string | null;
 };
 
-export function ManualMatchModal({
-  input,
+export function GroupClaimModal({
+  inputs,
+  outlets,
   banks,
   accountId,
   userId,
   onClose,
 }: {
-  input: InputRow;
+  inputs: InputRow[];
+  outlets: OutletLite[];
   banks: BankLite[];
   accountId: string;
   userId: string;
   onClose: () => void;
 }) {
   const router = useRouter();
-  const inputDate = parseDateISO(input.tanggal_input);
-  const isKredit = input.jenis === "kredit";
+  const isKredit = inputs[0]?.jenis === "kredit";
+  const inputTotal = useMemo(
+    () => inputs.reduce((sum, i) => sum + i.nominal, 0),
+    [inputs],
+  );
+  const earliestInput = useMemo(() => {
+    const dates = inputs.map((i) => i.tanggal_input).sort();
+    return parseDateISO(dates[0]) ?? new Date();
+  }, [inputs]);
+  const latestInput = useMemo(() => {
+    const dates = inputs.map((i) => i.tanggal_input).sort();
+    return parseDateISO(dates[dates.length - 1]) ?? new Date();
+  }, [inputs]);
+
+  const outletMap = useMemo(() => new Map(outlets.map((o) => [o.id, o])), [outlets]);
+  const bankMap = useMemo(() => new Map(banks.map((b) => [b.id, b])), [banks]);
 
   const [bankFilter, setBankFilter] = useState<string>("_all");
   const [from, setFrom] = useState<string>(() => {
-    if (!inputDate) return input.tanggal_input;
-    const d = new Date(inputDate);
+    const d = new Date(earliestInput);
     d.setUTCDate(d.getUTCDate() - 30);
     return toDateISO(d);
   });
   const [to, setTo] = useState<string>(() => {
-    if (!inputDate) return input.tanggal_input;
-    const d = new Date(inputDate);
+    const d = new Date(latestInput);
     d.setUTCDate(d.getUTCDate() + 7);
     return toDateISO(d);
   });
-  const [nominalFilter, setNominalFilter] = useState<"any" | "exact" | "near">("any");
   const [search, setSearch] = useState("");
 
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -58,10 +76,7 @@ export function ManualMatchModal({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Multi-select state: set of selected tx ids
   const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  const bankMap = useMemo(() => new Map(banks.map((b) => [b.id, b])), [banks]);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,12 +120,6 @@ export function ManualMatchModal({
 
   const filtered = useMemo(() => {
     return candidates.filter((c) => {
-      const amt = isKredit ? c.nominal_kredit : c.nominal_debet;
-      if (nominalFilter === "exact" && amt !== input.nominal) return false;
-      if (nominalFilter === "near") {
-        const tol = Math.max(input.nominal * 0.2, 50000);
-        if (Math.abs(amt - input.nominal) > tol) return false;
-      }
       if (search) {
         const q = search.toLowerCase();
         const hay = [c.nama_pengirim, c.nama_penerima, c.deskripsi, c.no_ref]
@@ -121,7 +130,7 @@ export function ManualMatchModal({
       }
       return true;
     });
-  }, [candidates, nominalFilter, input.nominal, isKredit, search]);
+  }, [candidates, search]);
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -132,23 +141,11 @@ export function ManualMatchModal({
     });
   }
 
-  // Total nominal of selected tx
-  const selectedTotal = useMemo(() => {
-    return filtered
-      .filter((c) => selected.has(c.id))
-      .reduce(
-        (sum, c) => sum + (isKredit ? c.nominal_kredit : c.nominal_debet),
-        0,
-      );
-    // re-compute when selection or candidates change
-  }, [filtered, selected, isKredit]);
-
-  // Also include any selected items not in filtered (selected then filter changed)
   const selectedTxs = useMemo(
     () => candidates.filter((c) => selected.has(c.id)),
     [candidates, selected],
   );
-  const selectedTotalAll = useMemo(
+  const selectedTotal = useMemo(
     () =>
       selectedTxs.reduce(
         (sum, c) => sum + (isKredit ? c.nominal_kredit : c.nominal_debet),
@@ -156,19 +153,21 @@ export function ManualMatchModal({
       ),
     [selectedTxs, isKredit],
   );
-  const diff = selectedTotalAll - input.nominal;
+  const diff = selectedTotal - inputTotal;
 
   async function handleConfirm() {
     if (selected.size === 0 || submitting) return;
     const txIds = Array.from(selected);
+    const inputIds = inputs.map((i) => i.id);
 
     const confirmMsg =
-      txIds.length === 1
-        ? `Cocokkan input Rp ${formatRupiah(input.nominal)} dengan 1 transaksi (Rp ${formatRupiah(selectedTotalAll)})?`
-        : `Cocokkan input Rp ${formatRupiah(input.nominal)} dengan ${txIds.length} transaksi (total Rp ${formatRupiah(selectedTotalAll)})?` +
-          (diff !== 0
-            ? `\n\nSelisih: ${diff > 0 ? "+" : ""}Rp ${formatRupiah(Math.abs(diff))}.`
-            : "");
+      `Group Claim:\n` +
+      `→ ${inputIds.length} input (total Rp ${formatRupiah(inputTotal)})\n` +
+      `→ ${txIds.length} transaksi (total Rp ${formatRupiah(selectedTotal)})\n` +
+      (diff !== 0
+        ? `\nSelisih: ${diff > 0 ? "+" : ""}Rp ${formatRupiah(Math.abs(diff))}\n`
+        : `\n(total cocok)\n`) +
+      `\nLanjutkan?`;
 
     if (!confirm(confirmMsg)) return;
 
@@ -177,43 +176,40 @@ export function ManualMatchModal({
     const supabase = createClient();
     const now = new Date().toISOString();
 
-    const reason =
-      txIds.length === 1
-        ? "Cocokkan manual dari /history detail"
-        : `Cocokkan manual (${txIds.length} tx, total Rp ${formatRupiah(selectedTotalAll)})`;
+    // Group label for traceability
+    const groupTag = `Group claim ${inputIds.length}→${txIds.length} (total Rp ${formatRupiah(selectedTotal)})`;
 
-    // Update cek_inputs: set match_status=manual_claimed, matched_tx_id (first tx),
-    // manual claim fields
-    const { error: updErr } = await supabase
+    // Mark all inputs as manual_claimed
+    const { error: e1 } = await supabase
       .from("cek_inputs")
       .update({
         match_status: "manual_claimed",
         matched_tx_id: txIds[0],
-        manual_claim_reason: reason,
+        manual_claim_reason: groupTag,
         manual_claimed_at: now,
         claim_category: "customer",
       })
-      .eq("id", input.id);
+      .in("id", inputIds);
 
-    if (updErr) {
-      setError(updErr.message);
+    if (e1) {
+      setError(e1.message);
       setSubmitting(false);
       return;
     }
 
-    // Update ALL selected parsed_transactions: claim them all to this input
-    const { error: updTxErr } = await supabase
+    // Mark all tx as claimed by first input (link visualizes as "manual claim")
+    const { error: e2 } = await supabase
       .from("parsed_transactions")
       .update({
-        claimed_by_input_id: input.id,
+        claimed_by_input_id: inputIds[0],
         claimed_at: now,
-        manual_claim_reason: reason,
+        manual_claim_reason: groupTag,
       })
       .in("id", txIds)
       .is("claimed_by_input_id", null);
 
-    if (updTxErr) {
-      setError(`Partial: input ter-update tapi sebagian/semua tx gagal: ${updTxErr.message}`);
+    if (e2) {
+      setError(`Partial: input ter-update tapi tx gagal: ${e2.message}`);
       setSubmitting(false);
       return;
     }
@@ -222,14 +218,14 @@ export function ManualMatchModal({
     await supabase.from("audit_logs").insert({
       account_id: accountId,
       user_id: userId,
-      action: "input.manual_matched",
+      action: "input.group_claimed",
       target_type: "cek_input",
-      target_id: input.id,
+      target_id: inputIds[0],
       metadata: {
-        input_nominal: input.nominal,
-        tx_count: txIds.length,
+        input_ids: inputIds,
         tx_ids: txIds,
-        tx_total: selectedTotalAll,
+        input_total: inputTotal,
+        tx_total: selectedTotal,
         diff,
       },
     });
@@ -250,8 +246,8 @@ export function ManualMatchModal({
       >
         <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between sticky top-0 bg-white z-10">
           <h2 className="font-semibold text-slate-900 flex items-center gap-2">
-            <Search className="h-4 w-4" />
-            Cocokkan Manual
+            <Layers className="h-4 w-4" />
+            Group Claim — {inputs.length} input
           </h2>
           <button
             onClick={onClose}
@@ -263,31 +259,55 @@ export function ManualMatchModal({
         </div>
 
         <div className="p-5 space-y-4">
-          {/* Input info */}
-          <div className="rounded-md bg-blue-50 border border-blue-200 p-3 text-sm space-y-0.5">
-            <div className="text-xs text-blue-700">Input yang akan di-cocokkan</div>
-            <div className="font-medium text-blue-900">
-              Tgl {formatDateID(inputDate!)} · {input.jenis} · Rp {formatRupiah(input.nominal)}
-              {input.bank_id && (
-                <span className="ml-1 text-xs">
-                  ({banks.find((b) => b.id === input.bank_id)?.label ||
-                    banks.find((b) => b.id === input.bank_id)?.kode ||
-                    "?"})
-                </span>
-              )}
-              {!input.bank_id && (
-                <span className="ml-1 text-xs text-purple-700">(semua bank)</span>
-              )}
+          {/* Inputs being grouped */}
+          <div className="rounded-md bg-blue-50 border border-blue-200 p-3 space-y-1.5">
+            <div className="text-xs text-blue-700 font-medium">
+              {inputs.length} input akan di-group claim:
             </div>
-            <div className="text-[11px] text-blue-700">
-              Centang 1 atau lebih transaksi mutasi yang sesuai (mis. customer transfer 2x).
-              Tidak harus exact — sistem terima berapa saja.
+            <ul className="space-y-0.5 max-h-32 overflow-y-auto">
+              {inputs.map((i) => {
+                const outlet = i.outlet_id ? outletMap.get(i.outlet_id) : null;
+                return (
+                  <li
+                    key={i.id}
+                    className="text-xs flex items-center justify-between bg-white border border-blue-100 rounded px-2 py-1"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      {outlet && (
+                        <span
+                          className="w-2 h-2 rounded-full"
+                          style={{ backgroundColor: outlet.warna_hex }}
+                        />
+                      )}
+                      <span className="text-slate-700">
+                        {formatDateID(parseDateISO(i.tanggal_input)!)}
+                      </span>
+                      <span className="text-slate-500">·</span>
+                      <span className="text-slate-700">
+                        {outlet?.nama ?? "(no outlet)"}
+                      </span>
+                    </span>
+                    <span className="font-mono font-medium text-slate-900">
+                      Rp {formatRupiah(i.nominal)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="flex items-center justify-between text-sm pt-1.5 border-t border-blue-200">
+              <span className="text-blue-700 font-medium">Total input</span>
+              <span className="font-mono font-semibold text-blue-900">
+                Rp {formatRupiah(inputTotal)}
+              </span>
             </div>
           </div>
 
-          {/* Filters */}
+          {/* Tx filters */}
           <div className="card p-3 space-y-2">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="text-xs text-slate-500 font-medium">
+              Pilih transaksi mutasi yang membayar group ini:
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               <div>
                 <label className="text-xs text-slate-500">Bank</label>
                 <select
@@ -321,20 +341,6 @@ export function ManualMatchModal({
                   className="input mt-1"
                 />
               </div>
-              <div>
-                <label className="text-xs text-slate-500">Nominal</label>
-                <select
-                  value={nominalFilter}
-                  onChange={(e) =>
-                    setNominalFilter(e.target.value as "any" | "exact" | "near")
-                  }
-                  className="input mt-1"
-                >
-                  <option value="any">Bebas (Recommended)</option>
-                  <option value="near">Mendekati (±20%)</option>
-                  <option value="exact">Persis sama</option>
-                </select>
-              </div>
             </div>
             <div>
               <label className="text-xs text-slate-500">
@@ -357,13 +363,11 @@ export function ManualMatchModal({
             </div>
           )}
 
-          {/* Candidates table */}
+          {/* Tx list */}
           <div className="card overflow-hidden">
             <div className="px-3 py-2 border-b border-slate-200 bg-slate-50 text-xs text-slate-600 flex items-center justify-between">
               <span>Kandidat transaksi unclaimed</span>
-              <span>
-                {filtered.length} dari {candidates.length}
-              </span>
+              <span>{filtered.length} kandidat</span>
             </div>
             {loading ? (
               <div className="p-6 text-center">
@@ -372,17 +376,14 @@ export function ManualMatchModal({
               </div>
             ) : filtered.length === 0 ? (
               <div className="p-6 text-center text-sm text-slate-500">
-                Tidak ada kandidat sesuai filter. Lebarkan range tanggal atau pilih nominal
-                &quot;Bebas&quot;.
+                Tidak ada kandidat. Lebarkan range tanggal atau ganti bank filter.
               </div>
             ) : (
-              <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+              <div className="overflow-x-auto max-h-[350px] overflow-y-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 border-b border-slate-200 sticky top-0">
                     <tr>
-                      <th className="px-2 py-2 text-left w-10">
-                        <span className="sr-only">Pilih</span>
-                      </th>
+                      <th className="px-2 py-2 text-left w-10"></th>
                       <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-slate-500">
                         Tgl
                       </th>
@@ -402,8 +403,6 @@ export function ManualMatchModal({
                       const tgl = parseDateISO(c.tanggal);
                       const amt = isKredit ? c.nominal_kredit : c.nominal_debet;
                       const bank = c.bank_id ? bankMap.get(c.bank_id) : null;
-                      const isCrossBank =
-                        input.bank_id && c.bank_id && input.bank_id !== c.bank_id;
                       const isChecked = selected.has(c.id);
                       return (
                         <tr
@@ -430,14 +429,6 @@ export function ManualMatchModal({
                           </td>
                           <td className="px-3 py-2 text-xs">
                             {bank?.label || bank?.kode || "—"}
-                            {isCrossBank && (
-                              <span
-                                className="ml-1 inline-flex items-center text-[10px] text-purple-700"
-                                title="Bank berbeda dari input"
-                              >
-                                <Globe className="h-2.5 w-2.5" />
-                              </span>
-                            )}
                           </td>
                           <td className="px-3 py-2 text-xs max-w-md">
                             <div className="font-medium text-slate-800 truncate">
@@ -461,20 +452,20 @@ export function ManualMatchModal({
             )}
           </div>
 
-          {/* Sticky summary bar */}
+          {/* Summary */}
           <div className="rounded-md border border-slate-200 bg-white p-3 space-y-1.5">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-slate-600">Input nominal</span>
+              <span className="text-slate-600">Input total ({inputs.length})</span>
               <span className="font-mono font-medium text-slate-900">
-                Rp {formatRupiah(input.nominal)}
+                Rp {formatRupiah(inputTotal)}
               </span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-600">
-                Dipilih: {selected.size} transaksi
+                Tx dipilih ({selected.size})
               </span>
               <span className="font-mono font-medium text-emerald-700">
-                Rp {formatRupiah(selectedTotalAll)}
+                Rp {formatRupiah(selectedTotal)}
               </span>
             </div>
             <div className="flex items-center justify-between text-sm pt-1.5 border-t border-slate-100">
@@ -511,9 +502,9 @@ export function ManualMatchModal({
               {submitting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <CheckCircle2 className="h-4 w-4" />
+                <Layers className="h-4 w-4" />
               )}
-              Cocokkan ({selected.size})
+              Group Claim ({inputs.length} → {selected.size})
             </button>
           </div>
         </div>

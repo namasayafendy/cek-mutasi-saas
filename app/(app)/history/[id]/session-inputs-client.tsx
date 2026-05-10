@@ -10,6 +10,7 @@ import {
   Link2,
   Loader2,
   Printer,
+  Layers,
 } from "lucide-react";
 import { formatRupiah, formatDateID, parseDateISO } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
@@ -20,6 +21,7 @@ import {
   type SessionInfo,
   type MatchedTxRow,
 } from "./generate-session-pdf";
+import { GroupClaimModal } from "./group-claim-modal";
 
 export function SessionInputsClient({
   inputs,
@@ -45,6 +47,8 @@ export function SessionInputsClient({
     { type: "success" | "error"; message: string } | null
   >(null);
   const [printing, setPrinting] = useState(false);
+  const [groupSelected, setGroupSelected] = useState<Set<string>>(new Set());
+  const [showGroup, setShowGroup] = useState(false);
 
   async function handlePrint() {
     if (printing) return;
@@ -100,6 +104,17 @@ export function SessionInputsClient({
   const outletMap = new Map(outlets.map((o) => [o.id, o]));
   const bankMap = new Map(banks.map((b) => [b.id, b]));
 
+  function toggleGroup(id: string) {
+    setGroupSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  const leftoverInputs = inputs.filter((i) => i.match_status === "no_candidate");
+  const groupSelectedInputs = leftoverInputs.filter((i) => groupSelected.has(i.id));
+
   function handleDelete(input: InputRow) {
     if (!confirm(`Hapus input Rp ${formatRupiah(input.nominal)}? (mis. customer cash, salah input)`)) return;
     setFeedback(null);
@@ -151,22 +166,42 @@ export function SessionInputsClient({
       )}
 
       <div className="card overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
-          <h2 className="font-medium text-slate-900">Detail Input ({inputs.length})</h2>
-          <button
-            type="button"
-            onClick={handlePrint}
-            disabled={printing || inputs.length === 0}
-            className="btn-secondary text-xs inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Print laporan sesi (PDF lengkap)"
-          >
-            {printing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Printer className="h-3.5 w-3.5" />
+        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="font-medium text-slate-900">
+            Detail Input ({inputs.length})
+            {leftoverInputs.length > 1 && groupSelected.size === 0 && (
+              <span className="ml-2 text-xs text-slate-500 font-normal">
+                · centang 2+ leftover untuk Group Claim
+              </span>
             )}
-            Print Sesi PDF
-          </button>
+          </h2>
+          <div className="flex items-center gap-2">
+            {groupSelectedInputs.length >= 2 && (
+              <button
+                type="button"
+                onClick={() => setShowGroup(true)}
+                className="text-xs inline-flex items-center gap-1.5 bg-[#10B981] hover:bg-[#0ea571] text-white rounded-md px-3 py-1.5 font-medium transition-colors"
+                title="Group Claim — cocokkan beberapa input sekaligus dengan beberapa tx"
+              >
+                <Layers className="h-3.5 w-3.5" />
+                Group Claim ({groupSelectedInputs.length})
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handlePrint}
+              disabled={printing || inputs.length === 0}
+              className="btn-secondary text-xs inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Print laporan sesi (PDF lengkap)"
+            >
+              {printing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Printer className="h-3.5 w-3.5" />
+              )}
+              Print Sesi PDF
+            </button>
+          </div>
         </div>
         {inputs.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-500">Belum ada input.</div>
@@ -174,6 +209,9 @@ export function SessionInputsClient({
           <table className="w-full text-sm">
             <thead className="bg-slate-50/50 border-b border-slate-200">
               <tr>
+                <th className="px-3 py-2 text-left w-10">
+                  <span className="sr-only">Pilih untuk Group Claim</span>
+                </th>
                 <th className="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">
                   Tanggal Input
                 </th>
@@ -200,7 +238,25 @@ export function SessionInputsClient({
                 const bank = i.bank_id ? bankMap.get(i.bank_id) : null;
                 const isLeftover = i.match_status === "no_candidate";
                 return (
-                  <tr key={i.id}>
+                  <tr
+                    key={i.id}
+                    className={
+                      isLeftover && groupSelected.has(i.id) ? "bg-emerald-50" : ""
+                    }
+                  >
+                    <td className="px-3 py-2">
+                      {isLeftover ? (
+                        <input
+                          type="checkbox"
+                          checked={groupSelected.has(i.id)}
+                          onChange={() => toggleGroup(i.id)}
+                          className="h-4 w-4 accent-emerald-600 cursor-pointer"
+                          title="Pilih untuk Group Claim"
+                        />
+                      ) : (
+                        <span className="text-slate-300 text-xs">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-2 text-slate-700">
                       {formatDateID(parseDateISO(i.tanggal_input)!)}
                     </td>
@@ -286,6 +342,20 @@ export function SessionInputsClient({
           </table>
         )}
       </div>
+
+      {showGroup && groupSelectedInputs.length >= 2 && (
+        <GroupClaimModal
+          inputs={groupSelectedInputs}
+          outlets={outlets}
+          banks={banks}
+          accountId={accountId}
+          userId={userId}
+          onClose={() => {
+            setShowGroup(false);
+            setGroupSelected(new Set());
+          }}
+        />
+      )}
 
       {matchingInput && (
         <ManualMatchModal
