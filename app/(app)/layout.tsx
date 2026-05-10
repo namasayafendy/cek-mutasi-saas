@@ -76,9 +76,6 @@ export default async function AppLayout({
                 <Link href="/dashboard" className="text-slate-600 hover:text-slate-900">
                   Dashboard
                 </Link>
-                <Link href="/check" className="text-slate-600 hover:text-slate-900">
-                  Cek Mutasi
-                </Link>
                 <Link href="/history" className="text-slate-600 hover:text-slate-900">
                   History
                 </Link>

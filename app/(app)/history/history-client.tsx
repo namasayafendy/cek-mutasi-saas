@@ -83,54 +83,48 @@ export default function HistoryClient({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">History Cek Mutasi</h1>
+      {/* Hero header */}
+      <div className="rounded-2xl bg-gradient-to-br from-[#FAFAF7] via-white to-[#10B981]/5 border border-slate-200 p-6">
+        <div className="inline-flex items-center gap-2 rounded-full bg-[#10B981]/10 border border-[#10B981]/20 px-3 py-1 text-xs font-medium text-[#0F2E1F] mb-2">
+          <HistoryIcon className="h-3.5 w-3.5 text-[#10B981]" />
+          History
+        </div>
+        <h1 className="text-2xl sm:text-3xl font-bold text-[#0F2E1F]">
+          History Cek Mutasi
+        </h1>
         <p className="mt-1 text-sm text-slate-600">
-          Riwayat sesi cek mutasi dan transaksi yang belum di-match.
+          Riwayat sesi cek mutasi, daftar transaksi mutasi rekening, dan
+          transaksi yang belum di-match.
         </p>
       </div>
 
-      <div className="border-b border-slate-200">
-        <nav className="flex gap-6">
-          <button
-            onClick={() => setTab("mutasi")}
-            className={`pb-3 px-1 text-sm font-medium border-b-2 -mb-px ${
-              tab === "mutasi"
-                ? "border-slate-900 text-slate-900"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            <ListChecks className="inline-block h-4 w-4 mr-1.5 -mt-0.5" />
-            Mutasi
-          </button>
-          <button
-            onClick={() => setTab("sessions")}
-            className={`pb-3 px-1 text-sm font-medium border-b-2 -mb-px ${
-              tab === "sessions"
-                ? "border-slate-900 text-slate-900"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            <HistoryIcon className="inline-block h-4 w-4 mr-1.5 -mt-0.5" />
-            Sesi ({sessions.length})
-          </button>
-          <button
-            onClick={() => setTab("belum-match")}
-            className={`pb-3 px-1 text-sm font-medium border-b-2 -mb-px ${
-              tab === "belum-match"
-                ? "border-slate-900 text-slate-900"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            <Inbox className="inline-block h-4 w-4 mr-1.5 -mt-0.5" />
-            Belum Match ({unclaimed.length})
-            {unclaimed.length > 0 && (
-              <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.5">
-                !
-              </span>
-            )}
-          </button>
-        </nav>
+      {/* Big tab cards */}
+      <div className="grid grid-cols-3 gap-2 sm:gap-3">
+        <TabCard
+          active={tab === "mutasi"}
+          onClick={() => setTab("mutasi")}
+          icon={<ListChecks className="h-5 w-5" />}
+          title="Mutasi"
+          subtitle="Daftar transaksi"
+          variant="emerald"
+        />
+        <TabCard
+          active={tab === "sessions"}
+          onClick={() => setTab("sessions")}
+          icon={<HistoryIcon className="h-5 w-5" />}
+          title="Sesi"
+          subtitle={`${sessions.length} riwayat`}
+          variant="dark"
+        />
+        <TabCard
+          active={tab === "belum-match"}
+          onClick={() => setTab("belum-match")}
+          icon={<Inbox className="h-5 w-5" />}
+          title="Belum Match"
+          subtitle={`${unclaimed.length} tx`}
+          variant="amber"
+          badge={unclaimed.length > 0}
+        />
       </div>
 
       {tab === "mutasi" && (
@@ -179,6 +173,93 @@ export default function HistoryClient({
         />
       )}
     </div>
+  );
+}
+
+// ===== Tab Card (header navigation) =====
+
+function TabCard({
+  active,
+  onClick,
+  icon,
+  title,
+  subtitle,
+  variant,
+  badge,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+  variant: "emerald" | "dark" | "amber";
+  badge?: boolean;
+}) {
+  const activeStyles: Record<typeof variant, string> = {
+    emerald:
+      "bg-gradient-to-br from-[#10B981] to-[#059669] text-white shadow-lg shadow-[#10B981]/30",
+    dark:
+      "bg-gradient-to-br from-[#1a4530] to-[#0F2E1F] text-white shadow-lg shadow-[#0F2E1F]/30",
+    amber:
+      "bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-lg shadow-amber-500/30",
+  };
+  const inactiveStyles: Record<typeof variant, string> = {
+    emerald:
+      "bg-white border border-slate-200 text-[#0F2E1F] hover:border-[#10B981]/40 hover:shadow-sm",
+    dark:
+      "bg-white border border-slate-200 text-[#0F2E1F] hover:border-[#0F2E1F]/40 hover:shadow-sm",
+    amber:
+      "bg-white border border-slate-200 text-[#0F2E1F] hover:border-amber-400 hover:shadow-sm",
+  };
+  const iconBg = active
+    ? "bg-white/20"
+    : variant === "emerald"
+      ? "bg-[#10B981]/10 text-[#10B981]"
+      : variant === "dark"
+        ? "bg-[#0F2E1F]/10 text-[#0F2E1F]"
+        : "bg-amber-100 text-amber-700";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative rounded-xl p-3 sm:p-4 text-left transition-all ${
+        active ? activeStyles[variant] : inactiveStyles[variant]
+      }`}
+    >
+      <div className="flex items-center gap-3">
+        <div
+          className={`inline-flex items-center justify-center w-10 h-10 rounded-lg ${iconBg} flex-shrink-0`}
+        >
+          {icon}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <h3 className="font-semibold text-base sm:text-lg leading-tight truncate">
+              {title}
+            </h3>
+            {badge && (
+              <span
+                className={`inline-flex items-center justify-center min-w-[1.25rem] h-5 rounded-full text-[10px] font-bold px-1.5 ${
+                  active
+                    ? "bg-white text-amber-700"
+                    : "bg-amber-500 text-white"
+                }`}
+              >
+                !
+              </span>
+            )}
+          </div>
+          <p
+            className={`text-xs truncate ${
+              active ? "text-white/80" : "text-slate-500"
+            }`}
+          >
+            {subtitle}
+          </p>
+        </div>
+      </div>
+    </button>
   );
 }
 

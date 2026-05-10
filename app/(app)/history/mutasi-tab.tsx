@@ -773,51 +773,112 @@ function BankCard({
   const totalKredit = stats?.totalKredit ?? 0;
   const totalDebet = stats?.totalDebet ?? 0;
   const txCount = stats?.txCount ?? 0;
+  const isActive = bank.is_active !== false;
 
   return (
-    <div className="card p-4 space-y-3 hover:shadow-md transition-shadow">
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-md bg-slate-100">
-            <Building2 className="h-4 w-4 text-slate-600" />
-          </div>
-          <div>
-            <h3 className="font-semibold text-slate-900">{bank.label || bank.kode}</h3>
-            <div className="text-[10px] text-slate-500 uppercase">{bank.kode}</div>
-          </div>
-        </div>
-        {bank.is_active === false ? (
-          <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] px-1.5 py-0.5">
-            OFF
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-0.5 rounded-full bg-green-50 text-green-700 text-[10px] px-1.5 py-0.5">
-            ON
-          </span>
-        )}
-      </div>
+    <div
+      onClick={isActive ? onView : undefined}
+      className={`group relative overflow-hidden rounded-2xl bg-white border border-slate-200 p-5 transition-all
+        ${
+          isActive
+            ? "cursor-pointer shadow-md hover:shadow-2xl hover:-translate-y-1 hover:border-[#10B981]/40"
+            : "opacity-60 cursor-not-allowed"
+        }`}
+      style={{
+        boxShadow: isActive
+          ? "0 1px 2px 0 rgba(15, 46, 31, 0.05), 0 4px 12px -2px rgba(15, 46, 31, 0.08)"
+          : undefined,
+      }}
+    >
+      {/* Decorative bg gradient (3D depth) */}
+      <div
+        className={`absolute -top-16 -right-16 h-40 w-40 rounded-full transition-all ${
+          isActive
+            ? "bg-gradient-to-br from-[#10B981]/10 to-[#10B981]/0 group-hover:from-[#10B981]/20"
+            : "bg-slate-100"
+        }`}
+      />
+      <div
+        className={`absolute -bottom-10 -left-10 h-28 w-28 rounded-full ${
+          isActive ? "bg-[#0F2E1F]/5" : "bg-slate-50"
+        }`}
+      />
 
-      <div className="space-y-1.5 text-sm">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-slate-500 flex items-center gap-1">
-            <TrendingUp className="h-3 w-3 text-green-600" /> Kredit (12 bulan)
-          </span>
-          <span className="font-mono text-green-700">Rp {formatRupiah(totalKredit)}</span>
+      <div className="relative">
+        {/* Top: bank name + status */}
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex items-center gap-2.5">
+            <div
+              className={`inline-flex items-center justify-center w-11 h-11 rounded-xl shadow-md ${
+                isActive
+                  ? "bg-gradient-to-br from-[#1a4530] to-[#0F2E1F] text-white"
+                  : "bg-slate-100 text-slate-400"
+              }`}
+            >
+              <Building2 className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-[#0F2E1F] text-base leading-tight">
+                {bank.label || bank.kode}
+              </h3>
+              <div className="text-[10px] text-slate-500 uppercase tracking-wider mt-0.5">
+                {bank.kode}
+              </div>
+            </div>
+          </div>
+          {isActive ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-[#10B981]/10 text-[#10B981] text-[10px] font-semibold px-2 py-0.5 border border-[#10B981]/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] animate-pulse" />
+              AKTIF
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-500 text-[10px] font-semibold px-2 py-0.5">
+              OFF
+            </span>
+          )}
         </div>
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-slate-500 flex items-center gap-1">
-            <TrendingDown className="h-3 w-3 text-red-600" /> Debet (12 bulan)
+
+        {/* Stats — kredit & debet 12 bulan */}
+        <div className="space-y-2 rounded-xl bg-[#FAFAF7] border border-slate-100 p-3 mb-4">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-600 flex items-center gap-1.5">
+              <TrendingUp className="h-3.5 w-3.5 text-[#10B981]" />
+              Kredit (12 bulan)
+            </span>
+            <span className="font-mono font-semibold text-[#10B981] text-sm">
+              Rp {formatRupiah(totalKredit)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-600 flex items-center gap-1.5">
+              <TrendingDown className="h-3.5 w-3.5 text-red-600" />
+              Debet (12 bulan)
+            </span>
+            <span className="font-mono font-semibold text-red-700 text-sm">
+              Rp {formatRupiah(totalDebet)}
+            </span>
+          </div>
+        </div>
+
+        {/* CTA */}
+        <div
+          className={`inline-flex items-center justify-center w-full gap-1.5 rounded-lg px-3 py-2.5 text-xs font-semibold transition-colors ${
+            isActive
+              ? "bg-[#0F2E1F] text-white group-hover:bg-[#1a4530]"
+              : "bg-slate-200 text-slate-400"
+          }`}
+        >
+          <Eye className="h-4 w-4" />
+          Lihat Mutasi
+          <span
+            className={`inline-flex items-center justify-center min-w-[1.5rem] h-5 rounded-full text-[10px] ml-1 ${
+              isActive ? "bg-white/20" : "bg-slate-300/50"
+            }`}
+          >
+            {txCount}
           </span>
-          <span className="font-mono text-red-700">Rp {formatRupiah(totalDebet)}</span>
         </div>
       </div>
-
-      <button
-        onClick={onView}
-        className="btn-secondary text-xs w-full inline-flex items-center justify-center gap-1.5"
-      >
-        <Eye className="h-3.5 w-3.5" /> View Mutasi ({txCount})
-      </button>
     </div>
   );
 }
