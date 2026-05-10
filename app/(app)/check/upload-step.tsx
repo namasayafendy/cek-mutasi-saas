@@ -30,6 +30,9 @@ export type BankUpload = {
   parsed: ParsedPdf;
   pages: RenderedPage[];
   persistInfo: PersistResult;
+  // Total tx parsed by jenis (untuk informasi user)
+  parsedKreditCount: number;
+  parsedDebetCount: number;
 };
 
 type QueueRow = {
@@ -116,6 +119,12 @@ export function UploadStep({
       const persisted = await persistTransactions(supabase, accountId, bank.id, doc.rows);
       const idMap = await lookupParsedTxIds(supabase, accountId, bank.id, doc.rows);
 
+      // Count both jenis (untuk info banner)
+      const parsedKreditCount = doc.rows.filter((r) => r.kredit > 0).length;
+      const parsedDebetCount = doc.rows.filter((r) => r.debet > 0).length;
+      const otherJenisCount = jenis === "kredit" ? parsedDebetCount : parsedKreditCount;
+      const otherJenisLabel = jenis === "kredit" ? "debet (transaksi keluar)" : "kredit (transaksi masuk)";
+
       const transactions: PdfTransaction[] = doc.rows
         .filter((r) => (jenis === "kredit" ? r.kredit > 0 : r.debet > 0))
         .map((r) => ({
@@ -134,9 +143,13 @@ export function UploadStep({
         }));
 
       if (transactions.length === 0) {
+        const hint =
+          otherJenisCount > 0
+            ? ` Tapi ada ${otherJenisCount} tx ${otherJenisLabel} — kalau yang ingin dicek itu, pilih sesi sebaliknya.`
+            : "";
         updateRow(row.id, {
           status: "error",
-          error: `Tidak ada transaksi ${jenis} di file ini.`,
+          error: `Tidak ada transaksi ${jenis} di file ini.${hint}`,
           progress: undefined,
         });
         return;
@@ -154,7 +167,14 @@ export function UploadStep({
       updateRow(row.id, {
         status: "ready",
         progress: undefined,
-        result: { bank, parsed, pages, persistInfo: persisted },
+        result: {
+          bank,
+          parsed,
+          pages,
+          persistInfo: persisted,
+          parsedKreditCount,
+          parsedDebetCount,
+        },
       });
     } catch (err) {
       console.error(err);
@@ -235,12 +255,27 @@ export function UploadStep({
               <div className="flex items-center justify-between gap-2">
                 <div className="text-sm font-medium text-slate-700">
                   Bank #{idx + 1}
-                  {row.result && (
-                    <span className="ml-2 text-xs text-green-700">
-                      <CheckCircle2 className="inline-block h-3 w-3 mr-0.5 -mt-0.5" />
-                      {row.result.parsed.transactions.length} transaksi {jenis} siap
-                    </span>
-                  )}
+                  {row.result && (() => {
+                    const r = row.result;
+                    const otherCount = jenis === "kredit" ? r.parsedDebetCount : r.parsedKreditCount;
+                    const otherLabel = jenis === "kredit" ? "debet" : "kredit";
+                    return (
+                      <span className="ml-2 inline-flex items-center gap-1.5 text-xs">
+                        <span className="text-[#10B981] inline-flex items-center gap-1">
+                          <CheckCircle2 className="h-3 w-3" />
+                          {r.parsed.transactions.length} tx {jenis} siap
+                        </span>
+                        {otherCount > 0 && (
+                          <span
+                            className="text-slate-500"
+                            title={`${otherCount} tx ${otherLabel} ada di file tapi tidak masuk sesi ini. Mereka tetap tersimpan dan bisa di-cek di sesi ${otherLabel}.`}
+                          >
+                            · {otherCount} tx {otherLabel} di-skip
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })()}
                 </div>
                 {showRemove && (
                   <button
