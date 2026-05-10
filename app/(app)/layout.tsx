@@ -86,23 +86,9 @@ export default async function AppLayout({
                   Rekap
                 </Link>
                 {isOwner && (
-                  <>
-                    <Link href="/outlets" className="text-slate-600 hover:text-slate-900">
-                      Outlet
-                    </Link>
-                    <Link href="/banks" className="text-slate-600 hover:text-slate-900">
-                      Bank
-                    </Link>
-                    <Link href="/aturan" className="text-slate-600 hover:text-slate-900">
-                      Aturan
-                    </Link>
-                    <Link href="/staff" className="text-slate-600 hover:text-slate-900">
-                      Staff
-                    </Link>
-                    <Link href="/activity" className="text-slate-600 hover:text-slate-900">
-                      Activity
-                    </Link>
-                  </>
+                  <Link href="/activity" className="text-slate-600 hover:text-slate-900">
+                    Activity
+                  </Link>
                 )}
               </div>
             </div>
