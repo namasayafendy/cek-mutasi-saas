@@ -6,6 +6,7 @@ import { AlertTriangle, Shield } from "lucide-react";
 import { isSuperadminEmail } from "@/lib/supabase/context";
 import { IdleTimeout } from "./idle-timeout";
 import { LogoIcon, LogoWordmark } from "@/app/logo";
+import { MobileNav } from "./mobile-nav";
 
 export default async function AppLayout({
   children,
@@ -89,7 +90,7 @@ export default async function AppLayout({
                 )}
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               {isOwner && account.status === "trial" && trialDays !== null && trialDays > 3 && (
                 <span className="hidden sm:inline text-xs text-slate-500">
                   Trial: {trialDays} hari
@@ -108,6 +109,11 @@ export default async function AppLayout({
                 {user.email}
               </span>
               <LogoutButton />
+              <MobileNav
+                isOwner={isOwner}
+                isSuperadmin={isSuperadmin}
+                userEmail={user.email}
+              />
             </div>
           </div>
         </div>

@@ -78,6 +78,17 @@ export class PdfBuilder {
     this.page.drawRectangle({ x, y, width: w, height: h, color: fill });
   }
 
+  rectFill(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    color: RgbColor,
+    opacity = 1,
+  ) {
+    this.page.drawRectangle({ x, y, width: w, height: h, color, opacity });
+  }
+
   rectStroke(
     x: number,
     y: number,
@@ -104,6 +115,18 @@ export class PdfBuilder {
       color,
     });
   }
+}
+
+// Convert "#FFEB3B" → RgbColor that pdf-lib can use.
+// Falls back to TEXT (slate-900) if hex is invalid.
+export function hexToRgbColor(hex: string): RgbColor {
+  const m = hex.replace("#", "").match(/^([0-9a-f]{6})$/i);
+  if (!m) return TEXT;
+  return rgb(
+    parseInt(m[1].slice(0, 2), 16) / 255,
+    parseInt(m[1].slice(2, 4), 16) / 255,
+    parseInt(m[1].slice(4, 6), 16) / 255,
+  );
 }
 
 // pdf-lib StandardFonts (Helvetica) only supports WinAnsi. Replace anything else

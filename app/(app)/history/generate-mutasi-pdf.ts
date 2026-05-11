@@ -7,6 +7,7 @@ import {
   asciiSafe,
   truncate,
   downloadPdfBytes,
+  hexToRgbColor,
   PAGE_W,
   MARGIN_X,
   TEXT,
@@ -218,6 +219,34 @@ export async function generateMutasiPdf(args: {
 
       const rowTop = b.y;
       const rowBottom = b.y - ROW_H;
+
+      // Highlight background — mimics /history mutasi tab visual:
+      // - Auto-matched + outlet → outlet color (20% opacity)
+      // - Manual claim (any) → slate-700 (13% opacity)
+      if (r.claimed_by_input_id) {
+        const ci = inputsMap.get(r.claimed_by_input_id);
+        const outlet = ci?.outlet_id ? outletMap.get(ci.outlet_id) : null;
+        const isManual = !!ci?.manual_claim_reason || !!r.manual_claim_reason;
+        if (isManual) {
+          b.rectFill(
+            MARGIN_X,
+            rowBottom,
+            PAGE_W - 2 * MARGIN_X,
+            ROW_H,
+            hexToRgbColor("#334155"),
+            0.13,
+          );
+        } else if (outlet) {
+          b.rectFill(
+            MARGIN_X,
+            rowBottom,
+            PAGE_W - 2 * MARGIN_X,
+            ROW_H,
+            hexToRgbColor(outlet.warna_hex),
+            0.2,
+          );
+        }
+      }
 
       // Row separator
       b.hLine(MARGIN_X, PAGE_W - MARGIN_X, rowBottom);
