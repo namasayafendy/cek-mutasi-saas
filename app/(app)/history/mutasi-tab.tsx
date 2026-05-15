@@ -753,6 +753,38 @@ export default function MutasiTab({
           accountId={accountId}
           userId={userId}
           onClose={() => setClaimingTx(null)}
+          onClaimed={(info) => {
+            // Fix 2026-05-15: optimistic local update — bikin row langsung
+            // ter-highlight tanpa nunggu re-fetch. router.refresh() di modal
+            // hanya re-run server components, sedangkan rows + inputsMap di
+            // sini di-fetch client-side via useEffect.
+            const now = new Date().toISOString();
+            setRows((prev) =>
+              prev.map((r) =>
+                r.id === info.txId
+                  ? {
+                      ...r,
+                      claimed_by_input_id: info.inputId,
+                      manual_claim_reason: info.reason,
+                      claimed_at: now,
+                    }
+                  : r,
+              ),
+            );
+            setInputsMap((prev) => {
+              const next = new Map(prev);
+              next.set(info.inputId, {
+                id: info.inputId,
+                outlet_id: info.outletId,
+                session_id: null,
+                tanggal_input: info.tanggalInput,
+                manual_claim_reason: info.reason,
+                manual_claimed_at: now,
+                created_at: now,
+              });
+              return next;
+            });
+          }}
         />
       )}
     </div>
@@ -846,6 +878,43 @@ function BankCard({
               Kredit (12 bulan)
             </span>
             <span className="font-mono font-semibold text-[#10B981] text-sm">
+              Rp {formatRupiah(totalKredit)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-600 flex items-center gap-1.5">
+              <TrendingDown className="h-3.5 w-3.5 text-red-600" />
+              Debet (12 bulan)
+            </span>
+            <span className="font-mono font-semibold text-red-700 text-sm">
+              Rp {formatRupiah(totalDebet)}
+            </span>
+          </div>
+        </div>
+
+        {/* CTA */}
+        <div
+          className={`inline-flex items-center justify-center w-full gap-1.5 rounded-lg px-3 py-2.5 text-xs font-semibold transition-colors ${
+            isActive
+              ? "bg-[#0F2E1F] text-white group-hover:bg-[#1a4530]"
+              : "bg-slate-200 text-slate-400"
+          }`}
+        >
+          <Eye className="h-4 w-4" />
+          Lihat Mutasi
+          <span
+            className={`inline-flex items-center justify-center min-w-[1.5rem] h-5 rounded-full text-[10px] ml-1 ${
+              isActive ? "bg-white/20" : "bg-slate-300/50"
+            }`}
+          >
+            {txCount}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+sm">
               Rp {formatRupiah(totalKredit)}
             </span>
           </div>

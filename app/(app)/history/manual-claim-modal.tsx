@@ -36,6 +36,7 @@ export function ManualClaimModal({
   accountId,
   userId,
   onClose,
+  onClaimed,
 }: {
   tx: UnclaimedTx;
   outlets: OutletLite[];
@@ -43,6 +44,16 @@ export function ManualClaimModal({
   accountId: string;
   userId: string;
   onClose: () => void;
+  /** Fix 2026-05-15: dipanggil setelah claim sukses sebelum onClose,
+   *  supaya caller bisa optimistically update local state-nya (mis. row di
+   *  /history Mutasi tab langsung ter-highlight tanpa nunggu re-fetch). */
+  onClaimed?: (info: {
+    txId: string;
+    inputId: string;
+    outletId: string | null;
+    tanggalInput: string;
+    reason: string;
+  }) => void;
 }) {
   const router = useRouter();
   const isKredit = tx.nominal_kredit > 0;
@@ -115,7 +126,7 @@ export function ManualClaimModal({
 
     if (updateErr) {
       setError(
-        `Claim partially failed — input ter-save tapi mark transaksi gagal: ${updateErr.message}`,
+        `Claim partially failed - input ter-save tapi mark transaksi gagal: ${updateErr.message}`,
       );
       setSaving(false);
       return;
@@ -137,6 +148,13 @@ export function ManualClaimModal({
     });
 
     setSaving(false);
+    onClaimed?.({
+      txId: tx.id,
+      inputId: insertedInput.id,
+      outletId: isCustomer ? outletId : null,
+      tanggalInput,
+      reason: reason.trim(),
+    });
     onClose();
     router.refresh();
   }
@@ -159,7 +177,7 @@ export function ManualClaimModal({
               {tx.jam && <span className="text-slate-500"> {tx.jam}</span>}
             </div>
             <div className="text-xs text-slate-700 mt-1">
-              {bank ? bank.label || bank.kode : "—"} ·{" "}
+              {bank ? bank.label || bank.kode : "-"} ·{" "}
               {isKredit ? (
                 <span className="text-green-700">Kredit</span>
               ) : (
@@ -169,7 +187,7 @@ export function ManualClaimModal({
             </div>
             {(tx.nama_pengirim || tx.deskripsi) && (
               <div className="text-xs text-slate-600 mt-1.5 italic">
-                {tx.nama_pengirim ?? ""} {tx.deskripsi ? `— ${tx.deskripsi}` : ""}
+                {tx.nama_pengirim ?? ""} {tx.deskripsi ? `- ${tx.deskripsi}` : ""}
               </div>
             )}
           </div>
@@ -230,7 +248,7 @@ export function ManualClaimModal({
                 className="input mt-1"
                 required
               >
-                {outlets.length === 0 && <option value="">— Belum ada outlet —</option>}
+                {outlets.length === 0 && <option value="">- Belum ada outlet -</option>}
                 {outlets.map((o) => (
                   <option key={o.id} value={o.id}>
                     {o.nama}
@@ -282,7 +300,7 @@ export function ManualClaimModal({
             <button type="submit" className="btn-primary text-sm flex-1" disabled={saving}>
               {saving ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" /> Menyimpan…
+                  <Loader2 className="h-4 w-4 animate-spin" /> Menyimpan...
                 </>
               ) : (
                 <>
