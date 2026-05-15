@@ -56,7 +56,6 @@ export function SessionInputsClient({
     setFeedback(null);
     try {
       const supabase = createClient();
-      // Fetch matched parsed_transactions for this session
       const matchedInputIds = inputs
         .filter((i) => i.match_status === "matched" || i.match_status === "manual_claimed")
         .map((i) => i.id);
@@ -128,7 +127,6 @@ export function SessionInputsClient({
         setFeedback({ type: "error", message: error.message });
         return;
       }
-      // Audit log
       await supabase.from("audit_logs").insert({
         account_id: accountId,
         user_id: userId,
@@ -171,7 +169,12 @@ export function SessionInputsClient({
             Detail Input ({inputs.length})
             {leftoverInputs.length > 1 && groupSelected.size === 0 && (
               <span className="ml-2 text-xs text-slate-500 font-normal">
-                · centang 2+ leftover untuk Group Claim
+                · centang 2+ baris kalau mau cocokkan banyak input ke 1 tx mutasi
+              </span>
+            )}
+            {groupSelected.size >= 2 && (
+              <span className="ml-2 text-xs text-emerald-700 font-normal">
+                · {groupSelected.size} input ke-centang — klik &quot;Cocokkan&quot; di salah satu baris atau tombol hijau
               </span>
             )}
           </h2>
@@ -254,7 +257,7 @@ export function SessionInputsClient({
                           title="Pilih untuk Group Claim"
                         />
                       ) : (
-                        <span className="text-slate-300 text-xs">—</span>
+                        <span className="text-slate-300 text-xs">-</span>
                       )}
                     </td>
                     <td className="px-4 py-2 text-slate-700">
@@ -270,11 +273,11 @@ export function SessionInputsClient({
                           {outlet.nama}
                         </span>
                       ) : (
-                        <span className="text-slate-400 text-xs">—</span>
+                        <span className="text-slate-400 text-xs">-</span>
                       )}
                     </td>
                     <td className="px-4 py-2 text-slate-600 text-xs">
-                      {bank ? bank.label || bank.kode : "—"}
+                      {bank ? bank.label || bank.kode : "-"}
                     </td>
                     <td className="px-4 py-2 text-right font-mono">
                       Rp {formatRupiah(i.nominal)}
@@ -293,7 +296,7 @@ export function SessionInputsClient({
                       {i.match_status === "all_taken" && (
                         <div className="text-xs">
                           <span className="inline-flex items-center gap-1 text-amber-700">
-                            <AlertTriangle className="h-3.5 w-3.5" /> Bentrok ({i.conflict_count}×)
+                            <AlertTriangle className="h-3.5 w-3.5" /> Bentrok ({i.conflict_count}x)
                           </span>
                           {i.conflict_dates && i.conflict_dates.length > 0 && (
                             <div className="text-[10px] text-amber-700 mt-0.5">
@@ -313,12 +316,29 @@ export function SessionInputsClient({
                         <div className="inline-flex items-center gap-2">
                           <button
                             type="button"
-                            onClick={() => setMatchingInput(i)}
+                            onClick={() => {
+                              // Fix 2026-05-15: kalau row ini ke-centang bersama
+                              // 2+ row leftover lain, arahkan ke Group Claim biar
+                              // user bisa cocokkan N input ke 1+ tx mutasi sekaligus
+                              // (mis. customer transfer 1x untuk 2 pembelian).
+                              if (groupSelected.size >= 2 && groupSelected.has(i.id)) {
+                                setShowGroup(true);
+                              } else {
+                                setMatchingInput(i);
+                              }
+                            }}
                             disabled={pending}
                             className="text-xs text-slate-700 hover:text-slate-900 inline-flex items-center gap-1"
-                            title="Cocokkan input ini ke transaksi mutasi"
+                            title={
+                              groupSelected.size >= 2 && groupSelected.has(i.id)
+                                ? "Cocokkan SEMUA input yang ke-centang (Group Claim)"
+                                : "Cocokkan input ini ke transaksi mutasi"
+                            }
                           >
-                            <Link2 className="h-3.5 w-3.5" /> Cocokkan
+                            <Link2 className="h-3.5 w-3.5" />
+                            {groupSelected.size >= 2 && groupSelected.has(i.id)
+                              ? `Cocokkan (${groupSelected.size})`
+                              : "Cocokkan"}
                           </button>
                           <button
                             type="button"
