@@ -150,7 +150,7 @@ export function SessionInputsClient({
       return next;
     });
   }
-  const leftoverInputs = inputs.filter((i) => i.match_status === "no_candidate");
+  const leftoverInputs = inputs.filter((i) => i.match_status === "no_candidate" || i.match_status === "all_taken");
   const groupSelectedInputs = leftoverInputs.filter((i) => groupSelected.has(i.id));
 
   function handleDelete(input: InputRow) {
@@ -335,7 +335,7 @@ export function SessionInputsClient({
               {filteredInputs.map((i) => {
                 const outlet = i.outlet_id ? outletMap.get(i.outlet_id) : null;
                 const bank = i.bank_id ? bankMap.get(i.bank_id) : null;
-                const isLeftover = i.match_status === "no_candidate";
+                const isLeftover = i.match_status === "no_candidate" || i.match_status === "all_taken";
                 return (
                   <tr
                     key={i.id}
