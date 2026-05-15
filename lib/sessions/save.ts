@@ -123,21 +123,41 @@ export async function saveSession(
       // Don't fail entire save — session sudah terbuat
       console.error("Gagal save cek_inputs:", inputsErr.message);
     } else if (insertedInputs && insertedInputs.length > 0) {
-      // Phase 4.3: untuk tiap matched_tx_id (carry-over), update parsed_transactions.claimed_by_input_id
+      // Phase 4.3 + bugfix 2026-05-15:
+      // Untuk setiap matched cek_input, set claimed_by_input_id pada parsed_transactions
+      // yang bersangkutan. Dulu kita pakai for-loop sequential dengan satu UPDATE per row
+      // — untuk session 276 match itu butuh ~93 detik dan kalau user navigate sebelum
+      // selesai, sebagian transaksi tidak ter-claim → di /history Mutasi tab cuma sebagian
+      // yang ter-highlight. Sekarang pakai RPC bulk (1 round-trip, 1 transaction atomic).
       const claimUpdates = insertedInputs
         .filter((row) => row.matched_tx_id)
-        .map((row) => ({ inputId: row.id as string, txId: row.matched_tx_id as string }));
+        .map((row) => ({
+          tx_id: row.matched_tx_id as string,
+          input_id: row.id as string,
+        }));
 
-      for (const u of claimUpdates) {
-        const { error: updErr } = await supabase
-          .from("parsed_transactions")
-          .update({
-            claimed_by_input_id: u.inputId,
-            claimed_at: new Date().toISOString(),
-          })
-          .eq("id", u.txId)
-          .is("claimed_by_input_id", null); // race-safe: hanya update kalau masih unclaimed
-        if (!updErr) carryoverClaimed += 1;
+      if (claimUpdates.length > 0) {
+        const { data: claimedCount, error: rpcErr } = await supabase.rpc(
+          "claim_parsed_transactions",
+          { claims: claimUpdates },
+        );
+        if (rpcErr) {
+          // Fallback (mis. RPC belum di-deploy): jalankan loop lama supaya tetap robust.
+          console.error("claim_parsed_transactions RPC failed, falling back to loop:", rpcErr.message);
+          for (const u of claimUpdates) {
+            const { error: updErr } = await supabase
+              .from("parsed_transactions")
+              .update({
+                claimed_by_input_id: u.input_id,
+                claimed_at: new Date().toISOString(),
+              })
+              .eq("id", u.tx_id)
+              .is("claimed_by_input_id", null);
+            if (!updErr) carryoverClaimed += 1;
+          }
+        } else {
+          carryoverClaimed = typeof claimedCount === "number" ? claimedCount : claimUpdates.length;
+        }
       }
     }
   }
