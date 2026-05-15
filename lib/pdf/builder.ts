@@ -141,8 +141,10 @@ export function asciiSafe(s: string): string {
 }
 
 export function truncate(font: PDFFont, s: string, size: number, maxW: number): string {
-  if (font.widthOfTextAtSize(s, size) <= maxW) return s;
-  let out = s;
+  // pdf-lib StandardFonts (WinAnsi) can't measure non-Latin-1 chars — must sanitize first.
+  const safe = asciiSafe(s);
+  if (font.widthOfTextAtSize(safe, size) <= maxW) return safe;
+  let out = safe;
   while (out.length > 1 && font.widthOfTextAtSize(out + "...", size) > maxW) {
     out = out.slice(0, -1);
   }

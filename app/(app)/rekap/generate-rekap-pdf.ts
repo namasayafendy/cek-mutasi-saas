@@ -163,12 +163,15 @@ function asciiSafe(s: string): string {
 
 // Truncate string to fit max width
 function truncate(font: PDFFont, s: string, size: number, maxW: number): string {
-  if (font.widthOfTextAtSize(s, size) <= maxW) return s;
-  let out = s;
-  while (out.length > 1 && font.widthOfTextAtSize(out + "…", size) > maxW) {
+  // pdf-lib StandardFonts (WinAnsi) can't measure non-Latin-1 chars (incl. the
+  // ellipsis char U+2026 itself) — sanitize first and use ASCII triple-dot.
+  const safe = asciiSafe(s);
+  if (font.widthOfTextAtSize(safe, size) <= maxW) return safe;
+  let out = safe;
+  while (out.length > 1 && font.widthOfTextAtSize(out + "...", size) > maxW) {
     out = out.slice(0, -1);
   }
-  return out + "…";
+  return out + "...";
 }
 
 export async function generateRekapPdf(args: {
