@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useMemo, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
@@ -11,6 +11,7 @@ import {
   Loader2,
   Printer,
   Layers,
+  ListChecks,
 } from "lucide-react";
 import { formatRupiah, formatDateID, parseDateISO } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
@@ -22,6 +23,8 @@ import {
   type MatchedTxRow,
 } from "./generate-session-pdf";
 import { GroupClaimModal } from "./group-claim-modal";
+
+type FilterKey = "all" | "matched" | "unmatched" | "conflict";
 
 export function SessionInputsClient({
   inputs,
@@ -49,6 +52,42 @@ export function SessionInputsClient({
   const [printing, setPrinting] = useState(false);
   const [groupSelected, setGroupSelected] = useState<Set<string>>(new Set());
   const [showGroup, setShowGroup] = useState(false);
+  const [filter, setFilter] = useState<FilterKey>("all");
+
+  // Derive counts + totals from inputs (used for filter cards AND filtered table).
+  const { matchedCount, unmatchedCount, conflictCount, totalNominalInput, totalNominalMatched } = useMemo(() => {
+    let m = 0;
+    let u = 0;
+    let c = 0;
+    let tni = 0;
+    let tnm = 0;
+    for (const i of inputs) {
+      tni += i.nominal;
+      if (i.match_status === "matched" || i.match_status === "manual_claimed") {
+        m++;
+        tnm += i.nominal;
+      } else if (i.match_status === "no_candidate") u++;
+      else if (i.match_status === "all_taken") c++;
+    }
+    return {
+      matchedCount: m,
+      unmatchedCount: u,
+      conflictCount: c,
+      totalNominalInput: tni,
+      totalNominalMatched: tnm,
+    };
+  }, [inputs]);
+
+  const filteredInputs = useMemo(() => {
+    if (filter === "all") return inputs;
+    if (filter === "matched")
+      return inputs.filter(
+        (i) => i.match_status === "matched" || i.match_status === "manual_claimed",
+      );
+    if (filter === "unmatched") return inputs.filter((i) => i.match_status === "no_candidate");
+    if (filter === "conflict") return inputs.filter((i) => i.match_status === "all_taken");
+    return inputs;
+  }, [inputs, filter]);
 
   async function handlePrint() {
     if (printing) return;
@@ -146,6 +185,46 @@ export function SessionInputsClient({
 
   return (
     <>
+      {/* Filter cards (formerly summary cards in page.tsx) — now clickable */}
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+        <FilterCard
+          variant="total"
+          active={filter === "all"}
+          onClick={() => setFilter("all")}
+          icon={<ListChecks className="h-3.5 w-3.5" />}
+          label="Total Input"
+          count={inputs.length}
+          footer={`Rp ${formatRupiah(totalNominalInput)}`}
+        />
+        <FilterCard
+          variant="match"
+          active={filter === "matched"}
+          onClick={() => setFilter("matched")}
+          icon={<CheckCircle2 className="h-3.5 w-3.5" />}
+          label="Match"
+          count={matchedCount}
+          footer={`Rp ${formatRupiah(totalNominalMatched)}`}
+        />
+        <FilterCard
+          variant="unmatch"
+          active={filter === "unmatched"}
+          onClick={() => setFilter("unmatched")}
+          icon={<XCircle className="h-3.5 w-3.5" />}
+          label="Tidak Match"
+          count={unmatchedCount}
+          footer={unmatchedCount > 0 ? "Perlu tindak lanjut" : "Semua ketemu"}
+        />
+        <FilterCard
+          variant="conflict"
+          active={filter === "conflict"}
+          onClick={() => setFilter("conflict")}
+          icon={<AlertTriangle className="h-3.5 w-3.5" />}
+          label="Bentrok"
+          count={conflictCount}
+          footer={conflictCount > 0 ? "Duplikat tanggal" : "Tidak ada"}
+        />
+      </div>
+
       {feedback && (
         <div
           className={`card p-3 text-sm flex items-start gap-2 ${
@@ -166,8 +245,21 @@ export function SessionInputsClient({
       <div className="card overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3 flex-wrap">
           <h2 className="font-medium text-slate-900">
-            Detail Input ({inputs.length})
-            {leftoverInputs.length > 1 && groupSelected.size === 0 && (
+            Detail Input{" "}
+            <span className="text-slate-500 font-normal">
+              ({filteredInputs.length}
+              {filter !== "all" && ` dari ${inputs.length}`})
+            </span>
+            {filter !== "all" && (
+              <button
+                type="button"
+                onClick={() => setFilter("all")}
+                className="ml-2 text-xs text-emerald-700 hover:underline font-normal"
+              >
+                · Reset filter
+              </button>
+            )}
+            {filter === "all" && leftoverInputs.length > 1 && groupSelected.size === 0 && (
               <span className="ml-2 text-xs text-slate-500 font-normal">
                 · centang 2+ baris kalau mau cocokkan banyak input ke 1 tx mutasi
               </span>
@@ -206,8 +298,12 @@ export function SessionInputsClient({
             </button>
           </div>
         </div>
-        {inputs.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-500">Belum ada input.</div>
+        {filteredInputs.length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-500">
+            {filter === "all"
+              ? "Belum ada input."
+              : "Tidak ada input dengan status yang dipilih."}
+          </div>
         ) : (
           <table className="w-full text-sm">
             <thead className="bg-slate-50/50 border-b border-slate-200">
@@ -236,7 +332,7 @@ export function SessionInputsClient({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {inputs.map((i) => {
+              {filteredInputs.map((i) => {
                 const outlet = i.outlet_id ? outletMap.get(i.outlet_id) : null;
                 const bank = i.bank_id ? bankMap.get(i.bank_id) : null;
                 const isLeftover = i.match_status === "no_candidate";
@@ -317,10 +413,6 @@ export function SessionInputsClient({
                           <button
                             type="button"
                             onClick={() => {
-                              // Fix 2026-05-15: kalau row ini ke-centang bersama
-                              // 2+ row leftover lain, arahkan ke Group Claim biar
-                              // user bisa cocokkan N input ke 1+ tx mutasi sekaligus
-                              // (mis. customer transfer 1x untuk 2 pembelian).
                               if (groupSelected.size >= 2 && groupSelected.has(i.id)) {
                                 setShowGroup(true);
                               } else {
@@ -387,5 +479,127 @@ export function SessionInputsClient({
         />
       )}
     </>
+  );
+}
+
+// ===== Filter card =====
+
+function FilterCard({
+  variant,
+  active,
+  onClick,
+  icon,
+  label,
+  count,
+  footer,
+}: {
+  variant: "total" | "match" | "unmatch" | "conflict";
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  count: number;
+  footer: string;
+}) {
+  const palette: Record<
+    typeof variant,
+    {
+      activeBg: string;
+      activeRing: string;
+      activeText: string;
+      activeCount: string;
+      activeFooter: string;
+      inactiveBg: string;
+      inactiveText: string;
+      inactiveCount: string;
+      inactiveFooter: string;
+      blob: string;
+    }
+  > = {
+    total: {
+      activeBg: "bg-gradient-to-br from-[#0F2E1F] to-[#1a4530] border-[#0F2E1F]",
+      activeRing: "ring-2 ring-[#0F2E1F]/40",
+      activeText: "text-white",
+      activeCount: "text-white",
+      activeFooter: "text-white/80",
+      inactiveBg:
+        "bg-gradient-to-br from-[#FAFAF7] to-white border-slate-200 hover:border-slate-400",
+      inactiveText: "text-slate-500",
+      inactiveCount: "text-[#0F2E1F]",
+      inactiveFooter: "text-slate-600",
+      blob: "bg-[#0F2E1F]/5",
+    },
+    match: {
+      activeBg: "bg-gradient-to-br from-[#10B981] to-[#059669] border-[#10B981]",
+      activeRing: "ring-2 ring-[#10B981]/40",
+      activeText: "text-white",
+      activeCount: "text-white",
+      activeFooter: "text-white/85",
+      inactiveBg:
+        "bg-gradient-to-br from-[#10B981]/10 via-white to-[#10B981]/5 border-[#10B981]/30 hover:border-[#10B981]/60",
+      inactiveText: "text-[#10B981]",
+      inactiveCount: "text-[#10B981]",
+      inactiveFooter: "text-[#10B981]",
+      blob: "bg-[#10B981]/15",
+    },
+    unmatch: {
+      activeBg: "bg-gradient-to-br from-red-600 to-red-700 border-red-600",
+      activeRing: "ring-2 ring-red-500/40",
+      activeText: "text-white",
+      activeCount: "text-white",
+      activeFooter: "text-white/85",
+      inactiveBg:
+        "bg-gradient-to-br from-red-50 via-white to-red-50/50 border-red-200 hover:border-red-400",
+      inactiveText: "text-red-700",
+      inactiveCount: "text-red-700",
+      inactiveFooter: "text-red-600",
+      blob: "bg-red-200/30",
+    },
+    conflict: {
+      activeBg: "bg-gradient-to-br from-amber-500 to-amber-600 border-amber-500",
+      activeRing: "ring-2 ring-amber-400/40",
+      activeText: "text-white",
+      activeCount: "text-white",
+      activeFooter: "text-white/85",
+      inactiveBg:
+        "bg-gradient-to-br from-amber-50 via-white to-amber-50/50 border-amber-200 hover:border-amber-400",
+      inactiveText: "text-amber-700",
+      inactiveCount: "text-amber-700",
+      inactiveFooter: "text-amber-600",
+      blob: "bg-amber-200/40",
+    },
+  };
+  const p = palette[variant];
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative overflow-hidden rounded-xl border p-4 shadow-sm text-left transition-all hover:-translate-y-0.5 cursor-pointer ${
+        active ? `${p.activeBg} ${p.activeRing}` : p.inactiveBg
+      }`}
+    >
+      <div className={`absolute -top-8 -right-8 h-20 w-20 rounded-full ${active ? "bg-white/15" : p.blob}`} />
+      <div className="relative">
+        <div
+          className={`text-xs font-semibold uppercase tracking-wider flex items-center gap-1 ${
+            active ? p.activeText : p.inactiveText
+          }`}
+        >
+          {icon}
+          {label}
+        </div>
+        <div
+          className={`mt-2 text-3xl font-bold ${active ? p.activeCount : p.inactiveCount}`}
+        >
+          {count}
+        </div>
+        <div
+          className={`mt-1 text-[11px] ${active ? p.activeFooter : p.inactiveFooter} font-mono`}
+        >
+          {footer}
+        </div>
+      </div>
+    </button>
   );
 }

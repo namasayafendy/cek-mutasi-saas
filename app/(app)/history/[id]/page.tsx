@@ -2,13 +2,11 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { getAccountContext } from "@/lib/supabase/context";
 import { createClient } from "@/lib/supabase/server";
-import { formatDateLong, parseDateISO, formatRupiah, formatDateID } from "@/lib/format";
+import { formatDateLong, parseDateISO, formatDateID } from "@/lib/format";
 import {
   ArrowDown,
   ArrowUp,
   CheckCircle2,
-  XCircle,
-  AlertTriangle,
   ChevronLeft,
 } from "lucide-react";
 import { SessionInputsClient } from "./session-inputs-client";
@@ -91,10 +89,6 @@ export default async function HistoryDetailPage({
   ).length;
   const unmatched = inputs.filter((i) => i.match_status === "no_candidate").length;
   const conflict = inputs.filter((i) => i.match_status === "all_taken").length;
-  const totalNominalInput = inputs.reduce((s, i) => s + i.nominal, 0);
-  const totalNominalMatched = inputs
-    .filter((i) => i.match_status === "matched" || i.match_status === "manual_claimed")
-    .reduce((s, i) => s + i.nominal, 0);
 
   return (
     <div className="space-y-6">
@@ -150,72 +144,15 @@ export default async function HistoryDetailPage({
               {" "}
               · Periode mutasi:{" "}
               <strong className="text-[#0F2E1F]">
-                {formatDateID(periodStart)} – {formatDateID(periodEnd)}
+                {formatDateID(periodStart)} - {formatDateID(periodEnd)}
               </strong>
             </>
           )}
         </p>
       </div>
 
-      {/* Summary cards — palette themed with depth */}
-      <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
-        {/* Total Input — neutral dark */}
-        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-[#FAFAF7] to-white border border-slate-200 p-4 shadow-sm">
-          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-[#0F2E1F]/5" />
-          <div className="relative">
-            <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-              Total Input
-            </div>
-            <div className="mt-2 text-3xl font-bold text-[#0F2E1F]">{inputs.length}</div>
-            <div className="mt-1 text-xs text-slate-600 font-mono">
-              Rp {formatRupiah(totalNominalInput)}
-            </div>
-          </div>
-        </div>
-
-        {/* Match — emerald */}
-        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-[#10B981]/10 via-white to-[#10B981]/5 border border-[#10B981]/30 p-4 shadow-sm">
-          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-[#10B981]/15" />
-          <div className="relative">
-            <div className="text-xs font-semibold text-[#10B981] uppercase tracking-wider flex items-center gap-1">
-              <CheckCircle2 className="h-3.5 w-3.5" /> Match
-            </div>
-            <div className="mt-2 text-3xl font-bold text-[#10B981]">{matched}</div>
-            <div className="mt-1 text-xs text-[#10B981] font-mono">
-              Rp {formatRupiah(totalNominalMatched)}
-            </div>
-          </div>
-        </div>
-
-        {/* Tidak Match — red */}
-        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-red-50 via-white to-red-50/50 border border-red-200 p-4 shadow-sm">
-          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-red-200/30" />
-          <div className="relative">
-            <div className="text-xs font-semibold text-red-700 uppercase tracking-wider flex items-center gap-1">
-              <XCircle className="h-3.5 w-3.5" /> Tidak Match
-            </div>
-            <div className="mt-2 text-3xl font-bold text-red-700">{unmatched}</div>
-            <div className="mt-1 text-[10px] text-red-600">
-              {unmatched > 0 ? "Perlu tindak lanjut" : "Semua ketemu"}
-            </div>
-          </div>
-        </div>
-
-        {/* Bentrok — amber */}
-        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-amber-50 via-white to-amber-50/50 border border-amber-200 p-4 shadow-sm">
-          <div className="absolute -top-8 -right-8 h-20 w-20 rounded-full bg-amber-200/40" />
-          <div className="relative">
-            <div className="text-xs font-semibold text-amber-700 uppercase tracking-wider flex items-center gap-1">
-              <AlertTriangle className="h-3.5 w-3.5" /> Bentrok
-            </div>
-            <div className="mt-2 text-3xl font-bold text-amber-700">{conflict}</div>
-            <div className="mt-1 text-[10px] text-amber-600">
-              {conflict > 0 ? "Duplikat tanggal" : "Tidak ada"}
-            </div>
-          </div>
-        </div>
-      </div>
-
+      {/* Filter cards + detail table — rendered inside client component for
+          interactive filter state. */}
       <SessionInputsClient
         inputs={inputs}
         outlets={outlets}
