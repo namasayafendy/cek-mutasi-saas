@@ -32,22 +32,35 @@ function ruleToMatchRules(rule: MatchRulePreset | undefined): MatchRules {
   };
 }
 
+type CompletedPass = {
+  jenis: Jenis;
+  inputs: UserInput[];
+  summary: MatchSummary;
+  matchingPool: PdfTransaction[];
+  carryoverByBank: Map<string, PdfTransaction[]>;
+  useCarryover: boolean;
+  leftoverReRun: boolean;
+};
+
 export function CheckClient({
   outlets,
   banks,
-  rules,
-  jenis,
+  rules: rulesAll,
+  initialJenis,
   accountId,
   userId,
+  debetHighlightSameColor,
 }: {
   outlets: Outlet[];
   banks: Bank[];
   rules: MatchRulePreset[];
-  jenis: Jenis;
+  initialJenis: Jenis;
   accountId: string;
   userId: string;
+  debetHighlightSameColor: boolean;
 }) {
   const router = useRouter();
+  const [jenis, setJenis] = useState<Jenis>(initialJenis);
   const [uploads, setUploads] = useState<BankUpload[]>([]);
   const [activeBankId, setActiveBankId] = useState<string>("");
   const [inputs, setInputs] = useState<UserInput[]>([]);
@@ -59,6 +72,13 @@ export function CheckClient({
   const [useCarryover, setUseCarryover] = useState(true);
   const [carryoverLoading, setCarryoverLoading] = useState(false);
   const [leftoverReRun, setLeftoverReRun] = useState(false);
+  const [previousPass, setPreviousPass] = useState<CompletedPass | null>(null);
+  const [switching, setSwitching] = useState(false);
+
+  const rules = useMemo(
+    () => rulesAll.filter((r) => r.jenis === jenis || r.jenis === "both"),
+    [rulesAll, jenis],
+  );
 
   const rulesById = useMemo(() => {
     const m = new Map<string, MatchRulePreset>();
@@ -72,12 +92,22 @@ export function CheckClient({
     return m;
   }, [outlets]);
 
+  function txsForJenis(up: BankUpload): PdfTransaction[] {
+    return jenis === "kredit"
+      ? up.parsedKredit.transactions
+      : up.parsedDebet.transactions;
+  }
+
   const activeUpload = useMemo(
     () => uploads.find((u) => u.bank.id === activeBankId) ?? uploads[0] ?? null,
     [uploads, activeBankId],
   );
 
-  // Load carry-over per bank — pakai max lookback dari rules yang ada
+  const activeUploadParsed = useMemo(() => {
+    if (!activeUpload) return null;
+    return jenis === "kredit" ? activeUpload.parsedKredit : activeUpload.parsedDebet;
+  }, [activeUpload, jenis]);
+
   useEffect(() => {
     if (uploads.length === 0) {
       setCarryoverByBank(new Map());
@@ -92,19 +122,22 @@ export function CheckClient({
         const supabase = createClient();
         const result = new Map<string, PdfTransaction[]>();
         for (const up of uploads) {
-          const txDates = up.parsed.transactions.map((t) => t.tanggalDate.getTime());
+          const txs = jenis === "kredit"
+            ? up.parsedKredit.transactions
+            : up.parsedDebet.transactions;
+          const txDates = txs.map((t) => t.tanggalDate.getTime());
           if (txDates.length === 0) continue;
           const periodStart = new Date(Math.min(...txDates));
           const fromDate = new Date(periodStart);
           fromDate.setUTCDate(fromDate.getUTCDate() - maxLookback * 3);
-          const txs = await loadCarryoverPdfTxs(supabase, {
+          const carryTxs = await loadCarryoverPdfTxs(supabase, {
             accountId,
             bankId: up.bank.id,
             jenis,
             fromDate: toDateISO(fromDate),
             beforeDate: toDateISO(periodStart),
           });
-          const tagged = txs.map((t) => ({ ...t, bankId: up.bank.id }));
+          const tagged = carryTxs.map((t) => ({ ...t, bankId: up.bank.id }));
           result.set(up.bank.id, tagged);
         }
         if (!cancelled) setCarryoverByBank(result);
@@ -116,6 +149,7 @@ export function CheckClient({
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploads, accountId, jenis, rules]);
 
   const totalCarryoverCount = useMemo(() => {
@@ -135,7 +169,10 @@ export function CheckClient({
   const matchingPool: PdfTransaction[] = useMemo(() => {
     const pool: PdfTransaction[] = [];
     for (const up of uploads) {
-      for (const tx of up.parsed.transactions) {
+      const txs = jenis === "kredit"
+        ? up.parsedKredit.transactions
+        : up.parsedDebet.transactions;
+      for (const tx of txs) {
         pool.push({ ...tx, source: "current", bankId: up.bank.id });
       }
     }
@@ -145,9 +182,8 @@ export function CheckClient({
       }
     }
     return pool;
-  }, [uploads, useCarryover, carryoverByBank]);
+  }, [uploads, useCarryover, carryoverByBank, jenis]);
 
-  // Round 1: matching dengan per-input rules + bank filter (atau "semua bank" kalau dipilih)
   const round1 = useMemo(() => {
     if (uploads.length === 0 || inputs.length === 0) {
       return {
@@ -166,7 +202,6 @@ export function CheckClient({
     });
   }, [inputs, uploads.length, matchingPool, outletColors, rulesById]);
 
-  // Round 2 (opsional): leftover re-run dengan crossBank
   const matchResult = useMemo(() => {
     if (!leftoverReRun || round1.summary.noCandidate.length === 0) {
       return round1;
@@ -181,15 +216,13 @@ export function CheckClient({
   const matchedInputs = matchResult.inputs;
   const summary = matchResult.summary;
 
-  // Leftover yang originalnya pakai bank specific (bukan "Semua bank")
-  // — kandidat untuk re-run cross-bank
   const leftoverEligibleForReRun = useMemo(() => {
     return summary.noCandidate.filter((i) => !!i.bankId);
   }, [summary.noCandidate]);
 
   const addInputs = useCallback((newInputs: UserInput[]) => {
     setInputs((prev) => [...prev, ...newInputs]);
-    setLeftoverReRun(false); // reset re-run state saat ada input baru
+    setLeftoverReRun(false);
   }, []);
 
   const removeInput = useCallback((id: string) => {
@@ -203,7 +236,7 @@ export function CheckClient({
   }, []);
 
   const reset = useCallback(() => {
-    if (!confirm("Reset total — upload mutasi baru? Input dan PDF saat ini akan hilang.")) return;
+    if (!confirm("Reset total - upload mutasi baru? Input dan PDF saat ini akan hilang.")) return;
     setUploads([]);
     setActiveBankId("");
     setInputs([]);
@@ -211,29 +244,161 @@ export function CheckClient({
     setCarryoverByBank(new Map());
     setUseCarryover(true);
     setLeftoverReRun(false);
-  }, []);
+    setPreviousPass(null);
+    setJenis(initialJenis);
+  }, [initialJenis]);
 
   const matchedTxMap = useMemo(() => {
     const map = new Map<string, string>();
     if (!activeUpload) return map;
     const activeBankId2 = activeUpload.bank.id;
-    for (const input of matchedInputs) {
-      const m = input.match;
-      if (m && m.status === "matched") {
-        if (m.txBankId && m.txBankId !== activeBankId2) continue;
-        const tx = activeUpload.parsed.transactions.find(
-          (t) =>
-            t.no === m.txNo &&
-            t.tanggalDate.getTime() === m.txDate.getTime() &&
-            t.kredit === input.nominal,
-        );
-        if (tx) {
-          map.set(`${tx.page}-${tx.no}`, m.colorHex);
+
+    function applyPass(passJenis: Jenis, inputsArr: UserInput[]) {
+      const passTxs =
+        passJenis === "kredit"
+          ? activeUpload!.parsedKredit.transactions
+          : activeUpload!.parsedDebet.transactions;
+      for (const input of inputsArr) {
+        const m = input.match;
+        if (m && m.status === "matched") {
+          if (m.txBankId && m.txBankId !== activeBankId2) continue;
+          const tx = passTxs.find(
+            (t) =>
+              t.no === m.txNo &&
+              t.tanggalDate.getTime() === m.txDate.getTime() &&
+              t.kredit === input.nominal,
+          );
+          if (tx) {
+            const useDebetSpecial = passJenis === "debet" && !debetHighlightSameColor;
+            const color = useDebetSpecial ? "#475569" : m.colorHex;
+            map.set(`${tx.page}-${tx.no}`, color);
+          }
         }
       }
     }
+
+    if (previousPass) applyPass(previousPass.jenis, previousPass.inputs);
+    applyPass(jenis, matchedInputs);
+
     return map;
-  }, [matchedInputs, activeUpload]);
+  }, [matchedInputs, activeUpload, previousPass, jenis, debetHighlightSameColor]);
+
+  async function saveAllSessionsForPass(
+    passJenis: Jenis,
+    passInputs: UserInput[],
+    passSummary: MatchSummary,
+    passPool: PdfTransaction[],
+    passCarryover: Map<string, PdfTransaction[]>,
+    passUseCarryover: boolean,
+    passLeftoverReRun: boolean,
+  ) {
+    // passSummary is intentionally unused here — we recompute per-bank subSummary.
+    void passSummary;
+    const supabase = createClient();
+    const { saveSession } = await import("@/lib/sessions/save");
+
+    for (const up of uploads) {
+      const upTxs = passJenis === "kredit" ? up.parsedKredit.transactions : up.parsedDebet.transactions;
+      const inputsForBank = passInputs.filter(
+        (i) => i.bankId === up.bank.id || !i.bankId,
+      );
+      if (inputsForBank.length === 0) continue;
+      const carryForBank = (passCarryover.get(up.bank.id) ?? []).length;
+      const txDates = upTxs.map((t) => t.tanggalDate.getTime());
+      const periodStart = txDates.length > 0 ? new Date(Math.min(...txDates)) : null;
+      const periodEnd = txDates.length > 0 ? new Date(Math.max(...txDates)) : null;
+      const pdfTotalAmount = upTxs.reduce((s, t) => s + t.kredit, 0);
+
+      const subSummary: MatchSummary = {
+        totalInput: inputsForBank.length,
+        matched: inputsForBank.filter((i) => i.match?.status === "matched").length,
+        noCandidate: inputsForBank.filter((i) => i.match?.status === "no_candidate"),
+        allTaken: inputsForBank.filter((i) => i.match?.status === "all_taken"),
+        unclaimed: passPool.filter(
+          (t) =>
+            t.bankId === up.bank.id &&
+            t.source === "current" &&
+            !inputsForBank.some(
+              (i) =>
+                i.match?.status === "matched" &&
+                (i.match.txBankId ?? i.bankId) === up.bank.id &&
+                i.match.txNo === t.no &&
+                i.match.txDate.getTime() === t.tanggalDate.getTime(),
+            ),
+        ),
+      };
+
+      try {
+        await saveSession(supabase, {
+          accountId,
+          userId,
+          bankId: up.bank.id,
+          jenis: passJenis,
+          inputs: inputsForBank,
+          summary: subSummary,
+          matchingPool: passPool,
+          pdfTotalAmount,
+          periodStart,
+          periodEnd,
+          carryOverUsed: passUseCarryover && carryForBank > 0,
+          multiBankUsed: uploads.length > 1 || passLeftoverReRun,
+        });
+      } catch (e) {
+        console.error("Save session failed for bank:", up.bank.kode, e);
+      }
+    }
+
+    if (passInputs.length > 0) {
+      const latestDate = passInputs.reduce(
+        (max, i) => (i.tanggal.getTime() > max.getTime() ? i.tanggal : max),
+        passInputs[0].tanggal,
+      );
+      const updateField =
+        passJenis === "kredit" ? "last_input_date_kredit" : "last_input_date_debet";
+      await supabase
+        .from("account_settings")
+        .update({
+          [updateField]: toDateISO(latestDate),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("account_id", accountId);
+    }
+  }
+
+  async function handleLanjut() {
+    if (uploads.length === 0 || matchedInputs.length === 0 || switching) return;
+    setSwitching(true);
+    setDownloadError(null);
+    try {
+      await saveAllSessionsForPass(
+        jenis,
+        matchedInputs,
+        summary,
+        matchingPool,
+        carryoverByBank,
+        useCarryover,
+        leftoverReRun,
+      );
+
+      setPreviousPass({
+        jenis,
+        inputs: matchedInputs,
+        summary,
+        matchingPool,
+        carryoverByBank,
+        useCarryover,
+        leftoverReRun,
+      });
+
+      const newJenis: Jenis = jenis === "kredit" ? "debet" : "kredit";
+      setJenis(newJenis);
+      setInputs([]);
+      setLeftoverReRun(false);
+      setUseCarryover(true);
+    } finally {
+      setSwitching(false);
+    }
+  }
 
   async function handleDownload() {
     if (uploads.length === 0) return;
@@ -241,99 +406,54 @@ export function CheckClient({
     setDownloadError(null);
     try {
       const { generateMultiBankPdf } = await import("@/lib/pdf/highlight");
+
+      const passes: { jenis: Jenis; inputs: UserInput[]; summary: MatchSummary }[] = [];
+      if (previousPass) {
+        passes.push({
+          jenis: previousPass.jenis,
+          inputs: previousPass.inputs,
+          summary: previousPass.summary,
+        });
+      }
+      if (matchedInputs.length > 0) {
+        passes.push({ jenis, inputs: matchedInputs, summary });
+      }
+
       const bytes = await generateMultiBankPdf({
         uploads: uploads.map((u) => ({
           bank: u.bank,
           fileBuffer: u.parsed.fileBuffer,
-          transactions: u.parsed.transactions,
+          kreditTransactions: u.parsedKredit.transactions,
+          debetTransactions: u.parsedDebet.transactions,
         })),
-        inputs: matchedInputs,
-        summary,
         outlets,
-        jenis,
+        passes,
+        debetHighlightSameColor,
       });
+
       const blob = new Blob([new Uint8Array(bytes)], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       const today = toDateISO(new Date());
       a.href = url;
       const banksTag = uploads.map((u) => u.bank.kode).join("-");
-      a.download = `mutasi-${jenis}-${banksTag}-${today}.pdf`;
+      const jenisTag = passes.length > 1 ? "kredit-debet" : passes[0].jenis;
+      a.download = `mutasi-${jenisTag}-${banksTag}-${today}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
 
       if (matchedInputs.length > 0) {
-        const supabase = createClient();
-        const { saveSession } = await import("@/lib/sessions/save");
-
-        for (const up of uploads) {
-          const inputsForBank = matchedInputs.filter(
-            (i) => i.bankId === up.bank.id || !i.bankId,
-            // input "Semua bank" (bankId="") dimasukkan ke session bank pertama (atau kita treat sebagai cross — saya simpan di bank yang match-nya)
-          );
-          if (inputsForBank.length === 0) continue;
-          const carryForBank = (carryoverByBank.get(up.bank.id) ?? []).length;
-          const txDates = up.parsed.transactions.map((t) => t.tanggalDate.getTime());
-          const periodStart = txDates.length > 0 ? new Date(Math.min(...txDates)) : null;
-          const periodEnd = txDates.length > 0 ? new Date(Math.max(...txDates)) : null;
-          const pdfTotalAmount = up.parsed.transactions.reduce((s, t) => s + t.kredit, 0);
-
-          const subSummary: MatchSummary = {
-            totalInput: inputsForBank.length,
-            matched: inputsForBank.filter((i) => i.match?.status === "matched").length,
-            noCandidate: inputsForBank.filter((i) => i.match?.status === "no_candidate"),
-            allTaken: inputsForBank.filter((i) => i.match?.status === "all_taken"),
-            unclaimed: matchingPool.filter(
-              (t) =>
-                t.bankId === up.bank.id &&
-                t.source === "current" &&
-                !matchedInputs.some(
-                  (i) =>
-                    i.match?.status === "matched" &&
-                    (i.match.txBankId ?? i.bankId) === up.bank.id &&
-                    i.match.txNo === t.no &&
-                    i.match.txDate.getTime() === t.tanggalDate.getTime(),
-                ),
-            ),
-          };
-
-          try {
-            await saveSession(supabase, {
-              accountId,
-              userId,
-              bankId: up.bank.id,
-              jenis,
-              inputs: inputsForBank,
-              summary: subSummary,
-              matchingPool,
-              pdfTotalAmount,
-              periodStart,
-              periodEnd,
-              carryOverUsed: useCarryover && carryForBank > 0,
-              multiBankUsed: uploads.length > 1 || leftoverReRun,
-            });
-          } catch (e) {
-            console.error("Save session failed for bank:", up.bank.kode, e);
-          }
-        }
-
-        if (matchedInputs.length > 0) {
-          const latestDate = matchedInputs.reduce(
-            (max, i) => (i.tanggal.getTime() > max.getTime() ? i.tanggal : max),
-            matchedInputs[0].tanggal,
-          );
-          const updateField =
-            jenis === "kredit" ? "last_input_date_kredit" : "last_input_date_debet";
-          await supabase
-            .from("account_settings")
-            .update({
-              [updateField]: toDateISO(latestDate),
-              updated_at: new Date().toISOString(),
-            })
-            .eq("account_id", accountId);
-        }
+        await saveAllSessionsForPass(
+          jenis,
+          matchedInputs,
+          summary,
+          matchingPool,
+          carryoverByBank,
+          useCarryover,
+          leftoverReRun,
+        );
         router.refresh();
       }
     } catch (err) {
@@ -359,22 +479,31 @@ export function CheckClient({
   }
 
   const totalAllAmount = uploads.reduce(
-    (s, u) => s + u.parsed.transactions.reduce((s2, t) => s2 + t.kredit, 0),
+    (s, u) => s + txsForJenis(u).reduce((s2, t) => s2 + t.kredit, 0),
     0,
   );
+
+  const oppositeJenis: Jenis = jenis === "kredit" ? "debet" : "kredit";
+  const canLanjut = matchedInputs.length > 0 && !previousPass;
+  const isFinalPass = !!previousPass;
 
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">
-            Cek Mutasi {jenis === "kredit" ? "Kredit" : "Debet"}
+            Cek Mutasi {jenis === "kredit" ? "Kredit (Masuk)" : "Debet (Keluar)"}
             <span className="ml-2 text-base font-normal text-slate-500">
-              — {uploads.length} bank
+              - {uploads.length} bank
             </span>
+            {previousPass && (
+              <span className="ml-2 inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 border border-emerald-200">
+                Pass 2 - lanjutan dari {previousPass.jenis === "kredit" ? "Kredit" : "Debet"}
+              </span>
+            )}
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            {uploads.reduce((s, u) => s + u.parsed.transactions.length, 0)} transaksi {jenis} dari{" "}
+            {uploads.reduce((s, u) => s + txsForJenis(u).length, 0)} transaksi {jenis} dari{" "}
             {uploads.length} bank.
           </p>
         </div>
@@ -384,6 +513,20 @@ export function CheckClient({
           </button>
         </div>
       </div>
+
+      {previousPass && (
+        <div className="card p-3 border-emerald-200 bg-emerald-50 text-sm text-emerald-900">
+          <div className="font-medium">
+            Pass {previousPass.jenis === "kredit" ? "Kredit" : "Debet"} selesai -{" "}
+            {previousPass.summary.matched} match dari {previousPass.summary.totalInput} input.
+          </div>
+          <div className="text-xs text-emerald-700 mt-0.5">
+            Highlight pass-1 sudah ke-save. Sekarang lanjut input{" "}
+            {jenis === "kredit" ? "transaksi masuk" : "transaksi keluar"}. Saat klik
+            &quot;Selesai &amp; Download&quot;, PDF berisi highlight kredit + debet gabungan.
+          </div>
+        </div>
+      )}
 
       {(carryoverLoading || totalCarryoverCount > 0) && (
         <div className="card p-3 border-blue-200 bg-blue-50">
@@ -412,7 +555,6 @@ export function CheckClient({
         </div>
       )}
 
-      {/* Phase 9.1: Leftover re-run banner */}
       {!leftoverReRun && leftoverEligibleForReRun.length > 0 && (
         <div className="card p-3 border-purple-200 bg-purple-50">
           <div className="flex items-start gap-2">
@@ -475,7 +617,7 @@ export function CheckClient({
                   >
                     {u.bank.label || u.bank.kode}
                     <span className="ml-1.5 text-[10px] text-slate-400">
-                      ({u.parsed.transactions.length})
+                      ({txsForJenis(u).length})
                     </span>
                   </button>
                 );
@@ -485,17 +627,17 @@ export function CheckClient({
 
           <div className="px-4 py-2 border-b border-slate-200 bg-slate-50/50 text-xs text-slate-600 flex items-center justify-between">
             <span>
-              Mutasi {activeUpload?.bank.label || activeUpload?.bank.kode || "—"} (highlight realtime)
+              Mutasi {activeUpload?.bank.label || activeUpload?.bank.kode || "-"} (highlight realtime)
             </span>
             <span>
               Total {jenis} (semua bank): Rp {formatRupiah(totalAllAmount)}
             </span>
           </div>
-          {activeUpload && (
+          {activeUpload && activeUploadParsed && (
             <PdfViewer
               pages={activeUpload.pages}
               matchedTxMap={matchedTxMap}
-              parsed={activeUpload.parsed}
+              parsed={activeUploadParsed}
             />
           )}
         </div>
@@ -520,6 +662,12 @@ export function CheckClient({
             onDownload={handleDownload}
             generating={generating}
             downloadError={downloadError}
+            jenis={jenis}
+            oppositeJenis={oppositeJenis}
+            canLanjut={canLanjut}
+            isFinalPass={isFinalPass}
+            onLanjut={handleLanjut}
+            switching={switching}
           />
         </div>
       </div>

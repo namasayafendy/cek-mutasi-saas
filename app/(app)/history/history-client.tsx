@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   ArrowDown,
   ArrowUp,
+  ArrowRight,
   CheckCircle2,
   Eye,
   History as HistoryIcon,
@@ -13,6 +14,8 @@ import {
   Loader2,
   Printer,
   Trash2,
+  TrendingUp,
+  TrendingDown,
 } from "lucide-react";
 import { formatDateLong, parseDateISO, formatRupiah, formatDateID, toDateISO } from "@/lib/format";
 import MutasiTab from "./mutasi-tab";
@@ -83,7 +86,6 @@ export default function HistoryClient({
 
   return (
     <div className="space-y-6">
-      {/* Hero header */}
       <div className="rounded-2xl bg-gradient-to-br from-[#FAFAF7] via-white to-[#10B981]/5 border border-slate-200 p-6">
         <div className="inline-flex items-center gap-2 rounded-full bg-[#10B981]/10 border border-[#10B981]/20 px-3 py-1 text-xs font-medium text-[#0F2E1F] mb-2">
           <HistoryIcon className="h-3.5 w-3.5 text-[#10B981]" />
@@ -98,7 +100,6 @@ export default function HistoryClient({
         </p>
       </div>
 
-      {/* Big tab cards */}
       <div className="grid grid-cols-3 gap-2 sm:gap-3">
         <TabCard
           active={tab === "mutasi"}
@@ -162,6 +163,35 @@ export default function HistoryClient({
         />
       )}
 
+      {/* Phase E 2026-05-15: BIG entry cards to Cek Mutasi from History.
+          Bulk-claim past unmatched transactions without re-uploading a PDF. */}
+      <div className="space-y-2 pt-2">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold text-slate-800">
+            Cek Mutasi dari History
+          </h2>
+          <span className="text-xs text-slate-500 hidden sm:inline">
+            Bulk-match input customer ke transaksi yang sudah ke-upload tapi belum ke-claim
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <HistoryCekCard
+            href="/cek-history/kredit"
+            title="Cek Kredit dari History"
+            subtitle="Cocokkan transferan masuk yang belum ke-claim"
+            icon={<TrendingUp className="h-6 w-6" />}
+            variant="green"
+          />
+          <HistoryCekCard
+            href="/cek-history/debet"
+            title="Cek Debet dari History"
+            subtitle="Cocokkan transferan keluar yang belum ke-claim"
+            icon={<TrendingDown className="h-6 w-6" />}
+            variant="red"
+          />
+        </div>
+      </div>
+
       {claimingTx && (
         <ManualClaimModal
           tx={claimingTx}
@@ -176,7 +206,53 @@ export default function HistoryClient({
   );
 }
 
-// ===== Tab Card (header navigation) =====
+// ===== History Cek Card =====
+
+function HistoryCekCard({
+  href,
+  title,
+  subtitle,
+  icon,
+  variant,
+}: {
+  href: string;
+  title: string;
+  subtitle: string;
+  icon: React.ReactNode;
+  variant: "green" | "red";
+}) {
+  const styles =
+    variant === "green"
+      ? {
+          gradient: "from-emerald-500 to-emerald-700",
+          ring: "hover:ring-emerald-300",
+          glow: "shadow-emerald-500/30",
+        }
+      : {
+          gradient: "from-rose-500 to-rose-700",
+          ring: "hover:ring-rose-300",
+          glow: "shadow-rose-500/30",
+        };
+  return (
+    <Link
+      href={href}
+      className={`group relative overflow-hidden rounded-2xl bg-gradient-to-br ${styles.gradient} text-white p-5 sm:p-6 transition-all hover:-translate-y-0.5 hover:ring-4 ${styles.ring} shadow-lg ${styles.glow}`}
+    >
+      <div className="flex items-start gap-4">
+        <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-white/15 backdrop-blur flex-shrink-0">
+          {icon}
+        </div>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-lg sm:text-xl font-bold leading-tight">{title}</h3>
+          <p className="mt-1 text-xs sm:text-sm text-white/85 leading-snug">{subtitle}</p>
+        </div>
+        <ArrowRight className="h-5 w-5 flex-shrink-0 transition-transform group-hover:translate-x-1" />
+      </div>
+    </Link>
+  );
+}
+
+// ===== Tab Card =====
 
 function TabCard({
   active,
@@ -282,7 +358,6 @@ function SessionsTab({
     const supabase = createClient();
     const now = new Date().toISOString();
 
-    // Get all input ids in this session (alive + soft-deleted, both fine).
     const { data: inputs, error: inputErr } = await supabase
       .from("cek_inputs")
       .select("id")
@@ -290,7 +365,6 @@ function SessionsTab({
     if (inputErr) throw inputErr;
     const inputIds = (inputs ?? []).map((r) => r.id);
 
-    // Soft-delete parsed_transactions claimed by these inputs.
     if (inputIds.length > 0) {
       const { error: txErr } = await supabase
         .from("parsed_transactions")
@@ -307,7 +381,6 @@ function SessionsTab({
       if (ciErr) throw ciErr;
     }
 
-    // Soft-delete the session itself.
     const { error: sesErr } = await supabase
       .from("cek_sessions")
       .update({ deleted_at: now })
@@ -409,14 +482,14 @@ function SessionsTab({
                   )}
                   {s.carry_over_used && (
                     <span className="ml-1 inline-flex items-center text-[10px] text-blue-600" title="Carry-over digunakan">
-                      ⏳
+                      *
                     </span>
                   )}
                 </td>
                 <td className="px-4 py-2 text-xs text-slate-600">
                   {periodStart && periodEnd
-                    ? `${periodStart.getUTCDate()}/${periodStart.getUTCMonth() + 1} – ${periodEnd.getUTCDate()}/${periodEnd.getUTCMonth() + 1}/${periodEnd.getUTCFullYear()}`
-                    : "—"}
+                    ? `${periodStart.getUTCDate()}/${periodStart.getUTCMonth() + 1} - ${periodEnd.getUTCDate()}/${periodEnd.getUTCMonth() + 1}/${periodEnd.getUTCFullYear()}`
+                    : "-"}
                 </td>
                 <td className="px-4 py-2 text-right font-mono">{s.total_input}</td>
                 <td className="px-4 py-2 text-right font-mono text-green-700">
@@ -513,12 +586,10 @@ function BelumMatchTab({
     setPrinting(true);
     setPrintError(null);
     try {
-      // Compute periode dari range tgl tx yang ada (atau pakai 12 bulan terakhir).
       const tanggals = unclaimed.map((t) => t.tanggal).sort();
       const from = tanggals[0] ?? toDateISO(new Date());
       const to = tanggals[tanggals.length - 1] ?? toDateISO(new Date());
 
-      // Convert UnclaimedTx → MutasiRow shape (semua belum match → claimed_by_input_id null)
       const rows = unclaimed.map((t) => ({
         id: t.id,
         bank_id: t.bank_id,
@@ -535,7 +606,6 @@ function BelumMatchTab({
         manual_claim_reason: null,
       }));
 
-      // Bank filter: kalau "all" → bank=null, kalau spesifik → ambil dari bankMap
       const bank =
         filterBank === "all"
           ? null
@@ -578,7 +648,7 @@ function BelumMatchTab({
         <CheckCircle2 className="h-10 w-10 mx-auto text-green-500" />
         <h2 className="mt-3 font-medium text-slate-900">Semua transaksi sudah ke-match</h2>
         <p className="mt-1 text-sm text-slate-600">
-          Tidak ada transaksi belum-match di periode 12 bulan terakhir. 🎉
+          Tidak ada transaksi belum-match di periode 12 bulan terakhir.
         </p>
       </div>
     );
@@ -680,7 +750,7 @@ function BelumMatchTab({
                     </td>
                     <td className="px-3 py-2">
                       <div className="text-xs text-slate-700">
-                        {bank ? bank.label || bank.kode : "—"}
+                        {bank ? bank.label || bank.kode : "-"}
                       </div>
                       <div className="text-[10px] text-slate-500">
                         {isKredit ? (
@@ -691,7 +761,7 @@ function BelumMatchTab({
                       </div>
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-700 max-w-md">
-                      <div className="font-medium">{tx.nama_pengirim || tx.nama_penerima || "—"}</div>
+                      <div className="font-medium">{tx.nama_pengirim || tx.nama_penerima || "-"}</div>
                       {tx.deskripsi && (
                         <div className="text-slate-500 truncate" title={tx.deskripsi}>
                           {tx.deskripsi}

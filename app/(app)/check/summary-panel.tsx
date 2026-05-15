@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { MatchSummary, Outlet, UserInput, Bank, MatchRulePreset } from "@/lib/types";
+import type { MatchSummary, Outlet, UserInput, Bank, MatchRulePreset, Jenis } from "@/lib/types";
 import { formatRupiah, formatDateID } from "@/lib/format";
 import {
   CheckCircle2,
@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronUp,
   Globe,
+  ArrowRight,
 } from "lucide-react";
 
 export function SummaryPanel({
@@ -27,6 +28,12 @@ export function SummaryPanel({
   onDownload,
   generating,
   downloadError,
+  jenis,
+  oppositeJenis,
+  canLanjut,
+  isFinalPass,
+  onLanjut,
+  switching,
 }: {
   summary: MatchSummary;
   inputs: UserInput[];
@@ -39,6 +46,12 @@ export function SummaryPanel({
   onDownload: () => void;
   generating: boolean;
   downloadError: string | null;
+  jenis: Jenis;
+  oppositeJenis: Jenis;
+  canLanjut: boolean;
+  isFinalPass: boolean;
+  onLanjut: () => void;
+  switching: boolean;
 }) {
   const [showInputs, setShowInputs] = useState(true);
   const [showUnclaimed, setShowUnclaimed] = useState(false);
@@ -145,7 +158,7 @@ export function SummaryPanel({
                           className="text-[10px] text-slate-400 px-1 rounded bg-white border border-slate-200 flex-shrink-0"
                           title={`Aturan: ${rule.name}`}
                         >
-                          {rule.name.length > 8 ? rule.name.slice(0, 8) + "…" : rule.name}
+                          {rule.name.length > 8 ? rule.name.slice(0, 8) + "..." : rule.name}
                         </span>
                       )}
                       <span className="ml-auto font-mono text-slate-900 flex-shrink-0">
@@ -202,7 +215,7 @@ export function SummaryPanel({
                         className="inline-flex items-center rounded bg-blue-100 text-blue-700 px-1 text-[10px] font-medium flex-shrink-0"
                         title="Dari upload sebelumnya (carry-over)"
                       >
-                        ⏳
+                        carry
                       </span>
                     )}
                     <span className="text-slate-700 flex-shrink-0">{tx.tanggal}</span>
@@ -211,7 +224,7 @@ export function SummaryPanel({
                         {bank.label || bank.kode}
                       </span>
                     )}
-                    <span className="text-slate-500 truncate">{tx.namaPengirim || "—"}</span>
+                    <span className="text-slate-500 truncate">{tx.namaPengirim || "-"}</span>
                     <span className="ml-auto font-mono text-slate-900 flex-shrink-0">
                       {formatRupiah(tx.kredit)}
                     </span>
@@ -223,19 +236,23 @@ export function SummaryPanel({
         </div>
       )}
 
-      <div className="border-t pt-3">
+      <div className="border-t pt-3 space-y-2">
         <button
           onClick={onDownload}
-          disabled={generating || inputs.length === 0}
+          disabled={generating || switching || inputs.length === 0}
           className="btn-primary w-full"
         >
           {generating ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" /> Generating PDF...
             </>
+          ) : isFinalPass ? (
+            <>
+              <Download className="h-4 w-4" /> Selesai &amp; Download PDF (Kredit + Debet)
+            </>
           ) : (
             <>
-              <Download className="h-4 w-4" /> Selesai & Download PDF
+              <Download className="h-4 w-4" /> Selesai &amp; Download PDF ({jenis === "kredit" ? "Kredit" : "Debet"} saja)
             </>
           )}
         </button>
@@ -245,6 +262,34 @@ export function SummaryPanel({
           </div>
         )}
       </div>
+
+      {canLanjut && (
+        <div className="border-t pt-3 -mx-4 -mb-4 px-4 pb-4 bg-gradient-to-br from-emerald-50 to-emerald-100/40 rounded-b-lg">
+          <button
+            onClick={onLanjut}
+            disabled={switching || generating || inputs.length === 0}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-semibold py-4 px-4 text-sm shadow-md transition-colors"
+          >
+            {switching ? (
+              <>
+                <Loader2 className="h-5 w-5 animate-spin" /> Menyimpan pass {jenis === "kredit" ? "kredit" : "debet"}...
+              </>
+            ) : (
+              <>
+                Lanjut Cek Mutasi {oppositeJenis === "kredit" ? "Kredit (Masuk)" : "Debet (Keluar)"}
+                <ArrowRight className="h-5 w-5" />
+              </>
+            )}
+          </button>
+          <p className="mt-2 text-[11px] text-emerald-800 text-center leading-tight">
+            Sudah selesai input semua{" "}
+            {jenis === "kredit" ? "transferan masuk" : "transferan keluar"}? Klik untuk lanjut cek{" "}
+            {oppositeJenis === "kredit" ? "transaksi masuk (kredit)" : "transaksi keluar (debet)"} di PDF yang sama.
+            <br />
+            PDF final nanti akan berisi highlight kredit + debet gabungan.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

@@ -27,10 +27,15 @@ import type { Bank, Jenis, PdfTransaction } from "@/lib/types";
 
 export type BankUpload = {
   bank: Bank;
+  /** Active-jenis ParsedPdf — kept for backward compat with code that
+   *  doesn't care about pass-1 vs pass-2 (mostly pdf-viewer + persistInfo
+   *  display). check-client.tsx now uses parsedKredit/parsedDebet directly
+   *  and picks based on current jenis state. */
   parsed: ParsedPdf;
+  parsedKredit: ParsedPdf;
+  parsedDebet: ParsedPdf;
   pages: RenderedPage[];
   persistInfo: PersistResult;
-  // Total tx parsed by jenis (untuk informasi user)
   parsedKreditCount: number;
   parsedDebetCount: number;
 };
@@ -119,30 +124,38 @@ export function UploadStep({
       const persisted = await persistTransactions(supabase, accountId, bank.id, doc.rows);
       const idMap = await lookupParsedTxIds(supabase, accountId, bank.id, doc.rows);
 
-      // Count both jenis (untuk info banner)
       const parsedKreditCount = doc.rows.filter((r) => r.kredit > 0).length;
       const parsedDebetCount = doc.rows.filter((r) => r.debet > 0).length;
       const otherJenisCount = jenis === "kredit" ? parsedDebetCount : parsedKreditCount;
       const otherJenisLabel = jenis === "kredit" ? "debet (transaksi keluar)" : "kredit (transaksi masuk)";
 
-      const transactions: PdfTransaction[] = doc.rows
-        .filter((r) => (jenis === "kredit" ? r.kredit > 0 : r.debet > 0))
-        .map((r) => ({
-          no: r.no,
-          page: r.page,
-          tanggal: r.tanggal,
-          tanggalDate: r.tanggalDate,
-          waktu: r.waktu,
-          namaPengirim: r.namaPengirim,
-          deskripsi: r.deskripsi,
-          kredit: jenis === "kredit" ? r.kredit : r.debet,
-          bbox: r.bbox,
-          parsedTxId: idMap.get(rowLookupKey(r)),
-          source: "current",
-          bankId: bank.id,
-        }));
+      const bankIdLocal = bank.id;
+      // Build PdfTransaction arrays for BOTH jenis upfront. This enables the
+      // "Lanjut Cek Debet/Kredit" continuation flow in check-client without
+      // requiring a re-upload or re-parse of the same PDF.
+      function buildTx(j: Jenis): PdfTransaction[] {
+        return doc.rows
+          .filter((r) => (j === "kredit" ? r.kredit > 0 : r.debet > 0))
+          .map((r) => ({
+            no: r.no,
+            page: r.page,
+            tanggal: r.tanggal,
+            tanggalDate: r.tanggalDate,
+            waktu: r.waktu,
+            namaPengirim: r.namaPengirim,
+            deskripsi: r.deskripsi,
+            kredit: j === "kredit" ? r.kredit : r.debet,
+            bbox: r.bbox,
+            parsedTxId: idMap.get(rowLookupKey(r)),
+            source: "current",
+            bankId: bankIdLocal,
+          }));
+      }
+      const kreditTransactions = buildTx("kredit");
+      const debetTransactions = buildTx("debet");
+      const activeTransactions = jenis === "kredit" ? kreditTransactions : debetTransactions;
 
-      if (transactions.length === 0) {
+      if (activeTransactions.length === 0) {
         const hint =
           otherJenisCount > 0
             ? ` Tapi ada ${otherJenisCount} tx ${otherJenisLabel} — kalau yang ingin dicek itu, pilih sesi sebaliknya.`
@@ -158,8 +171,13 @@ export function UploadStep({
       updateRow(row.id, { progress: `Render ${doc.pages.length} halaman...` });
       const pages = await renderAllPages(doc.fileBuffer, 1.4);
 
-      const parsed: ParsedPdf = {
-        transactions,
+      const parsedKredit: ParsedPdf = {
+        transactions: kreditTransactions,
+        pages: doc.pages,
+        fileBuffer: doc.fileBuffer,
+      };
+      const parsedDebet: ParsedPdf = {
+        transactions: debetTransactions,
         pages: doc.pages,
         fileBuffer: doc.fileBuffer,
       };
@@ -169,7 +187,9 @@ export function UploadStep({
         progress: undefined,
         result: {
           bank,
-          parsed,
+          parsed: jenis === "kredit" ? parsedKredit : parsedDebet,
+          parsedKredit,
+          parsedDebet,
           pages,
           persistInfo: persisted,
           parsedKreditCount,
@@ -195,7 +215,6 @@ export function UploadStep({
     const bank = row ? banks.find((b) => b.id === row.bankId) : undefined;
     const spec = bank ? getParserSpec(bank.parser_id) : undefined;
     if (!spec?.password_required) {
-      // Auto-parse setelah file dipilih (tidak perlu password)
       setTimeout(() => {
         setRows((prev) => {
           const target = prev.find((x) => x.id === rowId);
@@ -270,7 +289,7 @@ export function UploadStep({
                             className="text-slate-500"
                             title={`${otherCount} tx ${otherLabel} ada di file tapi tidak masuk sesi ini. Mereka tetap tersimpan dan bisa di-cek di sesi ${otherLabel}.`}
                           >
-                            · {otherCount} tx {otherLabel} di-skip
+                            · {otherCount} tx {otherLabel} (bisa dicek nanti lewat &ldquo;Lanjut&rdquo;)
                           </span>
                         )}
                       </span>

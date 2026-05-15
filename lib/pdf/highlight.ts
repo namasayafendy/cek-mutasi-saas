@@ -1,4 +1,8 @@
 // Generate PDF output: merged multi-bank PDF + overlay highlight + halaman rekap.
+//
+// Supports either single-jenis output (legacy "cek kredit saja" flow) OR
+// combined kredit+debet output when user uses the "Lanjut Cek Debet/Kredit"
+// continuation flow.
 
 import { PDFDocument, rgb, StandardFonts, type PDFFont } from "pdf-lib";
 import type { PdfTransaction, UserInput, MatchSummary, Outlet, Bank, Jenis } from "@/lib/types";
@@ -7,120 +11,112 @@ import { formatDateID, formatRupiah, formatDateLong } from "@/lib/format";
 
 const HIGHLIGHT_OPACITY = 0.4;
 
+// Default warna highlight untuk debet kalau setting debetHighlightSameColor = false.
+const DEFAULT_DEBET_COLOR_HEX = "#475569";
+
 const PAGE_W = 595;
 const PAGE_H = 842;
 const MARGIN = 40;
 
-// ============================================================
-// Multi-bank merge entry point (Phase 1E.2)
-// ============================================================
-
 export type BankUploadForPdf = {
   bank: Bank;
   fileBuffer: Uint8Array;
-  transactions: PdfTransaction[];
+  kreditTransactions: PdfTransaction[];
+  debetTransactions: PdfTransaction[];
+};
+
+export type CekPass = {
+  jenis: Jenis;
+  inputs: UserInput[];
+  summary: MatchSummary;
 };
 
 export type MultiBankInput = {
   uploads: BankUploadForPdf[];
-  inputs: UserInput[];
-  summary: MatchSummary;
   outlets: Outlet[];
-  jenis: Jenis;
+  passes: CekPass[];
+  debetHighlightSameColor: boolean;
 };
 
-/**
- * Generate satu PDF besar berisi:
- * - Cover/index page
- * - Per-bank: halaman PDF asli + highlight per outlet
- * - Lampiran rekap di akhir
- */
 export async function generateMultiBankPdf(args: MultiBankInput): Promise<Uint8Array> {
-  const { uploads, inputs, summary, outlets, jenis } = args;
+  const { uploads, outlets, passes, debetHighlightSameColor } = args;
   const merged = await PDFDocument.create();
   const helvetica = await merged.embedFont(StandardFonts.Helvetica);
   const helveticaBold = await merged.embedFont(StandardFonts.HelveticaBold);
   const outletById = new Map(outlets.map((o) => [o.id, o]));
 
-  // 1. Cover page
   drawCoverPage({
     pdf: merged,
     fontRegular: helvetica,
     fontBold: helveticaBold,
     uploads,
-    outlets,
-    summary,
-    jenis,
+    passes,
   });
 
-  // 2. Embed setiap bank PDF + highlight
   for (const up of uploads) {
-    // Section divider
     drawBankDivider(merged, helveticaBold, helvetica, up.bank);
 
-    // Load bank PDF + draw highlights di atas
     const copy = new Uint8Array(up.fileBuffer);
     const sourceDoc = await PDFDocument.load(copy);
     const sourcePages = sourceDoc.getPages();
 
-    const inputsForBank = inputs.filter((i) => i.bankId === up.bank.id);
+    for (const pass of passes) {
+      const passTransactions = pass.jenis === "kredit" ? up.kreditTransactions : up.debetTransactions;
+      const inputsForBank = pass.inputs.filter((i) => i.bankId === up.bank.id || !i.bankId);
 
-    for (const input of inputsForBank) {
-      const m = input.match;
-      if (!m || m.status !== "matched") continue;
-      // Phase 1E.2: skip cross-bank match (matched di bank lain, bukan di sini)
-      if (m.txBankId && m.txBankId !== up.bank.id) continue;
-      const outlet = outletById.get(input.outletId);
-      if (!outlet) continue;
+      for (const input of inputsForBank) {
+        const m = input.match;
+        if (!m || m.status !== "matched") continue;
+        if (m.txBankId && m.txBankId !== up.bank.id) continue;
+        const outlet = outletById.get(input.outletId);
 
-      const matchedTx = up.transactions.find(
-        (t) =>
-          t.no === m.txNo &&
-          t.tanggalDate.getTime() === m.txDate.getTime() &&
-          t.kredit === input.nominal,
-      );
-      if (!matchedTx) continue;
+        const matchedTx = passTransactions.find(
+          (t) =>
+            t.no === m.txNo &&
+            t.tanggalDate.getTime() === m.txDate.getTime() &&
+            t.kredit === input.nominal,
+        );
+        if (!matchedTx) continue;
 
-      const pageIndex = matchedTx.page - 1;
-      if (pageIndex < 0 || pageIndex >= sourcePages.length) continue;
-      const page = sourcePages[pageIndex];
-      const { r, g, b } = hexToRgb01(outlet.warna_hex);
+        const pageIndex = matchedTx.page - 1;
+        if (pageIndex < 0 || pageIndex >= sourcePages.length) continue;
+        const page = sourcePages[pageIndex];
 
-      page.drawRectangle({
-        x: matchedTx.bbox.xLeft,
-        y: matchedTx.bbox.yBottom,
-        width: matchedTx.bbox.width,
-        height: matchedTx.bbox.height,
-        color: rgb(r, g, b),
-        opacity: HIGHLIGHT_OPACITY,
-      });
+        const hex =
+          pass.jenis === "debet" && !debetHighlightSameColor
+            ? DEFAULT_DEBET_COLOR_HEX
+            : outlet?.warna_hex ?? DEFAULT_DEBET_COLOR_HEX;
+        const { r, g, b } = hexToRgb01(hex);
+
+        page.drawRectangle({
+          x: matchedTx.bbox.xLeft,
+          y: matchedTx.bbox.yBottom,
+          width: matchedTx.bbox.width,
+          height: matchedTx.bbox.height,
+          color: rgb(r, g, b),
+          opacity: HIGHLIGHT_OPACITY,
+        });
+      }
     }
 
-    // Copy semua halaman ke merged PDF
     const copiedPages = await merged.copyPages(sourceDoc, sourceDoc.getPageIndices());
     for (const p of copiedPages) merged.addPage(p);
   }
 
-  // 3. Lampiran rekap di akhir
   drawRecapPages({
     pdfDoc: merged,
     fontRegular: helvetica,
     fontBold: helveticaBold,
-    summary,
     outlets,
     uploads,
-    inputs,
-    jenis,
+    passes,
+    debetHighlightSameColor,
   });
 
   return await merged.save();
 }
 
-// ============================================================
-// Backward-compat single-bank API (jaga supaya code lama yang import
-// generateHighlightedPdf masih jalan, walaupun kita sudah pakai multi-bank).
-// ============================================================
-
+// Legacy backward-compat API — kept so any old import path still compiles.
 export type HighlightInput = {
   fileBuffer: Uint8Array;
   transactions: PdfTransaction[];
@@ -131,7 +127,6 @@ export type HighlightInput = {
 
 export async function generateHighlightedPdf(args: HighlightInput): Promise<Uint8Array> {
   const { fileBuffer, transactions, inputs, summary, outlets } = args;
-
   const copy = new Uint8Array(fileBuffer);
   const pdfDoc = await PDFDocument.load(copy);
   const pages = pdfDoc.getPages();
@@ -142,7 +137,6 @@ export async function generateHighlightedPdf(args: HighlightInput): Promise<Uint
     if (!m || m.status !== "matched") continue;
     const outlet = outletById.get(input.outletId);
     if (!outlet) continue;
-
     const matchedTx = transactions.find(
       (t) =>
         t.no === m.txNo &&
@@ -150,12 +144,10 @@ export async function generateHighlightedPdf(args: HighlightInput): Promise<Uint
         t.kredit === input.nominal,
     );
     if (!matchedTx) continue;
-
     const pageIndex = matchedTx.page - 1;
     if (pageIndex < 0 || pageIndex >= pages.length) continue;
     const page = pages[pageIndex];
     const { r, g, b } = hexToRgb01(outlet.warna_hex);
-
     page.drawRectangle({
       x: matchedTx.bbox.xLeft,
       y: matchedTx.bbox.yBottom,
@@ -172,22 +164,20 @@ export async function generateHighlightedPdf(args: HighlightInput): Promise<Uint
     pdfDoc,
     fontRegular: helvetica,
     fontBold: helveticaBold,
-    summary,
     outlets,
     uploads: [],
-    inputs,
-    jenis: "kredit",
+    passes: [{ jenis: "kredit", inputs, summary }],
+    debetHighlightSameColor: true,
   });
-
   return await pdfDoc.save();
 }
 
-// ============================================================
-// Helpers
-// ============================================================
-
 function asciiSafe(s: string): string {
   return s.replace(/[^\x00-\xFF]/g, "?");
+}
+
+function passLabel(jenis: Jenis): string {
+  return jenis === "kredit" ? "Kredit (Masuk)" : "Debet (Keluar)";
 }
 
 function drawCoverPage(args: {
@@ -195,15 +185,18 @@ function drawCoverPage(args: {
   fontRegular: PDFFont;
   fontBold: PDFFont;
   uploads: BankUploadForPdf[];
-  outlets: Outlet[];
-  summary: MatchSummary;
-  jenis: Jenis;
+  passes: CekPass[];
 }) {
-  const { pdf, fontRegular, fontBold, uploads, summary, jenis } = args;
+  const { pdf, fontRegular, fontBold, uploads, passes } = args;
   const page = pdf.addPage([PAGE_W, PAGE_H]);
   let y = PAGE_H - MARGIN;
 
-  page.drawText(`Rekap Cek Mutasi ${jenis === "kredit" ? "Kredit" : "Debet"}`, {
+  const titleText =
+    passes.length === 1
+      ? `Rekap Cek Mutasi ${passes[0].jenis === "kredit" ? "Kredit" : "Debet"}`
+      : `Rekap Cek Mutasi (Kredit + Debet)`;
+
+  page.drawText(asciiSafe(titleText), {
     x: MARGIN,
     y: y - 18,
     size: 18,
@@ -231,41 +224,45 @@ function drawCoverPage(args: {
   y -= 20;
 
   for (const up of uploads) {
-    const txCount = up.transactions.length;
-    const total = up.transactions.reduce((s, t) => s + t.kredit, 0);
+    const kreditTotal = up.kreditTransactions.reduce((s, t) => s + t.kredit, 0);
+    const debetTotal = up.debetTransactions.reduce((s, t) => s + t.kredit, 0);
     page.drawText(
-      asciiSafe(`- ${up.bank.label || up.bank.kode} | ${txCount} transaksi | Rp ${formatRupiah(total)}`),
-      { x: MARGIN, y: y - 10, size: 10, font: fontRegular, color: rgb(0.15, 0.15, 0.2) },
+      asciiSafe(
+        `- ${up.bank.label || up.bank.kode} | Kredit: ${up.kreditTransactions.length} tx (Rp ${formatRupiah(kreditTotal)}) | Debet: ${up.debetTransactions.length} tx (Rp ${formatRupiah(debetTotal)})`,
+      ),
+      { x: MARGIN, y: y - 10, size: 9, font: fontRegular, color: rgb(0.15, 0.15, 0.2) },
     );
-    y -= 16;
+    y -= 14;
   }
 
-  y -= 12;
-  page.drawText("Ringkasan:", {
-    x: MARGIN,
-    y: y - 13,
-    size: 12,
-    font: fontBold,
-    color: rgb(0.1, 0.1, 0.15),
-  });
-  y -= 20;
-
-  const lines = [
-    `Total input: ${summary.totalInput}`,
-    `Match: ${summary.matched}`,
-    `Tidak ditemukan: ${summary.noCandidate.length}`,
-    `Bentrok: ${summary.allTaken.length}`,
-    `Mutasi belum di-claim: ${summary.unclaimed.length}`,
-  ];
-  for (const line of lines) {
-    page.drawText(asciiSafe(line), {
+  y -= 8;
+  for (const pass of passes) {
+    page.drawText(asciiSafe(`Ringkasan ${passLabel(pass.jenis)}:`), {
       x: MARGIN,
-      y: y - 10,
-      size: 10,
-      font: fontRegular,
-      color: rgb(0.15, 0.15, 0.2),
+      y: y - 13,
+      size: 12,
+      font: fontBold,
+      color: rgb(0.1, 0.1, 0.15),
     });
-    y -= 14;
+    y -= 18;
+    const lines = [
+      `Total input: ${pass.summary.totalInput}`,
+      `Match: ${pass.summary.matched}`,
+      `Tidak ditemukan: ${pass.summary.noCandidate.length}`,
+      `Bentrok: ${pass.summary.allTaken.length}`,
+      `Mutasi belum di-claim: ${pass.summary.unclaimed.length}`,
+    ];
+    for (const line of lines) {
+      page.drawText(asciiSafe(line), {
+        x: MARGIN,
+        y: y - 10,
+        size: 10,
+        font: fontRegular,
+        color: rgb(0.15, 0.15, 0.2),
+      });
+      y -= 14;
+    }
+    y -= 6;
   }
 }
 
@@ -298,15 +295,14 @@ type DrawRecapArgs = {
   pdfDoc: PDFDocument;
   fontRegular: PDFFont;
   fontBold: PDFFont;
-  summary: MatchSummary;
   outlets: Outlet[];
   uploads: BankUploadForPdf[];
-  inputs: UserInput[];
-  jenis: Jenis;
+  passes: CekPass[];
+  debetHighlightSameColor: boolean;
 };
 
 function drawRecapPages(args: DrawRecapArgs) {
-  const { pdfDoc, fontRegular, fontBold, summary, outlets, uploads, jenis } = args;
+  const { pdfDoc, fontRegular, fontBold, outlets, uploads, passes, debetHighlightSameColor } = args;
   const outletById = new Map(outlets.map((o) => [o.id, o]));
   const bankById = new Map(uploads.map((u) => [u.bank.id, u.bank]));
 
@@ -387,26 +383,35 @@ function drawRecapPages(args: DrawRecapArgs) {
     return b ? b.label || b.kode : bankId;
   }
 
-  title(`Lampiran Rekap Cek Mutasi ${jenis === "kredit" ? "Kredit" : "Debet"}`);
+  const titleText =
+    passes.length === 1
+      ? `Lampiran Rekap Cek Mutasi ${passes[0].jenis === "kredit" ? "Kredit" : "Debet"}`
+      : `Lampiran Rekap Cek Mutasi (Kredit + Debet)`;
+  title(titleText);
   line(`Dibuat: ${formatDateLong(new Date())}`);
   spacer(6);
 
-  subtitle("Ringkasan");
-  line(`Total input: ${summary.totalInput}`);
-  line(`Berhasil ter-match: ${summary.matched}`, { color: [0.05, 0.4, 0.1] });
-  line(`Tidak ada nominal di mutasi: ${summary.noCandidate.length}`, { color: [0.7, 0.1, 0.1] });
-  line(`Bentrok (sudah ke-claim input lain): ${summary.allTaken.length}`, {
-    color: [0.7, 0.4, 0.05],
-  });
-  line(`Transaksi mutasi tidak di-claim: ${summary.unclaimed.length}`);
+  const totalInput = passes.reduce((s, p) => s + p.summary.totalInput, 0);
+  const totalMatched = passes.reduce((s, p) => s + p.summary.matched, 0);
+  const totalNoCandidate = passes.reduce((s, p) => s + p.summary.noCandidate.length, 0);
+  const totalAllTaken = passes.reduce((s, p) => s + p.summary.allTaken.length, 0);
+  const totalUnclaimed = passes.reduce((s, p) => s + p.summary.unclaimed.length, 0);
+
+  subtitle("Ringkasan Keseluruhan");
+  line(`Total input: ${totalInput}`);
+  line(`Berhasil ter-match: ${totalMatched}`, { color: [0.05, 0.4, 0.1] });
+  line(`Tidak ada nominal di mutasi: ${totalNoCandidate}`, { color: [0.7, 0.1, 0.1] });
+  line(`Bentrok (sudah ke-claim input lain): ${totalAllTaken}`, { color: [0.7, 0.4, 0.05] });
+  line(`Transaksi mutasi tidak di-claim: ${totalUnclaimed}`);
   spacer(8);
 
   if (uploads.length > 0) {
     subtitle("Bank yang di-cek");
     for (const up of uploads) {
-      const total = up.transactions.reduce((s, t) => s + t.kredit, 0);
+      const kt = up.kreditTransactions.reduce((s, t) => s + t.kredit, 0);
+      const dt = up.debetTransactions.reduce((s, t) => s + t.kredit, 0);
       line(
-        `- ${up.bank.label || up.bank.kode}: ${up.transactions.length} transaksi, Rp ${formatRupiah(total)}`,
+        `- ${up.bank.label || up.bank.kode}: Kredit ${up.kreditTransactions.length} tx (Rp ${formatRupiah(kt)}), Debet ${up.debetTransactions.length} tx (Rp ${formatRupiah(dt)})`,
       );
     }
     spacer(8);
@@ -414,47 +419,58 @@ function drawRecapPages(args: DrawRecapArgs) {
 
   subtitle("Legend warna outlet");
   for (const o of outlets) colorBox(o.warna_hex, o.nama);
-  spacer(8);
-
-  subtitle(`Input tidak ditemukan di mutasi (${summary.noCandidate.length})`);
-  if (summary.noCandidate.length === 0) {
-    line("Tidak ada.", { color: [0.4, 0.4, 0.5] });
-  } else {
-    for (const i of summary.noCandidate) {
-      const o = outletById.get(i.outletId);
-      const bk = uploads.length > 0 ? ` [${bankLabel(i.bankId)}]` : "";
-      line(`- ${formatDateID(i.tanggal)}${bk} | ${o?.nama ?? "?"} | Rp ${formatRupiah(i.nominal)}`);
-    }
+  if (passes.some((p) => p.jenis === "debet") && !debetHighlightSameColor) {
+    colorBox(DEFAULT_DEBET_COLOR_HEX, "Debet (warna khusus)");
   }
   spacer(8);
 
-  subtitle(`Input bentrok / sudah ke-claim input lain (${summary.allTaken.length})`);
-  if (summary.allTaken.length === 0) {
-    line("Tidak ada.", { color: [0.4, 0.4, 0.5] });
-  } else {
-    for (const i of summary.allTaken) {
-      const o = outletById.get(i.outletId);
-      const m = i.match;
-      const conflictCount = m?.status === "all_taken" ? m.conflictCount : 0;
-      const conflictDates = m?.status === "all_taken" ? m.conflictDates.join(", ") : "";
-      const bk = uploads.length > 0 ? ` [${bankLabel(i.bankId)}]` : "";
-      line(
-        `- ${formatDateID(i.tanggal)}${bk} | ${o?.nama ?? "?"} | Rp ${formatRupiah(i.nominal)} (${conflictCount}x sudah ke-claim di tgl ${conflictDates})`,
-      );
-    }
-  }
-  spacer(8);
+  for (const pass of passes) {
+    subtitle(`Detail Pass ${passLabel(pass.jenis)}`);
+    line(`Total input: ${pass.summary.totalInput}`);
+    line(`Match: ${pass.summary.matched}`, { color: [0.05, 0.4, 0.1] });
+    spacer(4);
 
-  subtitle(`Transaksi mutasi tidak di-claim (${summary.unclaimed.length})`);
-  if (summary.unclaimed.length === 0) {
-    line("Tidak ada.", { color: [0.4, 0.4, 0.5] });
-  } else {
-    for (const tx of summary.unclaimed) {
-      const bk = uploads.length > 0 ? ` [${bankLabel(tx.bankId)}]` : "";
-      const carry = tx.source === "carryover" ? " (carry-over)" : "";
-      line(
-        `- ${tx.tanggal} ${tx.waktu}${bk}${carry} | ${tx.namaPengirim || "?"} | Rp ${formatRupiah(tx.kredit)}`,
-      );
+    line(`Tidak ditemukan di mutasi (${pass.summary.noCandidate.length}):`, { bold: true });
+    if (pass.summary.noCandidate.length === 0) {
+      line("  Tidak ada.", { color: [0.4, 0.4, 0.5] });
+    } else {
+      for (const i of pass.summary.noCandidate) {
+        const o = outletById.get(i.outletId);
+        const bk = uploads.length > 0 ? ` [${bankLabel(i.bankId)}]` : "";
+        line(`  - ${formatDateID(i.tanggal)}${bk} | ${o?.nama ?? "?"} | Rp ${formatRupiah(i.nominal)}`);
+      }
     }
+    spacer(4);
+
+    line(`Bentrok (${pass.summary.allTaken.length}):`, { bold: true });
+    if (pass.summary.allTaken.length === 0) {
+      line("  Tidak ada.", { color: [0.4, 0.4, 0.5] });
+    } else {
+      for (const i of pass.summary.allTaken) {
+        const o = outletById.get(i.outletId);
+        const m = i.match;
+        const conflictCount = m?.status === "all_taken" ? m.conflictCount : 0;
+        const conflictDates = m?.status === "all_taken" ? m.conflictDates.join(", ") : "";
+        const bk = uploads.length > 0 ? ` [${bankLabel(i.bankId)}]` : "";
+        line(
+          `  - ${formatDateID(i.tanggal)}${bk} | ${o?.nama ?? "?"} | Rp ${formatRupiah(i.nominal)} (${conflictCount}x ke-claim di ${conflictDates})`,
+        );
+      }
+    }
+    spacer(4);
+
+    line(`Mutasi tidak di-claim (${pass.summary.unclaimed.length}):`, { bold: true });
+    if (pass.summary.unclaimed.length === 0) {
+      line("  Tidak ada.", { color: [0.4, 0.4, 0.5] });
+    } else {
+      for (const tx of pass.summary.unclaimed) {
+        const bk = uploads.length > 0 ? ` [${bankLabel(tx.bankId)}]` : "";
+        const carry = tx.source === "carryover" ? " (carry-over)" : "";
+        line(
+          `  - ${tx.tanggal} ${tx.waktu}${bk}${carry} | ${tx.namaPengirim || "?"} | Rp ${formatRupiah(tx.kredit)}`,
+        );
+      }
+    }
+    spacer(10);
   }
 }

@@ -1,21 +1,24 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { redirect, notFound } from "next/navigation";
 import { getAccountContext } from "@/lib/supabase/context";
 import { createClient } from "@/lib/supabase/server";
-import { CheckClient } from "./check-client";
-import { getParserSpec } from "@/lib/banks/registry";
+import HistoryCekClient from "./history-cek-client";
 import type { Outlet, Bank, Jenis, MatchRulePreset } from "@/lib/types";
 
-export default async function CheckPage({
-  searchParams,
+// Cek Mutasi dari History: bulk-claim parsed_transactions yang belum ke-claim,
+// tanpa upload PDF baru. Ada 2 rute statis: /cek-history/kredit dan /cek-history/debet.
+
+export default async function CekHistoryPage({
+  params,
 }: {
-  searchParams: Promise<{ jenis?: string }>;
+  params: Promise<{ jenis: string }>;
 }) {
+  const { jenis: jenisParam } = await params;
+  if (jenisParam !== "kredit" && jenisParam !== "debet") notFound();
+  const jenis: Jenis = jenisParam;
+
   const ctx = await getAccountContext();
   if (!ctx) redirect("/login");
-
-  const params = await searchParams;
-  const jenis: Jenis = params.jenis === "debet" ? "debet" : "kredit";
 
   const supabase = await createClient();
   const [outletsRes, banksRes, rulesRes] = await Promise.all([
@@ -36,22 +39,15 @@ export default async function CheckPage({
   ]);
 
   const outlets = (outletsRes.data ?? []) as Outlet[];
-  const allActiveBanks = (banksRes.data ?? []) as Bank[];
+  const banks = (banksRes.data ?? []) as Bank[];
   const rules = (rulesRes.data ?? []) as MatchRulePreset[];
-
-  const readyBanks = allActiveBanks.filter((b) => {
-    const spec = getParserSpec(b.parser_id);
-    return spec?.status === "ready";
-  });
 
   if (outlets.length === 0) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">
-            Cek Mutasi {jenis === "kredit" ? "Kredit" : "Debet"}
-          </h1>
-        </div>
+        <h1 className="text-2xl font-semibold text-slate-900">
+          Cek Mutasi {jenis === "kredit" ? "Kredit" : "Debet"} dari History
+        </h1>
         <div className="card p-5 border-amber-200 bg-amber-50">
           <h2 className="font-medium text-amber-900">Tambah outlet dulu</h2>
           <p className="mt-1 text-sm text-amber-800">
@@ -66,19 +62,16 @@ export default async function CheckPage({
     );
   }
 
-  if (readyBanks.length === 0) {
+  if (banks.length === 0) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">
-            Cek Mutasi {jenis === "kredit" ? "Kredit" : "Debet"}
-          </h1>
-        </div>
+        <h1 className="text-2xl font-semibold text-slate-900">
+          Cek Mutasi {jenis === "kredit" ? "Kredit" : "Debet"} dari History
+        </h1>
         <div className="card p-5 border-amber-200 bg-amber-50">
-          <h2 className="font-medium text-amber-900">Belum ada bank ready</h2>
+          <h2 className="font-medium text-amber-900">Belum ada bank aktif</h2>
           <p className="mt-1 text-sm text-amber-800">
-            Belum ada bank yang status-nya &ldquo;Ready&rdquo;. Tambah bank di menu Bank, atau
-            tunggu update parser bank Anda dirilis.
+            Aktifkan minimal 1 bank di menu Bank.
           </p>
           <Link href="/banks" className="btn-primary mt-3">
             Kelola bank
@@ -91,16 +84,13 @@ export default async function CheckPage({
   if (rules.length === 0) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">
-            Cek Mutasi {jenis === "kredit" ? "Kredit" : "Debet"}
-          </h1>
-        </div>
+        <h1 className="text-2xl font-semibold text-slate-900">
+          Cek Mutasi {jenis === "kredit" ? "Kredit" : "Debet"} dari History
+        </h1>
         <div className="card p-5 border-amber-200 bg-amber-50">
           <h2 className="font-medium text-amber-900">Belum ada aturan matching</h2>
           <p className="mt-1 text-sm text-amber-800">
-            Sebelum cek mutasi, Anda perlu set minimal 1 aturan matching (lookback,
-            tolerance, dll). Buat preset &quot;QRIS&quot;, &quot;EDC Settle&quot;, atau pakai default.
+            Buat minimal 1 aturan matching dulu di menu Aturan.
           </p>
           <Link href="/aturan" className="btn-primary mt-3">
             Kelola aturan
@@ -111,11 +101,11 @@ export default async function CheckPage({
   }
 
   return (
-    <CheckClient
+    <HistoryCekClient
       outlets={outlets}
-      banks={readyBanks}
+      banks={banks}
       rules={rules}
-      initialJenis={jenis}
+      jenis={jenis}
       accountId={ctx.account.id}
       userId={ctx.user.id}
       debetHighlightSameColor={ctx.settings?.debet_highlight_same_color ?? true}

@@ -18,13 +18,13 @@ export type SaveSessionInput = {
   summary: MatchSummary;
   /** Phase 4.3: matching pool (current PDF + carry-over) untuk lookup parsedTxId saat link claim */
   matchingPool?: PdfTransaction[];
-  /** Total nominal di PDF mutasi yang baru di-upload (untuk cek_session.total_nominal_input is misleading; we use tx values) */
   pdfTotalAmount: number;
-  /** Periode mutasi (dari first/last tx date di PDF) */
   periodStart: Date | null;
   periodEnd: Date | null;
   carryOverUsed?: boolean;
   multiBankUsed?: boolean;
+  /** Phase D 2026-05-15: session dibuat lewat Cek Mutasi History (bukan upload PDF baru). */
+  fromHistory?: boolean;
 };
 
 export type SavedSession = {
@@ -58,6 +58,7 @@ export async function saveSession(
       total_nominal_matched: totalNominalMatched,
       carry_over_used: args.carryOverUsed ?? false,
       multi_bank_used: args.multiBankUsed ?? false,
+      from_history: args.fromHistory ?? false,
       completed_at: new Date().toISOString(),
     })
     .select("id")
@@ -69,8 +70,6 @@ export async function saveSession(
   const sessionId = sessionData.id;
 
   // 2. Insert cek_inputs (batch)
-  // Phase 4.3 + 1E.2: lookup parsedTxId pakai key (bankId+no+date+nominal)
-  // supaya multi-bank tidak collide. Bank dari MatchResult.txBankId (Phase 1E.2).
   const poolByKey = new Map<string, PdfTransaction>();
   if (args.matchingPool) {
     for (const tx of args.matchingPool) {
@@ -81,7 +80,6 @@ export async function saveSession(
 
   function findMatchedTxId(input: UserInput): string | null {
     if (input.match?.status !== "matched") return null;
-    // Phase 1E.2: pakai txBankId dari match kalau ada (cross-bank), fallback ke input.bankId
     const bankId = input.match.txBankId ?? input.bankId;
     const key = `${bankId ?? "_"}|${input.match.txNo}|${input.match.txDate.getTime()}|${input.nominal}`;
     const tx = poolByKey.get(key);
@@ -93,9 +91,6 @@ export async function saveSession(
     account_id: args.accountId,
     tanggal_input: toDateISO(i.tanggal),
     outlet_id: i.outletId || null,
-    // Phase 9.1: bank_id dari input (kalau "" = "Semua bank" → simpan null).
-    // Kalau matched cross-bank, simpan bank tujuan match (txBankId) supaya
-    // /history Mutasi tab benar.
     bank_id:
       i.match?.status === "matched" && i.match.txBankId
         ? i.match.txBankId
@@ -120,7 +115,6 @@ export async function saveSession(
       .select("id, matched_tx_id");
 
     if (inputsErr) {
-      // Don't fail entire save — session sudah terbuat
       console.error("Gagal save cek_inputs:", inputsErr.message);
     } else if (insertedInputs && insertedInputs.length > 0) {
       // Phase 4.3 + bugfix 2026-05-15:
@@ -142,7 +136,6 @@ export async function saveSession(
           { claims: claimUpdates },
         );
         if (rpcErr) {
-          // Fallback (mis. RPC belum di-deploy): jalankan loop lama supaya tetap robust.
           console.error("claim_parsed_transactions RPC failed, falling back to loop:", rpcErr.message);
           for (const u of claimUpdates) {
             const { error: updErr } = await supabase
@@ -176,6 +169,7 @@ export async function saveSession(
       total_matched: args.summary.matched,
       total_nominal_matched: totalNominalMatched,
       carry_over_used: args.carryOverUsed ?? false,
+      from_history: args.fromHistory ?? false,
       carryover_claimed: carryoverClaimed,
     },
   });

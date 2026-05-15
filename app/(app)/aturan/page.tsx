@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getAccountContext } from "@/lib/supabase/context";
 import { createClient } from "@/lib/supabase/server";
 import { AturanClient } from "./aturan-client";
+import { DebetColorToggle } from "./debet-color-toggle";
 import type { MatchRulePreset } from "@/lib/types";
 
 export default async function AturanPage() {
@@ -28,5 +29,12 @@ export default async function AturanPage() {
     .order("created_at", { ascending: true });
   const rules = (rulesData ?? []) as MatchRulePreset[];
 
-  return <AturanClient initialRules={rules} accountId={ctx.account.id} />;
+  const sameColor = ctx.settings?.debet_highlight_same_color ?? true;
+
+  return (
+    <div className="space-y-6">
+      <AturanClient initialRules={rules} accountId={ctx.account.id} />
+      <DebetColorToggle accountId={ctx.account.id} initialSameColor={sameColor} />
+    </div>
+  );
 }
