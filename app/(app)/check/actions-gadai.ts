@@ -113,3 +113,59 @@ export async function pullGadaiClaims(): Promise<GadaiPullResult> {
 
   return { ok: true, inputs, unmappedOutlets: [...unmapped], total: inputs.length };
 }
+
+// ============================================================
+// Phase 2-E: Kirim hasil match balik ke Aceh Gadai
+// Setelah Pak "Cocokkan", kirim status match tiap klaim (matched/tidak)
+// ke Aceh Gadai -> update status klaim + trigger alert pagi.
+// ============================================================
+
+export type GadaiPushResult =
+  | { ok: true; updated: number; unmatched: number; alertSent: boolean }
+  | { ok: false; error: string };
+
+export async function pushGadaiResults(
+  results: { id: string; matched: boolean }[],
+): Promise<GadaiPushResult> {
+  const ctx = await getAccountContext();
+  if (!ctx) return { ok: false, error: "Sesi tidak valid." };
+
+  const supabase = await createClient();
+  const { data: cfg } = await supabase
+    .from("account_settings")
+    .select("gadai_api_url, gadai_api_key, gadai_sync_enabled")
+    .eq("account_id", ctx.account.id)
+    .maybeSingle();
+  const c = cfg as
+    | { gadai_api_url: string | null; gadai_api_key: string | null; gadai_sync_enabled: boolean }
+    | null;
+  if (!c?.gadai_sync_enabled || !c.gadai_api_url || !c.gadai_api_key) {
+    return { ok: false, error: "Integrasi Aceh Gadai belum diaktifkan." };
+  }
+
+  const clean = (results || [])
+    .filter((r) => r && r.id)
+    .map((r) => ({ id: String(r.id), matched: !!r.matched }));
+  if (clean.length === 0) return { ok: false, error: "Tidak ada hasil untuk dikirim." };
+
+  try {
+    const base = c.gadai_api_url.replace(/\/+$/, "");
+    const res = await fetch(`${base}/api/transfer-klaim/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${c.gadai_api_key}` },
+      body: JSON.stringify({ results: clean }),
+      cache: "no-store",
+    });
+    if (!res.ok) return { ok: false, error: `Aceh Gadai HTTP ${res.status}` };
+    const j = await res.json();
+    if (!j?.ok) return { ok: false, error: j?.msg || "ditolak Aceh Gadai" };
+    return {
+      ok: true,
+      updated: Number(j.updated || 0),
+      unmatched: Number(j.unmatched || 0),
+      alertSent: !!j.alertSent,
+    };
+  } catch (e) {
+    return { ok: false, error: "Gagal kirim ke Aceh Gadai: " + String(e) };
+  }
+}

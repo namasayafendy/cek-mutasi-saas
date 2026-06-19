@@ -16,6 +16,7 @@ import { createClient } from "@/lib/supabase/client";
 import { toDateISO, formatRupiah } from "@/lib/format";
 import { loadCarryoverPdfTxs } from "@/lib/sessions/carryover";
 import { History as HistoryIcon, Globe, Loader2 } from "lucide-react";
+import { pushGadaiResults } from "./actions-gadai";
 import { UploadStep, type BankUpload } from "./upload-step";
 import { PdfViewer } from "./pdf-viewer";
 import { InputPanel } from "./input-panel";
@@ -74,6 +75,8 @@ export function CheckClient({
   const [useCarryover, setUseCarryover] = useState(true);
   const [carryoverLoading, setCarryoverLoading] = useState(false);
   const [leftoverReRun, setLeftoverReRun] = useState(false);
+  const [kirimBusy, setKirimBusy] = useState(false);
+  const [kirimMsg, setKirimMsg] = useState<string | null>(null);
   const [previousPass, setPreviousPass] = useState<CompletedPass | null>(null);
   const [switching, setSwitching] = useState(false);
 
@@ -216,6 +219,36 @@ export function CheckClient({
   }, [round1, matchingPool, outletColors, rulesById, leftoverReRun]);
 
   const matchedInputs = matchResult.inputs;
+
+  // Phase 2-E: kirim hasil match transfer Aceh Gadai (id klaim diawali "TFK-")
+  async function handleKirimGadai() {
+    setKirimMsg(null);
+    setKirimBusy(true);
+    try {
+      const gadaiInputs = matchedInputs.filter((i) => String(i.id).startsWith("TFK-"));
+      if (gadaiInputs.length === 0) {
+        setKirimMsg("Tidak ada transfer dari Aceh Gadai di daftar ini.");
+        return;
+      }
+      const results = gadaiInputs.map((i) => ({
+        id: i.id,
+        matched: i.match?.status === "matched",
+      }));
+      const res = await pushGadaiResults(results);
+      if (!res.ok) {
+        setKirimMsg("❌ " + res.error);
+        return;
+      }
+      setKirimMsg(
+        `✅ Terkirim. ${res.updated} cocok, ${res.unmatched} belum ketemu.` +
+          (res.alertSent ? " Alert Telegram terkirim." : " (alert gagal terkirim)"),
+      );
+    } catch (e) {
+      setKirimMsg("❌ " + String(e));
+    } finally {
+      setKirimBusy(false);
+    }
+  }
   const summary = matchResult.summary;
 
   const leftoverEligibleForReRun = useMemo(() => {
@@ -672,6 +705,19 @@ export function CheckClient({
             onLanjut={handleLanjut}
             switching={switching}
           />
+          {jenis === "kredit" && gadaiSyncEnabled && (
+            <div className="card p-4">
+              <button
+                type="button"
+                onClick={handleKirimGadai}
+                disabled={kirimBusy}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                {kirimBusy ? "Mengirim..." : "Kirim hasil ke Aceh Gadai + Alert"}
+              </button>
+              {kirimMsg && <p className="mt-1 text-[11px] text-slate-600">{kirimMsg}</p>}
+            </div>
+          )}
         </div>
       </div>
     </div>
