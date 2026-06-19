@@ -15,6 +15,7 @@ export function InputPanel({
   defaultBankId,
   onAdd,
   enableGadaiPull,
+  gadaiArah = "kredit",
 }: {
   outlets: Outlet[];
   banks: Bank[];
@@ -22,6 +23,7 @@ export function InputPanel({
   defaultBankId: string;
   onAdd: (inputs: UserInput[]) => void;
   enableGadaiPull?: boolean;
+  gadaiArah?: "kredit" | "debet";
 }) {
   const [outletId, setOutletId] = useState(outlets[0]?.id ?? "");
   const [bankId, setBankId] = useState(defaultBankId || banks[0]?.id || "");
@@ -38,7 +40,7 @@ export function InputPanel({
     setPullMsg(null);
     setPulling(true);
     try {
-      const res = await pullGadaiClaims();
+      const res = await pullGadaiClaims(gadaiArah);
       if (!res.ok) {
         setPullMsg("❌ " + res.error);
         return;
@@ -157,7 +159,7 @@ export function InputPanel({
             className="w-full inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
             <Download className="h-4 w-4" />
-            {pulling ? "Menarik..." : "Tarik transfer dari Aceh Gadai"}
+            {pulling ? "Menarik..." : `Tarik transfer ${gadaiArah === "debet" ? "keluar " : ""}dari Aceh Gadai`}
           </button>
           {pullMsg && <p className="mt-1 text-[11px] text-slate-600">{pullMsg}</p>}
         </div>

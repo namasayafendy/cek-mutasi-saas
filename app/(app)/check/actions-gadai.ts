@@ -30,7 +30,9 @@ function normName(s: string): string {
   return String(s ?? "").trim().replace(/\s+/g, " ").toUpperCase();
 }
 
-export async function pullGadaiClaims(): Promise<GadaiPullResult> {
+export async function pullGadaiClaims(
+  arah: "kredit" | "debet" = "kredit",
+): Promise<GadaiPullResult> {
   const ctx = await getAccountContext();
   if (!ctx) return { ok: false, error: "Sesi tidak valid. Silakan login ulang." };
 
@@ -54,7 +56,7 @@ export async function pullGadaiClaims(): Promise<GadaiPullResult> {
   let claims: any[] = [];
   try {
     const base = c.gadai_api_url.replace(/\/+$/, "");
-    const res = await fetch(`${base}/api/transfer-klaim?days=60`, {
+    const res = await fetch(`${base}/api/transfer-klaim?days=60&arah=${arah}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${c.gadai_api_key}` },
       cache: "no-store",
@@ -84,13 +86,13 @@ export async function pullGadaiClaims(): Promise<GadaiPullResult> {
     .order("urutan");
   const defaultBankId = banks && banks.length === 1 ? (banks[0] as any).id : "";
 
-  // 5) Match rule default (kredit/both)
+  // 5) Match rule default (sesuai arah)
   const { data: rules } = await supabase
     .from("match_rules")
     .select("id, is_default")
     .eq("account_id", accountId)
     .is("deleted_at", null)
-    .or("jenis.eq.kredit,jenis.eq.both")
+    .or(arah === "debet" ? "jenis.eq.debet,jenis.eq.both" : "jenis.eq.kredit,jenis.eq.both")
     .order("is_default", { ascending: false });
   const defaultRuleId = rules && rules.length > 0 ? (rules[0] as any).id : "";
 
@@ -126,6 +128,7 @@ export type GadaiPushResult =
 
 export async function pushGadaiResults(
   results: { id: string; matched: boolean }[],
+  arah: "kredit" | "debet" = "kredit",
 ): Promise<GadaiPushResult> {
   const ctx = await getAccountContext();
   if (!ctx) return { ok: false, error: "Sesi tidak valid." };
@@ -153,7 +156,7 @@ export async function pushGadaiResults(
     const res = await fetch(`${base}/api/transfer-klaim/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${c.gadai_api_key}` },
-      body: JSON.stringify({ results: clean }),
+      body: JSON.stringify({ results: clean, arah }),
       cache: "no-store",
     });
     if (!res.ok) return { ok: false, error: `Aceh Gadai HTTP ${res.status}` };

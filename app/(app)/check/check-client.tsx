@@ -33,6 +33,23 @@ function ruleToMatchRules(rule: MatchRulePreset | undefined): MatchRules {
   };
 }
 
+// Klaim transfer KELUAR dari Aceh Gadai (id diawali "TFKD-") dicocokkan KETAT:
+// tanggal PERSIS (lookback 0) + nominal PERSIS. Beda dari kredit (default H-3).
+const GADAI_DEBET_RULES: MatchRules = {
+  lookback_days: 0,
+  forward_window_days: 0,
+  match_mode: "exact",
+  tolerance_rp: 0,
+  tolerance_pct: 0,
+};
+function gadaiAwareRules(
+  input: UserInput,
+  rulesById: Map<string, MatchRulePreset>,
+): MatchRules {
+  if (String(input.id).startsWith("TFKD-")) return GADAI_DEBET_RULES;
+  return ruleToMatchRules(rulesById.get(input.matchRuleId));
+}
+
 type CompletedPass = {
   jenis: Jenis;
   inputs: UserInput[];
@@ -203,7 +220,7 @@ export function CheckClient({
       };
     }
     return runMatching(inputs, matchingPool, outletColors, {
-      getRulesForInput: (input) => ruleToMatchRules(rulesById.get(input.matchRuleId)),
+      getRulesForInput: (input) => gadaiAwareRules(input, rulesById),
     });
   }, [inputs, uploads.length, matchingPool, outletColors, rulesById]);
 
@@ -212,7 +229,7 @@ export function CheckClient({
       return round1;
     }
     return runMatching(round1.inputs, matchingPool, outletColors, {
-      getRulesForInput: (input) => ruleToMatchRules(rulesById.get(input.matchRuleId)),
+      getRulesForInput: (input) => gadaiAwareRules(input, rulesById),
       forceCrossBank: true,
       mode: "leftover-only",
     });
@@ -225,7 +242,8 @@ export function CheckClient({
     setKirimMsg(null);
     setKirimBusy(true);
     try {
-      const gadaiInputs = matchedInputs.filter((i) => String(i.id).startsWith("TFK-"));
+      const prefix = jenis === "debet" ? "TFKD-" : "TFK-";
+      const gadaiInputs = matchedInputs.filter((i) => String(i.id).startsWith(prefix));
       if (gadaiInputs.length === 0) {
         setKirimMsg("Tidak ada transfer dari Aceh Gadai di daftar ini.");
         return;
@@ -234,7 +252,7 @@ export function CheckClient({
         id: i.id,
         matched: i.match?.status === "matched",
       }));
-      const res = await pushGadaiResults(results);
+      const res = await pushGadaiResults(results, jenis === "debet" ? "debet" : "kredit");
       if (!res.ok) {
         setKirimMsg("❌ " + res.error);
         return;
@@ -684,7 +702,8 @@ export function CheckClient({
             rules={rules}
             defaultBankId={activeUpload?.bank.id ?? ""}
             onAdd={addInputs}
-            enableGadaiPull={jenis === "kredit" && !!gadaiSyncEnabled}
+            enableGadaiPull={!!gadaiSyncEnabled}
+            gadaiArah={jenis === "debet" ? "debet" : "kredit"}
           />
           <SummaryPanel
             summary={summary}
@@ -705,7 +724,7 @@ export function CheckClient({
             onLanjut={handleLanjut}
             switching={switching}
           />
-          {jenis === "kredit" && gadaiSyncEnabled && (
+          {gadaiSyncEnabled && (
             <div className="card p-4">
               <button
                 type="button"
@@ -713,7 +732,7 @@ export function CheckClient({
                 disabled={kirimBusy}
                 className="w-full inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
               >
-                {kirimBusy ? "Mengirim..." : "Kirim hasil ke Aceh Gadai + Alert"}
+                {kirimBusy ? "Mengirim..." : `Kirim hasil ${jenis === "debet" ? "transfer keluar " : ""}ke Aceh Gadai + Alert`}
               </button>
               {kirimMsg && <p className="mt-1 text-[11px] text-slate-600">{kirimMsg}</p>}
             </div>
