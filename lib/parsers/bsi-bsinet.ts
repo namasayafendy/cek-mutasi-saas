@@ -9,13 +9,15 @@ const ROW_HEIGHT = 45;
 const ROW_TOLERANCE = 22;
 const COL_X_TOLERANCE = 30;
 
-const DATE_RE = /^\d{2}-\d{2}-\d{4}$/;
+const DATE_ANY_RE = /(\d{2}-\d{2}-\d{4})/; // tanggal di mana saja dalam string gabungan
+const TIME_RE = /(\d{1,2}\.\d{2})/;        // jam HH.MM
 const KREDIT_RE = /^[\d,]+\.\d{2}$/;
 const DEBET_RE = /^[\d,]+\.\d{2}-?$/; // debet kadang ada minus di akhir
 
 const DEFAULT_WAKTU_X = 91.6;
 const DEFAULT_KREDIT_X = 937;
 const DEFAULT_DEBET_X = 847;
+const DEFAULT_KODE_X = 1120;
 
 type RawItem = { str: string; x: number; y: number; width: number; height: number };
 
@@ -28,13 +30,14 @@ function parseAmount(s: string): number {
 
 async function detectColumnXs(
   pdf: { numPages: number; getPage: (n: number) => Promise<{ getTextContent: () => Promise<{ items: unknown[] }> }> },
-): Promise<{ waktuX: number; kreditX: number; debetX: number }> {
+): Promise<{ waktuX: number; kreditX: number; debetX: number; kodeX: number }> {
   let waktuX: number | null = null;
   let kreditX: number | null = null;
   let debetX: number | null = null;
+  let kodeX: number | null = null;
 
   for (let p = 1; p <= pdf.numPages; p++) {
-    if (waktuX !== null && kreditX !== null && debetX !== null) break;
+    if (waktuX !== null && kreditX !== null && debetX !== null && kodeX !== null) break;
     const page = await pdf.getPage(p);
     const tc = await page.getTextContent();
     for (const it of tc.items) {
@@ -45,6 +48,7 @@ async function detectColumnXs(
       if (s === "Waktu" && waktuX === null) waktuX = x;
       if (s === "Kredit" && kreditX === null) kreditX = x;
       if (s === "Debet" && debetX === null) debetX = x;
+      if (s === "Kode" && kodeX === null) kodeX = x;
     }
   }
 
@@ -52,6 +56,7 @@ async function detectColumnXs(
     waktuX: waktuX ?? DEFAULT_WAKTU_X,
     kreditX: kreditX ?? DEFAULT_KREDIT_X,
     debetX: debetX ?? DEFAULT_DEBET_X,
+    kodeX: kodeX ?? DEFAULT_KODE_X,
   };
 }
 
@@ -64,7 +69,7 @@ export async function parseBsiBsinet(
   const { getDocument } = await import("../pdf/pdf-loader");
   const pdf = await getDocument(fileBuffer);
 
-  const { waktuX, kreditX, debetX } = await detectColumnXs(pdf);
+  const { waktuX, kreditX, debetX, kodeX } = await detectColumnXs(pdf);
 
   const rows: ParsedTxRow[] = [];
   const pages: { width: number; height: number }[] = [];
@@ -101,18 +106,21 @@ export async function parseBsiBsinet(
       const yMax = yCenter + ROW_TOLERANCE;
       const rowItems = items.filter((it) => it.y >= yMin && it.y <= yMax);
 
-      const dateItem = rowItems.find(
-        (it) => Math.abs(it.x - waktuX) <= COL_X_TOLERANCE && DATE_RE.test(it.str.trim()),
-      );
-      if (!dateItem) continue;
-      const tanggalDate = parseDateID(dateItem.str.trim());
+      // Tanggal & jam: BSINet kadang memecah jadi 2 baris ("01-05-" + "2026 10.21").
+      // Gabungkan semua potongan di kolom Waktu lalu ekstrak via regex. Tetap
+      // kompatibel dgn format lama yang utuh "01-05-2026".
+      const waktuItems = rowItems
+        .filter((it) => Math.abs(it.x - waktuX) <= COL_X_TOLERANCE && it.str.trim().length > 0)
+        .sort((a, b) => b.y - a.y);
+      const waktuJoined = waktuItems.map((i) => i.str.trim()).join(" ");
+      const dateMatch = waktuJoined.replace(/\s+/g, "").match(DATE_ANY_RE);
+      if (!dateMatch) continue;
+      const tanggalStr = dateMatch[1];
+      const tanggalDate = parseDateID(tanggalStr);
       if (!tanggalDate) continue;
 
-      const timeItem = rowItems.find(
-        (it) =>
-          Math.abs(it.x - waktuX) <= COL_X_TOLERANCE && /^\d{1,2}\.\d{2}$/.test(it.str.trim()),
-      );
-      const waktu = timeItem?.str.trim() ?? "";
+      const timeMatch = waktuJoined.match(TIME_RE);
+      const waktu = timeMatch ? timeMatch[1] : "";
 
       const kreditItem = rowItems.find(
         (it) => Math.abs(it.x - kreditX) <= COL_X_TOLERANCE && KREDIT_RE.test(it.str.trim()),
@@ -148,22 +156,33 @@ export async function parseBsiBsinet(
         .sort((a, b) => b.y - a.y);
       const namaPenerima = namaPenerimaItems.map((i) => i.str.trim()).join(" ").trim();
 
-      // Deskripsi
+      // Deskripsi: batasi sebelum kolom Debet supaya nominal debet (mis. x~857)
+      // tidak ikut tergabung jadi teks keterangan; buang juga token nominal.
       const deskXMin = kreditX - 240;
-      const deskXMax = kreditX - 60;
+      const deskXMax = debetX - 20;
       const deskItems = rowItems
-        .filter((it) => it.x >= deskXMin && it.x <= deskXMax && it.str.trim().length > 0)
+        .filter(
+          (it) =>
+            it.x >= deskXMin &&
+            it.x <= deskXMax &&
+            it.str.trim().length > 0 &&
+            !KREDIT_RE.test(it.str.trim()) &&
+            !DEBET_RE.test(it.str.trim()),
+        )
         .sort((a, b) => b.y - a.y);
       const deskripsi = deskItems.map((i) => i.str.trim()).join(" ").trim();
 
-      // No.Referensi: kolom No.Referensi, biasanya x ~155-170
-      const refXMin = waktuX + 60;
-      const refXMax = waktuX + 105;
+      // No.Referensi (FT...) ada di kiri kolom Nama Pengirim. Satu transfer keluar
+      // = 2 baris (pokok + biaya Rp6.500) berbagi ref yang SAMA, dibedakan kolom
+      // Kode (213 vs 234) → ikutkan Kode supaya dedup tidak menabrakkan keduanya.
       const refItem = rowItems.find(
-        (it) =>
-          it.x >= refXMin && it.x <= refXMax && /FT[A-Z0-9]+/i.test(it.str.trim()),
+        (it) => it.x < namaXMin && /^FT[A-Z0-9]{5,}/i.test(it.str.trim()),
       );
-      const noRef = refItem?.str.trim() ?? null;
+      const kodeItem = rowItems.find(
+        (it) => Math.abs(it.x - kodeX) <= COL_X_TOLERANCE && /^\d{2,4}$/.test(it.str.trim()),
+      );
+      const kode = kodeItem?.str.trim() ?? "";
+      const noRef = refItem ? refItem.str.trim() + (kode ? `/${kode}` : "") : null;
 
       // Saldo: di kolom saldo, x ~kreditX + 86
       const saldoXMin = kreditX + 60;
@@ -179,7 +198,7 @@ export async function parseBsiBsinet(
       rows.push({
         no,
         page: pageNum,
-        tanggal: dateItem.str.trim(),
+        tanggal: tanggalStr,
         tanggalDate,
         waktu,
         namaPengirim,
