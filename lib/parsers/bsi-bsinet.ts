@@ -129,8 +129,22 @@ export async function parseBsiBsinet(
         (it) => Math.abs(it.x - debetX) <= COL_X_TOLERANCE && DEBET_RE.test(it.str.trim()),
       );
 
-      const kredit = kreditItem ? parseAmount(kreditItem.str.trim()) : 0;
-      const debet = debetItem ? parseAmount(debetItem.str.trim()) : 0;
+      let kredit = kreditItem ? parseAmount(kreditItem.str.trim()) : 0;
+      let debet = debetItem ? parseAmount(debetItem.str.trim()) : 0;
+
+      // Fallback: kadang pdfjs menggabung NOMINAL dgn teks deskripsi jadi 1 item
+      // (mis. "Tf lhok - TRF Ke - M NASIR 1,240,000.00-") sehingga tak ada item
+      // angka terpisah di kolom Debet/Kredit -> baris bisa hilang. Ekstrak dari
+      // ekor teks: akhiran minus = debet, tanpa minus = kredit.
+      if (kredit === 0 && debet === 0) {
+        for (const it of rowItems) {
+          const mm = it.str.trim().match(/^(.*\S)\s+([\d,]+\.\d{2})(-?)$/);
+          if (mm && it.x >= waktuX + 100) {
+            const v = parseAmount(mm[2] + mm[3]);
+            if (v > 0) { if (mm[3] === "-") debet = v; else kredit = v; break; }
+          }
+        }
+      }
 
       // Skip kalau tidak ada nominal sama sekali
       if (kredit === 0 && debet === 0) continue;
@@ -170,7 +184,13 @@ export async function parseBsiBsinet(
             !DEBET_RE.test(it.str.trim()),
         )
         .sort((a, b) => b.y - a.y);
-      const deskripsi = deskItems.map((i) => i.str.trim()).join(" ").trim();
+      // Strip nominal yg menempel di ekor teks (kasus item gabungan) supaya
+      // keterangan bersih tanpa angka.
+      const deskripsi = deskItems
+        .map((i) => i.str.trim().replace(/\s+[\d,]+\.\d{2}-?$/, "").trim())
+        .filter((s) => s.length > 0)
+        .join(" ")
+        .trim();
 
       // No.Referensi (FT...) ada di kiri kolom Nama Pengirim. Satu transfer keluar
       // = 2 baris (pokok + biaya Rp6.500) berbagi ref yang SAMA, dibedakan kolom
