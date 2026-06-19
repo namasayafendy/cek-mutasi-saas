@@ -50,6 +50,7 @@ export function CheckClient({
   accountId,
   userId,
   debetHighlightSameColor,
+  gadaiSyncEnabled,
 }: {
   outlets: Outlet[];
   banks: Bank[];
@@ -58,6 +59,7 @@ export function CheckClient({
   accountId: string;
   userId: string;
   debetHighlightSameColor: boolean;
+  gadaiSyncEnabled?: boolean;
 }) {
   const router = useRouter();
   const [jenis, setJenis] = useState<Jenis>(initialJenis);
@@ -649,6 +651,7 @@ export function CheckClient({
             rules={rules}
             defaultBankId={activeUpload?.bank.id ?? ""}
             onAdd={addInputs}
+            enableGadaiPull={jenis === "kredit" && !!gadaiSyncEnabled}
           />
           <SummaryPanel
             summary={summary}

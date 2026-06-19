@@ -3,7 +3,8 @@
 import { useState, useMemo, useEffect } from "react";
 import type { Outlet, UserInput, Bank, MatchRulePreset } from "@/lib/types";
 import { parseNominal, formatRupiah, parseDateISO, toDateISO } from "@/lib/format";
-import { Plus, Globe, Star } from "lucide-react";
+import { Plus, Globe, Star, Download } from "lucide-react";
+import { pullGadaiClaims } from "./actions-gadai";
 
 const ALL_BANKS_VALUE = "_all";
 
@@ -13,12 +14,14 @@ export function InputPanel({
   rules,
   defaultBankId,
   onAdd,
+  enableGadaiPull,
 }: {
   outlets: Outlet[];
   banks: Bank[];
   rules: MatchRulePreset[];
   defaultBankId: string;
   onAdd: (inputs: UserInput[]) => void;
+  enableGadaiPull?: boolean;
 }) {
   const [outletId, setOutletId] = useState(outlets[0]?.id ?? "");
   const [bankId, setBankId] = useState(defaultBankId || banks[0]?.id || "");
@@ -28,6 +31,44 @@ export function InputPanel({
   const [tanggal, setTanggal] = useState(toDateISO(new Date()));
   const [raw, setRaw] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [pullMsg, setPullMsg] = useState<string | null>(null);
+
+  async function handlePullGadai() {
+    setPullMsg(null);
+    setPulling(true);
+    try {
+      const res = await pullGadaiClaims();
+      if (!res.ok) {
+        setPullMsg("❌ " + res.error);
+        return;
+      }
+      const conv: UserInput[] = res.inputs
+        .map((i) => {
+          const dt = parseDateISO(i.tanggalISO);
+          if (!dt || !i.nominal) return null;
+          return {
+            id: i.id,
+            tanggal: dt,
+            outletId: i.outletId,
+            bankId: i.bankId,
+            matchRuleId: i.matchRuleId,
+            nominal: i.nominal,
+          } as UserInput;
+        })
+        .filter((x): x is UserInput => x !== null);
+      if (conv.length > 0) onAdd(conv);
+      const warn =
+        res.unmappedOutlets.length > 0
+          ? ` ⚠️ outlet belum cocok: ${res.unmappedOutlets.join(", ")}`
+          : "";
+      setPullMsg(`✅ ${conv.length} transfer ditarik dari Aceh Gadai.${warn}`);
+    } catch (e) {
+      setPullMsg("❌ Gagal: " + String(e));
+    } finally {
+      setPulling(false);
+    }
+  }
 
   useEffect(() => {
     if (defaultBankId) setBankId(defaultBankId);
@@ -106,6 +147,21 @@ export function InputPanel({
           itu. Klik &quot;+ Tambah&quot; untuk push ke list. Setelah itu bisa ganti filter dan input batch baru.
         </p>
       </div>
+
+      {enableGadaiPull && (
+        <div>
+          <button
+            type="button"
+            onClick={handlePullGadai}
+            disabled={pulling}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <Download className="h-4 w-4" />
+            {pulling ? "Menarik..." : "Tarik transfer dari Aceh Gadai"}
+          </button>
+          {pullMsg && <p className="mt-1 text-[11px] text-slate-600">{pullMsg}</p>}
+        </div>
+      )}
 
       <div className={`grid gap-3 ${multiBank ? "grid-cols-2" : "grid-cols-2"}`}>
         {multiBank && (
