@@ -267,6 +267,14 @@ export function CheckClient({
       setKirimBusy(false);
     }
   }
+
+  // GABUNGAN (alur Aceh Gadai): kirim hasil + alert, LALU selesai & download
+  // (generate PDF + tandai mutasi claimed + simpan). Tombol "Selesai & Download"
+  // manual tetap terpisah utk cek tanpa Aceh Gadai.
+  async function handleKirimDanSelesai() {
+    await handleKirimGadai();
+    await handleDownload();
+  }
   const summary = matchResult.summary;
 
   const leftoverEligibleForReRun = useMemo(() => {
@@ -728,12 +736,17 @@ export function CheckClient({
             <div className="card p-4">
               <button
                 type="button"
-                onClick={handleKirimGadai}
-                disabled={kirimBusy}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                onClick={handleKirimDanSelesai}
+                disabled={kirimBusy || generating}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
               >
-                {kirimBusy ? "Mengirim..." : `Kirim hasil ${jenis === "debet" ? "transfer keluar " : ""}ke Aceh Gadai + Alert`}
+                {(kirimBusy || generating)
+                  ? "Memproses..."
+                  : `Kirim ke Aceh Gadai + Alert & Selesai${jenis === "debet" ? " (transfer keluar)" : ""}`}
               </button>
+              <p className="mt-1 text-[11px] text-slate-500">
+                Sekali klik: kirim hasil + alert ke Aceh Gadai, lalu selesai (PDF + tandai mutasi). Untuk cek manual, pakai &quot;Selesai &amp; Download&quot; di panel kanan.
+              </p>
               {kirimMsg && <p className="mt-1 text-[11px] text-slate-600">{kirimMsg}</p>}
             </div>
           )}
