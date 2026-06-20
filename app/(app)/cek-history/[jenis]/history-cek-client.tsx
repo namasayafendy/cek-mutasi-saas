@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { InputPanel } from "../../check/input-panel";
 import { SummaryPanel } from "../../check/summary-panel";
+import { pushGadaiResults } from "../../check/actions-gadai";
 
 function ruleToMatchRules(rule: MatchRulePreset | undefined): MatchRules {
   if (!rule) return DEFAULT_RULES;
@@ -36,6 +37,23 @@ function ruleToMatchRules(rule: MatchRulePreset | undefined): MatchRules {
     tolerance_rp: rule.tolerance_rp,
     tolerance_pct: Number(rule.tolerance_pct),
   };
+}
+
+// Klaim transfer KELUAR Aceh Gadai (id "TFKD-") dicocokkan KETAT: tanggal PERSIS
+// (lookback 0) + nominal PERSIS. Beda dari kredit (default H-3).
+const GADAI_DEBET_RULES: MatchRules = {
+  lookback_days: 0,
+  forward_window_days: 0,
+  match_mode: "exact",
+  tolerance_rp: 0,
+  tolerance_pct: 0,
+};
+function gadaiAwareRules(
+  input: UserInput,
+  rulesById: Map<string, MatchRulePreset>,
+): MatchRules {
+  if (String(input.id).startsWith("TFKD-")) return GADAI_DEBET_RULES;
+  return ruleToMatchRules(rulesById.get(input.matchRuleId));
 }
 
 type FilterState = {
@@ -63,6 +81,7 @@ export default function HistoryCekClient({
   accountId,
   userId,
   debetHighlightSameColor,
+  gadaiSyncEnabled,
 }: {
   outlets: Outlet[];
   banks: Bank[];
@@ -71,6 +90,7 @@ export default function HistoryCekClient({
   accountId: string;
   userId: string;
   debetHighlightSameColor: boolean;
+  gadaiSyncEnabled?: boolean;
 }) {
   const router = useRouter();
   const [filter, setFilter] = useState<FilterState>(defaultFilter);
@@ -85,6 +105,8 @@ export default function HistoryCekClient({
   const [savedSessionInfo, setSavedSessionInfo] = useState<{ matched: number; total: number } | null>(null);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [kirimBusy, setKirimBusy] = useState(false);
+  const [kirimMsg, setKirimMsg] = useState<string | null>(null);
 
   // Filter rules by jenis (sama seperti di /check)
   const rules = useMemo(
@@ -191,14 +213,14 @@ export default function HistoryCekClient({
       };
     }
     return runMatching(inputs, pool, outletColors, {
-      getRulesForInput: (input) => ruleToMatchRules(rulesById.get(input.matchRuleId)),
+      getRulesForInput: (input) => gadaiAwareRules(input, rulesById),
     });
   }, [inputs, poolLoaded, pool, outletColors, rulesById]);
 
   const matchResult = useMemo(() => {
     if (!leftoverReRun || round1.summary.noCandidate.length === 0) return round1;
     return runMatching(round1.inputs, pool, outletColors, {
-      getRulesForInput: (input) => ruleToMatchRules(rulesById.get(input.matchRuleId)),
+      getRulesForInput: (input) => gadaiAwareRules(input, rulesById),
       forceCrossBank: true,
       mode: "leftover-only",
     });
@@ -206,6 +228,37 @@ export default function HistoryCekClient({
 
   const matchedInputs = matchResult.inputs;
   const summary = matchResult.summary;
+
+  // Kirim hasil cocok klaim Aceh Gadai (kredit "TFK-" / debet "TFKD-") + alert.
+  async function handleKirimGadai() {
+    setKirimMsg(null);
+    setKirimBusy(true);
+    try {
+      const prefix = jenis === "debet" ? "TFKD-" : "TFK-";
+      const gadaiInputs = matchedInputs.filter((i) => String(i.id).startsWith(prefix));
+      if (gadaiInputs.length === 0) {
+        setKirimMsg("Tidak ada transfer dari Aceh Gadai di daftar ini.");
+        return;
+      }
+      const results = gadaiInputs.map((i) => ({
+        id: i.id,
+        matched: i.match?.status === "matched",
+      }));
+      const res = await pushGadaiResults(results, jenis === "debet" ? "debet" : "kredit");
+      if (!res.ok) {
+        setKirimMsg("❌ " + res.error);
+        return;
+      }
+      setKirimMsg(
+        `✅ Terkirim. ${res.updated} cocok, ${res.unmatched} belum ketemu.` +
+          (res.alertSent ? " Alert Telegram terkirim." : " (alert gagal terkirim)"),
+      );
+    } catch (e) {
+      setKirimMsg("❌ " + String(e));
+    } finally {
+      setKirimBusy(false);
+    }
+  }
 
   const leftoverEligibleForReRun = useMemo(
     () => summary.noCandidate.filter((i) => !!i.bankId),
@@ -518,6 +571,8 @@ export default function HistoryCekClient({
             rules={rules}
             defaultBankId={filteredBanks[0]?.id ?? ""}
             onAdd={addInputs}
+            enableGadaiPull={!!gadaiSyncEnabled}
+            gadaiArah={jenis === "debet" ? "debet" : "kredit"}
           />
           <SummaryPanel
             summary={summary}
@@ -539,6 +594,20 @@ export default function HistoryCekClient({
             onLanjut={() => {}}
             switching={false}
           />
+        </div>
+      )}
+
+      {poolLoaded && gadaiSyncEnabled && (
+        <div className="card p-4">
+          <button
+            type="button"
+            onClick={handleKirimGadai}
+            disabled={kirimBusy}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {kirimBusy ? "Mengirim..." : `Kirim hasil ${jenis === "debet" ? "transfer keluar " : ""}ke Aceh Gadai + Alert`}
+          </button>
+          {kirimMsg && <p className="mt-1 text-[11px] text-slate-600">{kirimMsg}</p>}
         </div>
       )}
 

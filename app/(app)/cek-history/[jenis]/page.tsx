@@ -109,6 +109,7 @@ export default async function CekHistoryPage({
       accountId={ctx.account.id}
       userId={ctx.user.id}
       debetHighlightSameColor={ctx.settings?.debet_highlight_same_color ?? true}
+      gadaiSyncEnabled={(ctx.settings as { gadai_sync_enabled?: boolean } | null)?.gadai_sync_enabled ?? false}
     />
   );
 }
