@@ -2,7 +2,7 @@
 // Format: PDF dengan tabel transaksi, kolom posisi X di-detect dynamic dari header
 // "Waktu" dan "Kredit" supaya adaptif ke variasi layout.
 
-import type { ParsedDocument, ParsedTxRow, ParseOptions } from "./types";
+import type { ParsedDocument, ParsedTxRow, ParseOptions, StatementMeta } from "./types";
 import { parseDateID } from "@/lib/format";
 
 const ROW_HEIGHT = 45;
@@ -57,6 +57,43 @@ async function detectColumnXs(
     kreditX: kreditX ?? DEFAULT_KREDIT_X,
     debetX: debetX ?? DEFAULT_DEBET_X,
     kodeX: kodeX ?? DEFAULT_KODE_X,
+  };
+}
+
+// Ekstrak ringkasan header (total tercetak + saldo awal/akhir) dari halaman 1.
+// Nilai dari header = eksak (bukan hasil pembulatan per-baris).
+async function extractStatementMeta(
+  pdf: { getPage: (n: number) => Promise<{ getTextContent: () => Promise<{ items: unknown[] }> }> },
+): Promise<Pick<StatementMeta, "printedKredit" | "printedDebet" | "saldoAwal" | "saldoAkhir">> {
+  const tc = await (await pdf.getPage(1)).getTextContent();
+  const items: { s: string; x: number; y: number }[] = [];
+  for (const it of tc.items) {
+    const o = it as { str?: string; transform?: number[] };
+    if (typeof o.str !== "string" || !Array.isArray(o.transform)) continue;
+    items.push({ s: o.str, x: o.transform[4], y: o.transform[5] });
+  }
+  const num = (s: string): number | null => {
+    const m = s.match(/([\d,]+\.\d{2})/);
+    return m ? parseAmount(m[1]) : null;
+  };
+  const valNear = (line: { x: number; y: number }): number | null => {
+    const v = items.find((it) => Math.abs(it.y - line.y) < 3 && it.x > line.x && /[\d,]+\.\d{2}/.test(it.s));
+    return v ? num(v.s) : null;
+  };
+  const labeled = (label: string): number | null => {
+    const lab = items.find((it) => it.s.includes(label));
+    if (!lab) return null;
+    return num(lab.s) ?? valNear(lab);
+  };
+  // "Saldo riil ... per [tgl]" muncul 2x: atas = awal, bawah = akhir.
+  const saldoLines = items.filter((it) => it.s.includes("Saldo riil")).sort((a, b) => b.y - a.y);
+  const saldoNum = (line?: { s: string; x: number; y: number }): number | null =>
+    line ? (num(line.s) ?? valNear(line)) : null;
+  return {
+    printedKredit: labeled("Total Kredit"),
+    printedDebet: labeled("Total Debet"),
+    saldoAwal: saldoNum(saldoLines[0]),
+    saldoAkhir: saldoNum(saldoLines[1]),
   };
 }
 
@@ -238,5 +275,14 @@ export async function parseBsiBsinet(
     }
   }
 
-  return { rows, pages, fileBuffer };
+  const dates = rows.map((r) => r.tanggalDate.getTime()).filter((t) => !Number.isNaN(t));
+  const toISO = (t: number) => new Date(t).toISOString().slice(0, 10);
+  const metaHeader = await extractStatementMeta(pdf);
+  const statementMeta: StatementMeta = {
+    ...metaHeader,
+    firstDate: dates.length ? toISO(Math.min(...dates)) : null,
+    lastDate: dates.length ? toISO(Math.max(...dates)) : null,
+  };
+
+  return { rows, pages, fileBuffer, statementMeta };
 }

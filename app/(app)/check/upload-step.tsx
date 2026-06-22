@@ -20,6 +20,7 @@ import {
   type PersistResult,
 } from "@/lib/parsers/persist";
 import { getParserSpec } from "@/lib/banks/registry";
+import { analyzeIntegrity, type IntegrityResult } from "@/lib/parsers/integrity";
 import { createClient } from "@/lib/supabase/client";
 import type { ParsedPdf } from "@/lib/pdf/parser";
 import type { RenderedPage } from "@/lib/pdf/renderer";
@@ -38,6 +39,7 @@ export type BankUpload = {
   persistInfo: PersistResult;
   parsedKreditCount: number;
   parsedDebetCount: number;
+  integrity?: IntegrityResult;
 };
 
 type QueueRow = {
@@ -119,10 +121,25 @@ export function UploadStep({
         password: row.password || undefined,
       });
 
+      // Cek kelengkapan (A) + kontinuitas/bolong (B) vs titik terakhir bank.
+      const integrity = analyzeIntegrity(doc, bank.recon_last_saldo ?? null);
+
       updateRow(row.id, { progress: "Menyimpan ke history (auto dedup)..." });
       const supabase = createClient();
       const persisted = await persistTransactions(supabase, accountId, bank.id, doc.rows);
       const idMap = await lookupParsedTxIds(supabase, accountId, bank.id, doc.rows);
+
+      // Update "titik terakhir" rekonsiliasi bank (kalau statement ini lebih baru).
+      const sm = doc.statementMeta;
+      if (sm?.saldoAkhir != null && sm.lastDate) {
+        const prev = bank.recon_last_date ?? null;
+        if (!prev || sm.lastDate >= prev) {
+          await supabase
+            .from("banks")
+            .update({ recon_last_saldo: sm.saldoAkhir, recon_last_date: sm.lastDate })
+            .eq("id", bank.id);
+        }
+      }
 
       const parsedKreditCount = doc.rows.filter((r) => r.kredit > 0).length;
       const parsedDebetCount = doc.rows.filter((r) => r.debet > 0).length;
@@ -194,6 +211,7 @@ export function UploadStep({
           persistInfo: persisted,
           parsedKreditCount,
           parsedDebetCount,
+          integrity,
         },
       });
     } catch (err) {
@@ -307,6 +325,52 @@ export function UploadStep({
                   </button>
                 )}
               </div>
+
+              {row.result?.integrity &&
+                (row.result.integrity.complete !== null || row.result.integrity.connected !== null) &&
+                (() => {
+                  const ig = row.result.integrity!;
+                  const rp = (n: number) => "Rp " + Math.round(Math.abs(n)).toLocaleString("id-ID");
+                  const danger = ig.complete === false || ig.connected === false;
+                  return (
+                    <div
+                      className="rounded-md border p-2.5 text-xs space-y-1"
+                      style={{
+                        borderColor: danger ? "#fecaca" : ig.complete ? "#bbf7d0" : "#e2e8f0",
+                        background: danger ? "#fef2f2" : ig.complete ? "#f0fdf4" : "#f8fafc",
+                      }}
+                    >
+                      {ig.complete === true && (
+                        <div className="font-medium text-emerald-700">
+                          ✅ Mutasi UTUH — semua transaksi terbaca (cocok total bank).
+                        </div>
+                      )}
+                      {ig.complete === false && (
+                        <div className="font-medium text-red-700">
+                          ⚠️ Mutasi TIDAK lengkap — ada transaksi tak terbaca
+                          {ig.missingKredit !== 0 ? ` · masuk ${rp(ig.missingKredit)}` : ""}
+                          {ig.missingDebet !== 0 ? ` · keluar ${rp(ig.missingDebet)}` : ""}
+                          {ig.chainBreaks > 0 ? ` · ${ig.chainBreaks} lompatan saldo` : ""}
+                        </div>
+                      )}
+                      {ig.connected === false && (
+                        <div className="text-amber-700">
+                          ⚠️ Kemungkinan ada transaksi BELUM terupload sebelum periode ini
+                          {ig.gapAmount ? ` (selisih saldo ${rp(ig.gapAmount)})` : ""} — disarankan
+                          download mutasi mulai tanggal terakhir tercatat.
+                        </div>
+                      )}
+                      {ig.connected === true && (
+                        <div className="text-slate-500">🔗 Nyambung dari upload terakhir.</div>
+                      )}
+                      {(ig.firstDate || ig.lastDate) && (
+                        <div className="text-slate-400">
+                          Periode terbaca: {ig.firstDate ?? "?"} s/d {ig.lastDate ?? "?"}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
               <div className={`grid gap-3 ${requiresPassword ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
                 <div>

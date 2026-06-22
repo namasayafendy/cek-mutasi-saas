@@ -85,6 +85,8 @@ export type Bank = {
   is_active: boolean;
   urutan: number;
   created_at: string;
+  recon_last_saldo?: number | null; // saldo akhir mutasi terakhir yg diupload (deteksi bolong)
+  recon_last_date?: string | null;  // tanggal transaksi terakhir mutasi terakhir
 };
 
 export type Outlet = {

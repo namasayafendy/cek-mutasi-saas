@@ -33,6 +33,18 @@ export type ParsedTxRow = {
   };
 };
 
+/** Ringkasan header mutasi untuk cek kelengkapan (fitur Bukti Utuh + deteksi bolong).
+ *  Semua nilai dari header PDF (eksak, bukan hasil pembulatan baris). null kalau parser
+ *  bank tsb belum mendukung ekstraksi ini. */
+export type StatementMeta = {
+  printedKredit: number | null; // "Total Kredit (Dalam Periode)"
+  printedDebet: number | null;  // "Total Debet (Dalam Periode)"
+  saldoAwal: number | null;     // saldo awal periode (opening)
+  saldoAkhir: number | null;    // saldo akhir periode (closing)
+  firstDate: string | null;     // YYYY-MM-DD transaksi paling awal yg terbaca
+  lastDate: string | null;      // YYYY-MM-DD transaksi paling akhir yg terbaca
+};
+
 export type ParsedDocument = {
   /** All rows (kredit + debet) */
   rows: ParsedTxRow[];
@@ -40,6 +52,8 @@ export type ParsedDocument = {
   pages: { width: number; height: number }[];
   /** Original file bytes (Uint8Array). Stable, consumers must clone before passing to pdfjs/pdf-lib. */
   fileBuffer: Uint8Array;
+  /** Ringkasan header (opsional; hanya parser yg mendukung). */
+  statementMeta?: StatementMeta;
 };
 
 export type ParseOptions = {
