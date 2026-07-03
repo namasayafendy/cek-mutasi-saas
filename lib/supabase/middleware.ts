@@ -24,6 +24,9 @@ function isPublicPath(path: string): boolean {
   if (path.startsWith("/_next")) return true;
   if (path.startsWith("/favicon")) return true;
   if (path.startsWith("/api/health")) return true;
+  // Server-to-server internal API (AI Hub) — auth sendiri via x-internal-secret
+  // di route-nya (fail-closed), jangan di-redirect ke /login.
+  if (path.startsWith("/api/internal/")) return true;
   return false;
 }
 
