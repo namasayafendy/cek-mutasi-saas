@@ -4,6 +4,8 @@ import { getAccountContext } from "@/lib/supabase/context";
 import { createClient } from "@/lib/supabase/server";
 import { CheckClient } from "./check-client";
 import { getParserSpec } from "@/lib/banks/registry";
+import { getLastCheckedDates } from "@/lib/sessions/last-checked";
+import { formatDateLong, parseDateISO } from "@/lib/format";
 import type { Outlet, Bank, Jenis, MatchRulePreset } from "@/lib/types";
 
 export default async function CheckPage({
@@ -18,7 +20,7 @@ export default async function CheckPage({
   const jenis: Jenis = params.jenis === "debet" ? "debet" : "kredit";
 
   const supabase = await createClient();
-  const [outletsRes, banksRes, rulesRes] = await Promise.all([
+  const [outletsRes, banksRes, rulesRes, lastChecked] = await Promise.all([
     supabase.from("outlets").select("*").order("urutan_palette"),
     supabase
       .from("banks")
@@ -33,6 +35,7 @@ export default async function CheckPage({
       .or(`jenis.eq.${jenis},jenis.eq.both`)
       .order("is_default", { ascending: false })
       .order("created_at", { ascending: true }),
+    getLastCheckedDates(supabase),
   ]);
 
   const outlets = (outletsRes.data ?? []) as Outlet[];
@@ -110,16 +113,36 @@ export default async function CheckPage({
     );
   }
 
+  const lastEnd = jenis === "kredit" ? lastChecked.kredit : lastChecked.debet;
+  const lastEndDate = lastEnd ? parseDateISO(lastEnd) : null;
+  const nextDate = lastEndDate
+    ? new Date(lastEndDate.getTime() + 24 * 60 * 60 * 1000)
+    : null;
+
   return (
-    <CheckClient
-      outlets={outlets}
-      banks={readyBanks}
-      rules={rules}
-      initialJenis={jenis}
-      accountId={ctx.account.id}
-      userId={ctx.user.id}
-      debetHighlightSameColor={ctx.settings?.debet_highlight_same_color ?? true}
-      gadaiSyncEnabled={(ctx.settings as { gadai_sync_enabled?: boolean } | null)?.gadai_sync_enabled ?? false}
-    />
+    <div className="space-y-4">
+      {lastEndDate && nextDate && (
+        <div className="rounded-lg border border-[#10B981]/30 bg-[#10B981]/5 px-4 py-2.5 text-sm text-slate-700">
+          <strong className="text-[#0F2E1F]">
+            {jenis === "kredit" ? "Kredit" : "Debet"}
+          </strong>{" "}
+          terakhir dicek s/d transaksi{" "}
+          <strong className="text-[#0F2E1F]">{formatDateLong(lastEndDate)}</strong>{" "}
+          &mdash; pastikan PDF mutasi mencakup mulai{" "}
+          <strong className="text-[#0F2E1F]">{formatDateLong(nextDate)}</strong>{" "}
+          agar tidak ada tanggal bolong.
+        </div>
+      )}
+      <CheckClient
+        outlets={outlets}
+        banks={readyBanks}
+        rules={rules}
+        initialJenis={jenis}
+        accountId={ctx.account.id}
+        userId={ctx.user.id}
+        debetHighlightSameColor={ctx.settings?.debet_highlight_same_color ?? true}
+        gadaiSyncEnabled={(ctx.settings as { gadai_sync_enabled?: boolean } | null)?.gadai_sync_enabled ?? false}
+      />
+    </div>
   );
 }

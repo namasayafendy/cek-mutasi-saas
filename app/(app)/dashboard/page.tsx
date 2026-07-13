@@ -18,16 +18,17 @@ import {
 } from "lucide-react";
 import { getAccountContext, trialDaysRemaining } from "@/lib/supabase/context";
 import { createClient } from "@/lib/supabase/server";
-import { formatDateLong, parseDateISO } from "@/lib/format";
+import { formatDateLong, parseDateISO, diffDays } from "@/lib/format";
+import { getLastCheckedDates, todayISOWIB } from "@/lib/sessions/last-checked";
 
 export default async function DashboardPage() {
   const ctx = await getAccountContext();
   if (!ctx) redirect("/login");
-  const { account, settings, member } = ctx;
+  const { account, member } = ctx;
   const isOwner = member.role === "owner";
 
   const supabase = await createClient();
-  const [outletsRes, banksRes, rulesRes, staffRes] = await Promise.all([
+  const [outletsRes, banksRes, rulesRes, staffRes, lastChecked] = await Promise.all([
     supabase.from("outlets").select("id"),
     supabase.from("banks").select("id, is_active"),
     supabase
@@ -35,6 +36,7 @@ export default async function DashboardPage() {
       .select("id")
       .is("deleted_at", null),
     supabase.from("team_members").select("id, role"),
+    getLastCheckedDates(supabase),
   ]);
 
   const outletCount = outletsRes.data?.length ?? 0;
@@ -44,10 +46,7 @@ export default async function DashboardPage() {
   const staffCount = (staffRes.data ?? []).filter((m) => m.role === "staff").length;
   const staffLimit = account.staff_limit ?? 3;
 
-  const lastInputKreditStr = settings?.last_input_date_kredit ?? null;
-  const lastInputDebetStr = settings?.last_input_date_debet ?? null;
-  const lastKredit = lastInputKreditStr ? parseDateISO(lastInputKreditStr) : null;
-  const lastDebet = lastInputDebetStr ? parseDateISO(lastInputDebetStr) : null;
+  const todayISO = todayISOWIB();
   const trialDays = trialDaysRemaining(account);
 
   const setupComplete = outletCount > 0 && banksActive > 0;
@@ -79,6 +78,29 @@ export default async function DashboardPage() {
               </span>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Data terakhir dicek — penanda lanjut setelah libur/tertumpuk */}
+      <div>
+        <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">
+          Data Terakhir Dicek
+        </h2>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <LastCheckedCard
+            title="Transaksi Masuk (Kredit)"
+            icon={<ArrowDownToLine className="h-5 w-5" />}
+            dateISO={lastChecked.kredit}
+            todayISO={todayISO}
+            href="/check?jenis=kredit"
+          />
+          <LastCheckedCard
+            title="Transaksi Keluar (Debet)"
+            icon={<ArrowUpFromLine className="h-5 w-5" />}
+            dateISO={lastChecked.debet}
+            todayISO={todayISO}
+            href="/check?jenis=debet"
+          />
         </div>
       </div>
 
@@ -210,28 +232,6 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* Last activity */}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center gap-2 text-slate-500 text-xs">
-            <ArrowDownToLine className="h-3.5 w-3.5 text-[#10B981]" />
-            <span>Terakhir cek transaksi masuk</span>
-          </div>
-          <p className="mt-1.5 text-sm font-semibold text-[#0F2E1F]">
-            {lastKredit ? formatDateLong(lastKredit) : "Belum pernah"}
-          </p>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center gap-2 text-slate-500 text-xs">
-            <ArrowUpFromLine className="h-3.5 w-3.5 text-amber-600" />
-            <span>Terakhir cek transaksi keluar</span>
-          </div>
-          <p className="mt-1.5 text-sm font-semibold text-[#0F2E1F]">
-            {lastDebet ? formatDateLong(lastDebet) : "Belum pernah"}
-          </p>
-        </div>
-      </div>
-
       {/* Help / Hubungi Kami */}
       <div className="rounded-2xl bg-gradient-to-br from-[#FAFAF7] to-[#10B981]/5 border border-slate-200 p-5 sm:p-6">
         <div className="flex flex-col sm:flex-row sm:items-start gap-4">
@@ -313,6 +313,76 @@ export default async function DashboardPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function LastCheckedCard({
+  title,
+  icon,
+  dateISO,
+  todayISO,
+  href,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  dateISO: string | null;
+  todayISO: string;
+  href: string;
+}) {
+  const date = dateISO ? parseDateISO(dateISO) : null;
+  const today = parseDateISO(todayISO);
+  const daysAgo = date && today ? diffDays(today, date) : null;
+  const nextDate = date ? new Date(date.getTime() + 24 * 60 * 60 * 1000) : null;
+
+  // Umur data: hijau <=1 hari, kuning 2-3 hari, merah >3 hari (tertumpuk)
+  let badgeLabel = "Belum pernah cek";
+  let badgeClass = "bg-slate-100 text-slate-600 border-slate-200";
+  if (daysAgo !== null) {
+    if (daysAgo <= 0) {
+      badgeLabel = "hari ini";
+      badgeClass = "bg-[#10B981]/10 text-[#047857] border-[#10B981]/30";
+    } else if (daysAgo === 1) {
+      badgeLabel = "kemarin";
+      badgeClass = "bg-[#10B981]/10 text-[#047857] border-[#10B981]/30";
+    } else if (daysAgo <= 3) {
+      badgeLabel = `${daysAgo} hari lalu`;
+      badgeClass = "bg-amber-50 text-amber-700 border-amber-300";
+    } else {
+      badgeLabel = `${daysAgo} hari lalu — tertumpuk!`;
+      badgeClass = "bg-red-50 text-red-700 border-red-300";
+    }
+  }
+
+  return (
+    <Link
+      href={href}
+      className="group rounded-2xl border border-slate-200 bg-white p-5 hover:border-[#10B981]/40 hover:shadow-sm transition-all block"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-slate-500 text-xs font-medium">
+          <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-[#10B981]/10 text-[#10B981]">
+            {icon}
+          </span>
+          <span>{title}</span>
+        </div>
+        <span
+          className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${badgeClass}`}
+        >
+          {badgeLabel}
+        </span>
+      </div>
+      <p className="mt-3 text-xs text-slate-500">terakhir dicek s/d transaksi tanggal</p>
+      <p className="mt-0.5 text-2xl sm:text-3xl font-bold text-[#0F2E1F]">
+        {date ? formatDateLong(date) : "—"}
+      </p>
+      {nextDate && (
+        <p className="mt-2 text-sm text-slate-600">
+          Lanjut upload mutasi mulai{" "}
+          <strong className="text-[#0F2E1F]">{formatDateLong(nextDate)}</strong>
+          <ArrowRight className="inline h-3.5 w-3.5 ml-1 text-[#10B981] group-hover:translate-x-0.5 transition-transform" />
+        </p>
+      )}
+    </Link>
   );
 }
 
