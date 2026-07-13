@@ -15,6 +15,7 @@ import { runMatching, type MatchRules, DEFAULT_RULES } from "@/lib/matching";
 import { createClient } from "@/lib/supabase/client";
 import { toDateISO, formatRupiah } from "@/lib/format";
 import { loadCarryoverPdfTxs } from "@/lib/sessions/carryover";
+import { loadRefPoolTxs } from "@/lib/sessions/ref-pool";
 import { History as HistoryIcon, Globe, Loader2 } from "lucide-react";
 import { pushGadaiResults } from "./actions-gadai";
 import { UploadStep, type BankUpload } from "./upload-step";
@@ -47,7 +48,13 @@ function gadaiAwareRules(
   rulesById: Map<string, MatchRulePreset>,
 ): MatchRules {
   if (String(input.id).startsWith("TFKD-")) return GADAI_DEBET_RULES;
-  return ruleToMatchRules(rulesById.get(input.matchRuleId));
+  const base = ruleToMatchRules(rulesById.get(input.matchRuleId));
+  // Fase B: klaim KREDIT gadai dapat jendela maju minimal 1 hari — transfer malam
+  // sering baru dibukukan bank pada tanggal kalender berikutnya (false "tak ketemu").
+  if (String(input.id).startsWith("TFK-")) {
+    return { ...base, forward_window_days: Math.max(1, base.forward_window_days) };
+  }
+  return base;
 }
 
 type CompletedPass = {
@@ -174,6 +181,50 @@ export function CheckClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploads, accountId, jenis, rules]);
 
+  // Fase B: lookup kredit by-REF langsung ke DB utk input gadai yang membawa refFt.
+  // Menjangkau kredit lama di luar pool (transfer jauh hari) + kredit yang sudah
+  // ter-claim (deteksi "ref menunjuk mutasi terpakai").
+  const [refPool, setRefPool] = useState<PdfTransaction[]>([]);
+  const refFtsKey = useMemo(() => {
+    const refs = inputs
+      .filter((i) => i.refFt)
+      .map((i) => String(i.refFt).toUpperCase())
+      .sort();
+    return refs.join(",");
+  }, [inputs]);
+
+  useEffect(() => {
+    if (!refFtsKey || uploads.length === 0) {
+      setRefPool([]);
+      return;
+    }
+    let cancelled = false;
+    async function loadRefs() {
+      try {
+        const withRef = inputs.filter((i) => i.refFt);
+        const earliest = withRef.reduce(
+          (min, i) => (i.tanggal.getTime() < min.getTime() ? i.tanggal : min),
+          withRef[0].tanggal,
+        );
+        const supabase = createClient();
+        const txs = await loadRefPoolTxs(supabase, {
+          accountId,
+          refFts: withRef.map((i) => String(i.refFt)),
+          earliestInput: earliest,
+        });
+        if (!cancelled) setRefPool(txs);
+      } catch (e) {
+        console.error("loadRefPoolTxs failed:", e);
+        if (!cancelled) setRefPool([]);
+      }
+    }
+    loadRefs();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refFtsKey, accountId, uploads.length]);
+
   const totalCarryoverCount = useMemo(() => {
     let n = 0;
     for (const arr of carryoverByBank.values()) n += arr.length;
@@ -203,8 +254,17 @@ export function CheckClient({
         for (const tx of arr) pool.push(tx);
       }
     }
+    // Fase B: baris hasil lookup-ref (dedup by parsedTxId — bisa saja kreditnya
+    // sudah ada di PDF aktif / carry-over).
+    if (refPool.length > 0) {
+      const seen = new Set(pool.map((t) => t.parsedTxId).filter(Boolean));
+      for (const tx of refPool) {
+        if (tx.parsedTxId && seen.has(tx.parsedTxId)) continue;
+        pool.push(tx);
+      }
+    }
     return pool;
-  }, [uploads, useCarryover, carryoverByBank, jenis]);
+  }, [uploads, useCarryover, carryoverByBank, jenis, refPool]);
 
   const round1 = useMemo(() => {
     if (uploads.length === 0 || inputs.length === 0) {

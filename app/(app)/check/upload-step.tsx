@@ -166,6 +166,7 @@ export function UploadStep({
             parsedTxId: idMap.get(rowLookupKey(r)),
             source: "current",
             bankId: bankIdLocal,
+            noRef: r.noRef,
           }));
       }
       const kreditTransactions = buildTx("kredit");

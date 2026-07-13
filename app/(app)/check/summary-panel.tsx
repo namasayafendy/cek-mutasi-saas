@@ -161,6 +161,30 @@ export function SummaryPanel({
                           {rule.name.length > 8 ? rule.name.slice(0, 8) + "..." : rule.name}
                         </span>
                       )}
+                      {i.match?.status === "matched" && i.match.matchedBy && i.match.matchedBy !== "NOMINAL" && (
+                        <span
+                          className="text-[10px] px-1 rounded border flex-shrink-0 bg-emerald-50 border-emerald-200 text-emerald-700 font-medium"
+                          title={
+                            i.match.matchedBy === "REF"
+                              ? "Match pasti: no referensi resi ketemu persis di mutasi"
+                              : "Match kuat: nama pengirim + jam resi cocok dengan mutasi"
+                          }
+                        >
+                          {i.match.matchedBy === "REF" ? "REF" : "JAM"}
+                        </span>
+                      )}
+                      {i.match?.refIssue && (
+                        <span
+                          className="text-[10px] px-1 rounded border flex-shrink-0 bg-red-50 border-red-300 text-red-700 font-medium"
+                          title={
+                            i.match.refIssue === "REF_NOMINAL_BEDA"
+                              ? "Ref resi ketemu di mutasi tapi NOMINALNYA BEDA — cek: salah baca AI atau resi diedit"
+                              : "Ref resi menunjuk mutasi yang SUDAH dipakai input lain — cek kemungkinan salah-pasang sesi lama"
+                          }
+                        >
+                          ⚠ REF
+                        </span>
+                      )}
                       <span className="ml-auto font-mono text-slate-900 flex-shrink-0">
                         {formatRupiah(i.nominal)}
                       </span>

@@ -104,6 +104,8 @@ export async function saveSession(
       i.match?.status === "all_taken" ? i.match.conflictCount : null,
     conflict_dates:
       i.match?.status === "all_taken" ? i.match.conflictDates : null,
+    matched_by: i.match?.status === "matched" ? (i.match.matchedBy ?? null) : null,
+    ref_issue: i.match?.refIssue ?? null,
   }));
 
   let carryoverClaimed = 0;

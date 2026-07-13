@@ -189,6 +189,11 @@ export type PdfTransaction = {
   source?: "current" | "carryover";
   /** Phase 1E.2: bank yang punya tx ini — dipakai matching pool multi-bank */
   bankId?: string;
+  /** Fase B rekonsiliasi: no referensi bank (kunci Pass-1 REF utk klaim gadai) */
+  noRef?: string | null;
+  /** Fase B: baris hasil lookup-ref yang SUDAH di-claim input lain (sesi lama/manual).
+   *  Bukan kandidat matching — hanya utk deteksi "ref menunjuk mutasi terpakai". */
+  claimedByOther?: boolean;
 };
 
 /** User input row during cek mutasi session */
@@ -202,12 +207,25 @@ export type UserInput = {
   matchRuleId: string;
   nominal: number;
   match?: MatchResult;
+  /** Fase B (klaim gadai): token ref FT BSI dari resi — kunci Pass-1 REF */
+  refFt?: string | null;
+  /** Fase B (klaim gadai): jam transfer di resi "HH:MM" — kunci Pass-2 */
+  jamResi?: string | null;
+  /** Fase B (klaim gadai): nama pengirim di resi (dibaca AI) — kunci Pass-2 */
+  namaPengirimResi?: string | null;
 };
 
-export type MatchResult =
-  | { status: "matched"; txNo: number; txDate: Date; colorHex: string; txBankId?: string }
+/** Fase B: bagaimana sebuah input ter-match (label keyakinan) */
+export type MatchedBy = "REF" | "NAMA_JAM" | "NOMINAL";
+
+/** Fase B: masalah ref yang perlu perhatian, apapun status akhirnya */
+export type RefIssue = "REF_NOMINAL_BEDA" | "REF_SUDAH_DIKLAIM";
+
+export type MatchResult = (
+  | { status: "matched"; txNo: number; txDate: Date; colorHex: string; txBankId?: string; matchedBy?: MatchedBy }
   | { status: "no_candidate" }
-  | { status: "all_taken"; conflictCount: number; conflictDates: string[] };
+  | { status: "all_taken"; conflictCount: number; conflictDates: string[] }
+) & { refIssue?: RefIssue };
 
 export type MatchSummary = {
   totalInput: number;

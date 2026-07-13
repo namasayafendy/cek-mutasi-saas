@@ -19,6 +19,12 @@ export interface GadaiPullInput {
   bankId: string; // bank default ("" = cross-bank)
   matchRuleId: string;
   nominal: number;
+  /** Fase B: token ref FT BSI dari resi (kunci Pass-1 REF); null kalau tak ada */
+  refFt: string | null;
+  /** Fase B: jam transfer di resi "HH:MM" (kunci Pass-2) */
+  jamResi: string | null;
+  /** Fase B: nama pengirim di resi, dibaca AI (kunci Pass-2) */
+  namaPengirimResi: string | null;
 }
 
 export type GadaiPullResult =
@@ -110,6 +116,9 @@ export async function pullGadaiClaims(
       bankId: defaultBankId,
       matchRuleId: defaultRuleId,
       nominal: Number(cl.nominal || 0),
+      refFt: cl.ref_ft ? String(cl.ref_ft) : null,
+      jamResi: cl.jam_transfer ? String(cl.jam_transfer) : null,
+      namaPengirimResi: cl.nama_pengirim ? String(cl.nama_pengirim) : null,
     });
   }
 

@@ -56,6 +56,9 @@ export function InputPanel({
             bankId: i.bankId,
             matchRuleId: i.matchRuleId,
             nominal: i.nominal,
+            refFt: i.refFt,
+            jamResi: i.jamResi,
+            namaPengirimResi: i.namaPengirimResi,
           } as UserInput;
         })
         .filter((x): x is UserInput => x !== null);
