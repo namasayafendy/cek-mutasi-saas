@@ -132,12 +132,23 @@ export async function pullGadaiClaims(
 // ============================================================
 
 export type GadaiPushResult =
-  | { ok: true; updated: number; unmatched: number; alertSent: boolean }
+  | { ok: true; updated: number; unmatched: number; recheck: number; alarm: number; alertSent: boolean }
   | { ok: false; error: string };
 
+export type GadaiPushRow = {
+  id: string;
+  matched: boolean;
+  /** Fase C: label keyakinan match (REF/NAMA_JAM/NOMINAL) */
+  matched_by?: string | null;
+  /** Fase C: masalah ref (REF_NOMINAL_BEDA / REF_SUDAH_DIKLAIM) -> alarm keras */
+  ref_issue?: string | null;
+};
+
 export async function pushGadaiResults(
-  results: { id: string; matched: boolean }[],
+  results: GadaiPushRow[],
   arah: "kredit" | "debet" = "kredit",
+  /** Fase C: tanggal transaksi terakhir yang tercakup mutasi (YYYY-MM-DD) — dasar RECHECK */
+  periodEnd?: string | null,
 ): Promise<GadaiPushResult> {
   const ctx = await getAccountContext();
   if (!ctx) return { ok: false, error: "Sesi tidak valid." };
@@ -157,7 +168,12 @@ export async function pushGadaiResults(
 
   const clean = (results || [])
     .filter((r) => r && r.id)
-    .map((r) => ({ id: String(r.id), matched: !!r.matched }));
+    .map((r) => ({
+      id: String(r.id),
+      matched: !!r.matched,
+      matched_by: r.matched_by ?? null,
+      ref_issue: r.ref_issue ?? null,
+    }));
   if (clean.length === 0) return { ok: false, error: "Tidak ada hasil untuk dikirim." };
 
   try {
@@ -165,7 +181,7 @@ export async function pushGadaiResults(
     const res = await fetch(`${base}/api/transfer-klaim/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${c.gadai_api_key}` },
-      body: JSON.stringify({ results: clean, arah }),
+      body: JSON.stringify({ results: clean, arah, period_end: periodEnd ?? null }),
       cache: "no-store",
     });
     if (!res.ok) return { ok: false, error: `Aceh Gadai HTTP ${res.status}` };
@@ -175,6 +191,8 @@ export async function pushGadaiResults(
       ok: true,
       updated: Number(j.updated || 0),
       unmatched: Number(j.unmatched || 0),
+      recheck: Number(j.recheck || 0),
+      alarm: Number(j.alarm || 0),
       alertSent: !!j.alertSent,
     };
   } catch (e) {

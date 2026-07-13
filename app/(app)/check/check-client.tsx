@@ -311,14 +311,31 @@ export function CheckClient({
       const results = gadaiInputs.map((i) => ({
         id: i.id,
         matched: i.match?.status === "matched",
+        matched_by:
+          i.match?.status === "matched" ? (i.match.matchedBy ?? "NOMINAL") : null,
+        ref_issue: i.match?.refIssue ?? null,
       }));
-      const res = await pushGadaiResults(results, jenis === "debet" ? "debet" : "kredit");
+      // Fase C: tanggal transaksi terakhir yang tercakup mutasi yang di-upload —
+      // dasar keputusan RECHECK di sisi gadai (transaksi lebih baru dari cakupan
+      // mutasi jangan divonis "tak ada").
+      let periodEnd: string | null = null;
+      for (const up of uploads) {
+        for (const tx of txsForJenis(up)) {
+          const iso = toDateISO(tx.tanggalDate);
+          if (!periodEnd || iso > periodEnd) periodEnd = iso;
+        }
+      }
+      const res = await pushGadaiResults(results, jenis === "debet" ? "debet" : "kredit", periodEnd);
       if (!res.ok) {
         setKirimMsg("❌ " + res.error);
         return;
       }
+      const extra: string[] = [];
+      if (res.alarm > 0) extra.push(`🚨 ${res.alarm} alarm ref`);
+      if (res.recheck > 0) extra.push(`${res.recheck} menunggu mutasi berikutnya`);
       setKirimMsg(
         `✅ Terkirim. ${res.updated} cocok, ${res.unmatched} belum ketemu.` +
+          (extra.length ? ` (${extra.join(", ")})` : "") +
           (res.alertSent ? " Alert Telegram terkirim." : " (alert gagal terkirim)"),
       );
     } catch (e) {
