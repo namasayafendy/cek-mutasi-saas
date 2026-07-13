@@ -222,7 +222,16 @@ export type MatchedBy = "REF" | "NAMA_JAM" | "NOMINAL";
 export type RefIssue = "REF_NOMINAL_BEDA" | "REF_SUDAH_DIKLAIM";
 
 export type MatchResult = (
-  | { status: "matched"; txNo: number; txDate: Date; colorHex: string; txBankId?: string; matchedBy?: MatchedBy }
+  | {
+      status: "matched";
+      txNo: number;
+      txDate: Date;
+      colorHex: string;
+      txBankId?: string;
+      matchedBy?: MatchedBy;
+      /** Fase D: jumlah kandidat tersedia saat dipilih (>1 = tebakan ambigu) */
+      ambiguous?: number;
+    }
   | { status: "no_candidate" }
   | { status: "all_taken"; conflictCount: number; conflictDates: string[] }
 ) & { refIssue?: RefIssue };

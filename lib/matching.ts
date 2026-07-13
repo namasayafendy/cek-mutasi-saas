@@ -280,6 +280,11 @@ export function runMatching(
       });
       const match = buildMatched(input, available[0], "NOMINAL");
       if (pendingRefIssue[idx]) match.refIssue = pendingRefIssue[idx];
+      // Fase D: >1 kandidat tersedia = tebakan ambigu — tandai supaya kelihatan
+      // di panel & laporan (kandidat lain bisa saja milik nasabah lain).
+      if (available.length > 1 && match.status === "matched") {
+        match.ambiguous = available.length;
+      }
       return { ...input, match };
     }
 

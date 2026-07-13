@@ -173,6 +173,14 @@ export function SummaryPanel({
                           {i.match.matchedBy === "REF" ? "REF" : "JAM"}
                         </span>
                       )}
+                      {i.match?.status === "matched" && (i.match.ambiguous ?? 0) > 1 && (
+                        <span
+                          className="text-[10px] px-1 rounded border flex-shrink-0 bg-amber-50 border-amber-300 text-amber-700 font-medium"
+                          title={`Tebakan dari ${i.match.ambiguous} kandidat bernominal sama — cek manual kalau ragu`}
+                        >
+                          ≈{i.match.ambiguous}
+                        </span>
+                      )}
                       {i.match?.refIssue && (
                         <span
                           className="text-[10px] px-1 rounded border flex-shrink-0 bg-red-50 border-red-300 text-red-700 font-medium"

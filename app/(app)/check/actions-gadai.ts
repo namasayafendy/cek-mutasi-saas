@@ -142,6 +142,17 @@ export type GadaiPushRow = {
   matched_by?: string | null;
   /** Fase C: masalah ref (REF_NOMINAL_BEDA / REF_SUDAH_DIKLAIM) -> alarm keras */
   ref_issue?: string | null;
+  /** Fase D: jumlah kandidat saat match tebakan nominal (>1 = ambigu) */
+  ambiguous?: number;
+};
+
+/** Fase D: kredit mutasi periode ini yang TIDAK terpasang ke input mana pun —
+ *  "uang masuk tanpa transaksi tercatat", bahan baku fraud pinjam-kredit. */
+export type GadaiUnclaimedCredit = {
+  t: string; // tanggal YYYY-MM-DD
+  j: string; // jam
+  n: number; // nominal
+  p: string; // nama pengirim
 };
 
 export async function pushGadaiResults(
@@ -149,6 +160,10 @@ export async function pushGadaiResults(
   arah: "kredit" | "debet" = "kredit",
   /** Fase C: tanggal transaksi terakhir yang tercakup mutasi (YYYY-MM-DD) — dasar RECHECK */
   periodEnd?: string | null,
+  /** Fase D: tanggal awal periode mutasi — dasar rekonsiliasi berbasis kalender */
+  periodStart?: string | null,
+  /** Fase D: kredit tak-ter-claim periode ini (dibatasi ±40 baris oleh pemanggil) */
+  unclaimed?: { count: number; total: number; rows: GadaiUnclaimedCredit[] } | null,
 ): Promise<GadaiPushResult> {
   const ctx = await getAccountContext();
   if (!ctx) return { ok: false, error: "Sesi tidak valid." };
@@ -173,6 +188,7 @@ export async function pushGadaiResults(
       matched: !!r.matched,
       matched_by: r.matched_by ?? null,
       ref_issue: r.ref_issue ?? null,
+      ambiguous: Number(r.ambiguous ?? 0) || 0,
     }));
   if (clean.length === 0) return { ok: false, error: "Tidak ada hasil untuk dikirim." };
 
@@ -181,7 +197,13 @@ export async function pushGadaiResults(
     const res = await fetch(`${base}/api/transfer-klaim/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${c.gadai_api_key}` },
-      body: JSON.stringify({ results: clean, arah, period_end: periodEnd ?? null }),
+      body: JSON.stringify({
+        results: clean,
+        arah,
+        period_end: periodEnd ?? null,
+        period_start: periodStart ?? null,
+        unclaimed: unclaimed ?? null,
+      }),
       cache: "no-store",
     });
     if (!res.ok) return { ok: false, error: `Aceh Gadai HTTP ${res.status}` };

@@ -314,18 +314,43 @@ export function CheckClient({
         matched_by:
           i.match?.status === "matched" ? (i.match.matchedBy ?? "NOMINAL") : null,
         ref_issue: i.match?.refIssue ?? null,
+        ambiguous:
+          i.match?.status === "matched" ? (i.match.ambiguous ?? 0) : 0,
       }));
-      // Fase C: tanggal transaksi terakhir yang tercakup mutasi yang di-upload —
-      // dasar keputusan RECHECK di sisi gadai (transaksi lebih baru dari cakupan
-      // mutasi jangan divonis "tak ada").
+      // Fase C: cakupan periode mutasi yang di-upload (dasar RECHECK + Fase D
+      // rekonsiliasi berbasis kalender di sisi gadai).
       let periodEnd: string | null = null;
+      let periodStart: string | null = null;
       for (const up of uploads) {
         for (const tx of txsForJenis(up)) {
           const iso = toDateISO(tx.tanggalDate);
           if (!periodEnd || iso > periodEnd) periodEnd = iso;
+          if (!periodStart || iso < periodStart) periodStart = iso;
         }
       }
-      const res = await pushGadaiResults(results, jenis === "debet" ? "debet" : "kredit", periodEnd);
+      // Fase D: kredit periode ini yang tidak terpasang ke input mana pun =
+      // "uang masuk tanpa transaksi tercatat" — dikirim utk laporan owner.
+      let unclaimedPayload: { count: number; total: number; rows: { t: string; j: string; n: number; p: string }[] } | null = null;
+      if (jenis === "kredit") {
+        const uc = summary.unclaimed.filter((t) => t.source === "current");
+        unclaimedPayload = {
+          count: uc.length,
+          total: uc.reduce((s, t) => s + t.kredit, 0),
+          rows: uc.slice(0, 40).map((t) => ({
+            t: toDateISO(t.tanggalDate),
+            j: t.waktu || "",
+            n: t.kredit,
+            p: t.namaPengirim || "",
+          })),
+        };
+      }
+      const res = await pushGadaiResults(
+        results,
+        jenis === "debet" ? "debet" : "kredit",
+        periodEnd,
+        periodStart,
+        unclaimedPayload,
+      );
       if (!res.ok) {
         setKirimMsg("❌ " + res.error);
         return;
