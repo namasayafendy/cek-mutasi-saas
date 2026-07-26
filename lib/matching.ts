@@ -278,6 +278,32 @@ export function runMatching(
         if (da !== db) return db - da;
         return a.no - b.no;
       });
+
+      // ── SALAH-COCOK DIAM: JANGAN MENEBAK LINTAS HARI ──────────────
+      // Insiden nyata 23 Juli 2026 (KRUKUH LAMA): tiga input @Rp 100.000,
+      // di mutasi hari itu cuma ada DUA kredit @Rp 100.000. Yang ketiga
+      // dicocokkan ke kredit tanggal 24 Juli — beda hari, TANPA alarm apa pun,
+      // dan statusnya hijau. Salah-cocok yang diam jauh lebih berbahaya
+      // daripada alarm palsu: ia tidak menimbulkan peringatan sama sekali.
+      //
+      // Aturan: kalau kandidatnya LEBIH DARI SATU dan yang terbaik pun BUKAN
+      // hari yang sama, sistem MENOLAK menebak dan melemparkannya ke manusia.
+      // Tebakan lintas hari hanya diterima kalau ia satu-satunya kandidat.
+      const bedaHari = diffDays(input.tanggal, available[0].tanggalDate) !== 0;
+      if (available.length > 1 && bedaHari) {
+        const datesSet = new Set<string>();
+        for (const c of available) datesSet.add(c.tanggal);
+        return {
+          ...input,
+          match: {
+            status: "all_taken",
+            conflictCount: available.length,
+            conflictDates: Array.from(datesSet).sort(),
+            refIssue: pendingRefIssue[idx] ?? undefined,
+          },
+        };
+      }
+
       const match = buildMatched(input, available[0], "NOMINAL");
       if (pendingRefIssue[idx]) match.refIssue = pendingRefIssue[idx];
       // Fase D: >1 kandidat tersedia = tebakan ambigu — tandai supaya kelihatan
