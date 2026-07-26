@@ -17,6 +17,7 @@
 // satu claimed-set bersama — supaya input tanpa-ref tidak "menyambar" kredit yang
 // ditunjuk ref input lain.
 
+import { toDateISO } from "@/lib/format";
 import type {
   PdfTransaction,
   UserInput,
@@ -238,6 +239,26 @@ export function runMatching(
   });
 
   // ── PASS 3: NOMINAL + jendela rules (perilaku lama; jalur input manual) ──
+  //
+  // REBUTAN NOMINAL: kalau pada SATU tanggal ada LEBIH DARI SATU input dengan
+  // nominal yang sama, mereka berebut kredit yang sama. Yang diproses belakangan
+  // akan kehabisan kandidat sehari dan tersisa kandidat LINTAS HARI — lalu
+  // mengambilnya diam-diam. Persis insiden 23 Juli 2026 KRUKUH LAMA: tiga input
+  // @Rp 100.000, dua kredit hari itu, yang ketiga menyambar kredit 24 Juli.
+  // Penjaga "kandidat lebih dari satu" TIDAK menutup ini, karena saat giliran
+  // input ketiga kandidatnya memang tinggal SATU.
+  // Aturan: untuk nominal yang sedang diperebutkan, tebakan LINTAS HARI dilarang.
+  const rebutan = new Set<string>();
+  {
+    const hitung = new Map<string, number>();
+    for (const i of inputs) {
+      if (!shouldProcess(i)) continue;
+      const k = `${toDateISO(i.tanggal)}|${i.nominal}`;
+      hitung.set(k, (hitung.get(k) ?? 0) + 1);
+    }
+    for (const [k, n] of hitung) if (n > 1) rebutan.add(k);
+  }
+
   const resultInputs: UserInput[] = inputs.map((input, idx) => {
     if (!shouldProcess(input)) return input;
     if (resolved[idx]) {
@@ -290,7 +311,11 @@ export function runMatching(
       // hari yang sama, sistem MENOLAK menebak dan melemparkannya ke manusia.
       // Tebakan lintas hari hanya diterima kalau ia satu-satunya kandidat.
       const bedaHari = diffDays(input.tanggal, available[0].tanggalDate) !== 0;
-      if (available.length > 1 && bedaHari) {
+      const sedangDirebutkan = rebutan.has(`${toDateISO(input.tanggal)}|${input.nominal}`);
+      // Tolak menebak lintas hari kalau (a) kandidatnya masih lebih dari satu,
+      // ATAU (b) nominal ini sedang diperebutkan beberapa input di tanggal yang
+      // sama — (b) yang benar-benar menutup insiden KRUKUH.
+      if (bedaHari && (available.length > 1 || sedangDirebutkan)) {
         const datesSet = new Set<string>();
         for (const c of available) datesSet.add(c.tanggal);
         return {
