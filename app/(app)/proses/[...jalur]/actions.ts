@@ -20,7 +20,8 @@
 
 import { getAccountContext } from "@/lib/supabase/context";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { kirimPesan } from "@/lib/telegram/bot";
+import { antreLaporan } from "@/lib/telegram/outbox";
+import { hitungCakupan, saranExport, tglID, type BarisCakupan, type HasilCakupan } from "@/lib/coverage/celah";
 
 export type Balasan = { ok: boolean; error?: string };
 
@@ -190,6 +191,7 @@ function susunLaporan(
   berkas: RingkasBerkas,
   pass: RingkasPass[],
   dariDb: { namaFile: string; bankLabel: string },
+  cakupan: HasilCakupan | null,
 ): string {
   const b: string[] = [];
   b.push(`📥 Mutasi ${dariDb.bankLabel} — ${Math.max(0, Math.trunc(berkas.barisTerbaca || 0))} baris`);
@@ -206,6 +208,36 @@ function susunLaporan(
   else if (berkas.nyambung === false)
     b.push(`⛔ TIDAK NYAMBUNG — selisih saldo ${rp(berkas.selisihSambungan)}; ada transaksi sebelum periode ini yang belum pernah masuk`);
   else b.push("➖ Belum ada titik terakhir untuk dibandingkan");
+
+  // ── Uji CAKUPAN: apakah semua tanggal sudah pernah diperiksa ──
+  // Inilah yang menjawab pertanyaan yang selama ini tidak pernah dijawab.
+  // Celah yang saldo batasnya bertemu TIDAK disebut masalah — ia terbukti
+  // kosong secara aritmetika, dan menyebutnya masalah akan melahirkan alarm
+  // palsu tiap kali ada hari libur di ujung sebuah export.
+  if (cakupan && cakupan.akhir) {
+    if (cakupan.celah.length === 0) {
+      b.push("✅ Cakupan 60 hari: tidak ada tanggal bolong");
+    } else {
+      for (const c of cakupan.celah.slice(0, 4)) {
+        const rentang = c.dari === c.sampai ? tglID(c.dari) : `${tglID(c.dari)} s/d ${tglID(c.sampai)}`;
+        b.push(
+          `⛔ BOLONG: ${rentang} (${c.hari} hari) tidak tercakup mutasi mana pun` +
+            (c.selisih > 0 ? ` — saldo tidak bertemu, selisih ${rp(c.selisih)}` : ""),
+        );
+      }
+      if (cakupan.celah.length > 4) b.push(`   …dan ${cakupan.celah.length - 4} celah lain`);
+    }
+    if (cakupan.celahTerbuktiKosong.length > 0) {
+      b.push(`   (${cakupan.celahTerbuktiKosong.length} celah lain terbukti kosong dari saldo — aman)`);
+    }
+
+    // Keterkinian: diam bukan berarti mutakhir.
+    if ((cakupan.umurHari ?? 0) >= 1) {
+      b.push(`⚠️ Mutasi baru sampai ${tglID(cakupan.akhir)} — ${cakupan.umurHari} hari terakhir BELUM dinilai`);
+    } else {
+      b.push(`✅ Mutakhir sampai ${tglID(cakupan.akhir)}`);
+    }
+  }
 
   b.push("────────────");
 
@@ -253,11 +285,20 @@ function susunLaporan(
     berkas.utuh === false ||
     berkas.rantaiPutus > 0 ||
     berkas.nyambung === false ||
+    (cakupan?.celah.length ?? 0) > 0 ||
     pass.some((p) => p.batal || p.belumKetemu > 0 || p.ditahanKonflik > 0);
   if (!adaMasalah) b.push("Tidak ada yang perlu ditindak.");
   else b.push("Yang belum ketemu bisa dibereskan di menu Kotak Masuk Transfer (aplikasi gadai).");
 
-  if (berkas.sampaiTanggal) b.push(`Mutasi terbaca s/d ${tgl(berkas.sampaiTanggal)}.`);
+  // Perintah export yang tinggal disalin — supaya bot MENYURUH, bukan sekadar
+  // menunggu. Selalu mundur satu hari: kelebihan dibuang dedup, kekurangan
+  // tidak bisa ditambal siapa pun.
+  if (cakupan && ((cakupan.umurHari ?? 0) >= 1 || cakupan.celah.length > 0)) {
+    const s = saranExport(cakupan.akhir);
+    b.push(`Export BSINet: ${tglID(s.dari)} s/d ${tglID(s.sampai)}`);
+  } else if (berkas.sampaiTanggal) {
+    b.push(`Mutasi terbaca s/d ${tgl(berkas.sampaiTanggal)}.`);
+  }
 
   return b.join("\n");
 }
@@ -286,8 +327,25 @@ export async function tandaiSelesai(
   }
   const dariDb = { namaFile: jinak(r.job.file_name, 120), bankLabel: jinak(bankLabel, 60) };
 
+  // Cakupan dihitung DI SERVER dari tabel, bukan diterima dari browser —
+  // vonis "tidak ada tanggal bolong" terlalu penting untuk dipercayakan
+  // kepada pihak yang bisa mengarang angkanya.
+  let cakupan: HasilCakupan | null = null;
+  if (r.job.bank_id) {
+    const batasBawah = new Date(Date.now() - 60 * 86_400_000).toISOString().slice(0, 10);
+    const { data: rows } = await r.db
+      .from("mutasi_coverage")
+      .select("tgl_awal, tgl_akhir, saldo_awal, saldo_akhir")
+      .eq("account_id", r.ctx.account.id)
+      .eq("bank_id", r.job.bank_id)
+      .gte("tgl_akhir", batasBawah)
+      .order("tgl_awal", { ascending: true })
+      .limit(500);
+    if (rows && rows.length > 0) cakupan = hitungCakupan(rows as BarisCakupan[]);
+  }
+
   const adaBatal = pass.some((p) => p.batal);
-  const teks = susunLaporan(berkas, pass, dariDb);
+  const teks = susunLaporan(berkas, pass, dariDb, cakupan);
 
   await r.db
     .from("mutasi_jobs")
@@ -301,8 +359,14 @@ export async function tandaiSelesai(
     .eq("account_id", r.ctx.account.id);
 
   if (r.job.tg_chat_id) {
-    await kirimPesan(String(r.job.tg_chat_id), teks, {
-      balasKe: r.job.tg_message_id ? Number(r.job.tg_message_id) : undefined,
+    // Lewat antrean, bukan kirim langsung: laporan hasil rekonsiliasi terlalu
+    // mahal untuk hilang gara-gara satu panggilan jaringan yang gagal.
+    await antreLaporan({
+      accountId: r.ctx.account.id,
+      chatId: String(r.job.tg_chat_id),
+      teks,
+      balasKe: r.job.tg_message_id ? Number(r.job.tg_message_id) : null,
+      jobId,
     });
   }
   return { ok: true, teks };
@@ -355,8 +419,12 @@ export async function tandaiGagal(
         "Bagian itu tidak akan dikirim dua kali kalau diulang.",
       );
     }
-    await kirimPesan(String(r.job.tg_chat_id), baris.join("\n"), {
-      balasKe: r.job.tg_message_id ? Number(r.job.tg_message_id) : undefined,
+    await antreLaporan({
+      accountId: r.ctx.account.id,
+      chatId: String(r.job.tg_chat_id),
+      teks: baris.join("\n"),
+      balasKe: r.job.tg_message_id ? Number(r.job.tg_message_id) : null,
+      jobId,
     });
   }
   return { ok: true };

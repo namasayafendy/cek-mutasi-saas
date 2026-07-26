@@ -216,17 +216,66 @@ export async function POST(request: NextRequest) {
   // ── Gerbang 4d: berkas yang sama tidak diproses dua kali ──
   const { data: kembar } = await db
     .from("mutasi_jobs")
-    .select("id, created_at, status")
+    .select("id, created_at, status, bank_id")
     .eq("account_id", accountId)
     .eq("sha256", sha)
     .maybeSingle();
   if (kembar) {
+    const k = kembar as any;
+
+    // Sudah benar-benar selesai: jangan diproses ulang.
+    if (k.status === "SELESAI" || k.status === "SELESAI_RAGU") {
+      await kirimPesan(
+        chatId,
+        `ℹ️ Berkas ini sudah diproses (${tanggalWIB(String(k.created_at))}). Tidak saya ulang.`,
+        { balasKe: msg.message_id },
+      );
+      return sudah("sha kembar, sudah selesai");
+    }
+
+    // BELUM selesai (gagal di tengah, tautannya kedaluwarsa, atau tombolnya
+    // tidak pernah diketuk) — TERBITKAN TAUTAN BARU.
+    //
+    // Ini menutup jalan buntu yang dibuat oleh dedup itu sendiri: sekali sha256
+    // tercatat, kiriman ulang berkas yang sama akan ditolak selamanya, padahal
+    // mengirim ulang berkas adalah persis yang dilakukan orang ketika sesuatu
+    // gagal. Lebih sederhana daripada tombol "Ulangi" di chat, dan cocok dengan
+    // kebiasaan nyata pemakainya.
+    const tokenBaru = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
+    const { error: errPerbarui } = await db
+      .from("mutasi_jobs")
+      .update({
+        token_hash: await sha256Hex(new TextEncoder().encode(tokenBaru)),
+        token_exp: new Date(Date.now() + JAM_TOKEN_HIDUP * 3600 * 1000).toISOString(),
+        token_dipakai_at: null,
+        status: "ANTRI",
+        error_text: null,
+        langkah: null,
+        tg_chat_id: Number(chatId),
+        tg_message_id: Number(msg.message_id),
+      })
+      .eq("id", k.id)
+      .eq("account_id", accountId);
+
+    const situsUlang = String(process.env.NEXT_PUBLIC_SITE_URL ?? "").trim().replace(/\/+$/, "");
+    if (errPerbarui || !situsUlang) {
+      await kirimPesan(chatId, `⚠️ Berkas ini sudah pernah masuk tapi belum selesai, dan saya gagal membuat tautan baru${errPerbarui ? `: ${errPerbarui.message}` : ""}.`, {
+        balasKe: msg.message_id,
+      });
+      return sudah("gagal terbitkan ulang");
+    }
+
+    // Penanda "sudah dikirim" SENGAJA tidak direset: kalau pass kredit sudah
+    // mendarat di Aceh Gadai sebelum gagal, ia tidak boleh dikirim dua kali.
     await kirimPesan(
       chatId,
-      `ℹ️ Berkas ini sudah pernah dikirim (${tanggalWIB(String(kembar.created_at))}, status ${kembar.status}). Tidak saya proses ulang.`,
-      { balasKe: msg.message_id },
+      `🔁 Berkas ini pernah masuk (${tanggalWIB(String(k.created_at))}) tapi belum selesai.\nTautan barunya di bawah — yang sudah terkirim ke Aceh Gadai tidak akan dikirim dua kali.`,
+      {
+        balasKe: msg.message_id,
+        tombol: tombolBaris([[{ text: "▶️ Proses sekarang", url: `${situsUlang}/proses/${tokenBaru}` }]]),
+      },
     );
-    return sudah("sha kembar");
+    return sudah("tautan diterbitkan ulang");
   }
 
   // ── Tebak rekening ──

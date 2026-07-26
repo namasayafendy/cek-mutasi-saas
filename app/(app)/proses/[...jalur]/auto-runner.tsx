@@ -21,6 +21,7 @@ import { createClient } from "@/lib/supabase/client";
 import { prosesSatuBank } from "@/lib/pipeline/prosesSatuBank";
 import { jalankanPass, type HasilPass } from "@/lib/pipeline/jalankanPass";
 import { catatLangkah, kunciKirim, lepasKunci, tandaiSelesai, tandaiGagal } from "./actions";
+import { catatCakupan } from "@/lib/coverage/actions";
 import type { Bank, Outlet, MatchRulePreset } from "@/lib/types";
 
 type Tahap = { teks: string; keadaan: "jalan" | "selesai" | "gagal" | "ragu" };
@@ -120,6 +121,25 @@ export function AutoRunner({
         await catatLangkah(jobId, "parse-ok");
 
         const ig = up.integrity;
+
+        // Catat cakupan SEBELUM pass mana pun. Kalau dicatat belakangan dan
+        // salah satu pass gagal, rentang ini hilang dan tanggalnya akan
+        // tampak seperti tidak pernah diperiksa selamanya.
+        if (ig?.firstDate && ig?.lastDate) {
+          await catatCakupan({
+            bankId: bank.id,
+            tglAwal: ig.firstDate,
+            tglAkhir: ig.lastDate,
+            saldoAwal: ig.saldoAwal,
+            saldoAkhir: ig.saldoAkhir,
+            complete: ig.complete,
+            chainBreaks: ig.chainBreaks,
+            connected: ig.connected,
+            jobId,
+            sumber: "telegram",
+          });
+        }
+
         const ringkasBerkas = {
           namaFile,
           bankLabel: bank.label || bank.kode || "Rekening",

@@ -14,6 +14,7 @@ import {
 import { getParserSpec } from "@/lib/banks/registry";
 import { createClient } from "@/lib/supabase/client";
 import { prosesSatuBank, type BankUpload } from "@/lib/pipeline/prosesSatuBank";
+import { catatCakupan } from "@/lib/coverage/actions";
 import type { Bank, Jenis } from "@/lib/types";
 
 // BankUpload dulu didefinisikan di sini. Sejak Fase 1 (kanal mutasi Telegram)
@@ -119,6 +120,26 @@ export function UploadStep({
       updateRow(row.id, { status: "error", error: hasil.alasan, progress: undefined });
       return;
     }
+
+    // Catat cakupan juga dari jalur MANUAL, bukan hanya jalur Telegram.
+    // Kalau hanya satu jalur yang mencatat, berkas yang pernah diunggah lewat
+    // layar ini akan tampak seperti tanggal yang tak pernah diperiksa — alarm
+    // palsu berulang, dan alarm palsu berulang membuat laporan berhenti dibaca.
+    const ig = hasil.upload.integrity;
+    if (ig?.firstDate && ig?.lastDate) {
+      void catatCakupan({
+        bankId: bank.id,
+        tglAwal: ig.firstDate,
+        tglAkhir: ig.lastDate,
+        saldoAwal: ig.saldoAwal,
+        saldoAkhir: ig.saldoAkhir,
+        complete: ig.complete,
+        chainBreaks: ig.chainBreaks,
+        connected: ig.connected,
+        sumber: "manual",
+      }).catch((e) => console.error("[cakupan] manual gagal:", e));
+    }
+
     updateRow(row.id, { status: "ready", progress: undefined, result: hasil.upload });
   }
 

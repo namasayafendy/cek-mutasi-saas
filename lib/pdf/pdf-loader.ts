@@ -1,5 +1,15 @@
 // pdfjs-dist loader untuk client-side.
-// Set worker source ke CDN (jsdelivr) supaya match dengan versi npm package.
+//
+// Worker-nya DI-HOST SENDIRI di /public, bukan diambil dari CDN.
+// Dulu ia menunjuk cdn.jsdelivr.net, dan itu satu titik patah di luar kendali
+// kita — bukan kekhawatiran teoretis: di lingkungan pemilik pernah terjadi
+// domain CDN dibajak ISP lokal (proyek bingkai). Kalau kambuh saat mutasi
+// dibaca dari HP, seluruh alur mati padahal kodenya baik-baik saja, dan
+// gejalanya menyesatkan.
+//
+// Berkasnya disalin ulang dari node_modules tiap build
+// (scripts/salin-worker-pdf.mjs, dipasang sebagai "prebuild"), jadi versinya
+// tidak bisa basi terhadap pdfjs-dist yang benar-benar dipakai.
 
 import * as pdfjsLib from "pdfjs-dist";
 
@@ -8,7 +18,8 @@ let initialized = false;
 function init() {
   if (initialized) return;
   if (typeof window === "undefined") return;
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+  // Sama-origin: ikut CSP 'self', tidak butuh izin connect-src ke luar.
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
   initialized = true;
 }
 

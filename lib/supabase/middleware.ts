@@ -43,15 +43,18 @@ function applySecurityHeaders(res: NextResponse) {
   // Content-Security-Policy
   const csp = [
     "default-src 'self'",
-    // Script: Next.js inline + jsdelivr (pdfjs worker) + hCaptcha
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://*.hcaptcha.com https://hcaptcha.com",
+    // Script: Next.js inline + hCaptcha.
+    // jsdelivr & cdnjs DICABUT: worker pdfjs kini di-host sendiri di /public
+    // (lihat lib/pdf/pdf-loader.ts). Izin yang tidak lagi dipakai tetap
+    // memperluas permukaan serangan, jadi jangan ditinggalkan "untuk jaga-jaga".
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.hcaptcha.com https://hcaptcha.com",
     // Style: Tailwind inline + hCaptcha
     "style-src 'self' 'unsafe-inline' https://*.hcaptcha.com https://hcaptcha.com",
     // Image: data + blob untuk PDF render
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
     // Supabase WebSocket + REST + Auth + hCaptcha API
-    "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://*.hcaptcha.com https://hcaptcha.com",
+    "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.hcaptcha.com https://hcaptcha.com",
     // pdfjs Web Worker pakai blob URL
     "worker-src 'self' blob:",
     // hCaptcha widget render via iframe
