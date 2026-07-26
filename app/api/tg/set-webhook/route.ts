@@ -60,14 +60,43 @@ export async function POST(request: NextRequest) {
       { status: 503 },
     );
   }
-  const situs = String(process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/+$/, "");
+  // .trim() BUKAN hiasan: satu spasi atau baris baru yang ikut ter-paste saat
+  // mengisi env di Vercel membuat URL-nya cacat, dan Telegram menolaknya dengan
+  // "Failed to resolve host" — pesan yang sama sekali tidak menunjuk ke sebabnya.
+  const situs = String(process.env.NEXT_PUBLIC_SITE_URL ?? "").trim().replace(/\/+$/, "");
   if (!situs) {
     return NextResponse.json({ ok: false, error: "NEXT_PUBLIC_SITE_URL belum di-set" }, { status: 503 });
   }
 
   const url = `${situs}/api/tg/webhook`;
+
+  // Diperiksa di sini supaya salahnya ketahuan SEBELUM Telegram, dengan kalimat
+  // yang menyebut nilainya. Telegram hanya menerima https dan port 443/80/88/8443.
+  let sah = false;
+  try {
+    const u = new URL(url);
+    sah = u.protocol === "https:" && !!u.hostname && u.hostname.includes(".");
+  } catch {
+    sah = false;
+  }
+  if (!sah) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "NEXT_PUBLIC_SITE_URL tidak berbentuk https://host yang sah",
+        nilaiTerbaca: situs,
+        urlDicoba: url,
+      },
+      { status: 400 },
+    );
+  }
+
   const hasil = await pasangWebhook(url, rahasiaWebhook);
-  if (!hasil.ok) return NextResponse.json({ ok: false, error: hasil.error }, { status: 502 });
+  if (!hasil.ok) {
+    // Sertakan URL yang DICOBA. Tanpa ini, kegagalan dari sisi Telegram tidak
+    // bisa didiagnosis dari luar sama sekali — dan itu persis yang terjadi.
+    return NextResponse.json({ ok: false, error: hasil.error, urlDicoba: url }, { status: 502 });
+  }
 
   const info = await infoWebhook();
   return NextResponse.json({

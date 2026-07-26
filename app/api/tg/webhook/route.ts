@@ -304,7 +304,9 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Balas dengan tombol ──
-  const situs = String(process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/+$/, "");
+  // .trim() sama pentingnya di sini: kalau env-nya kemasukan spasi, tautan
+  // tombolnya cacat dan ketukan owner mendarat di halaman yang tidak ada.
+  const situs = String(process.env.NEXT_PUBLIC_SITE_URL ?? "").trim().replace(/\/+$/, "");
   if (!situs) {
     await kirimPesan(
       chatId,
