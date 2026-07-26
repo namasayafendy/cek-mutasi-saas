@@ -33,6 +33,29 @@ export function tgSiap(): boolean {
   return !!ambilToken();
 }
 
+/**
+ * Secret token webhook, dalam bentuk yang DITERIMA Telegram.
+ *
+ * Telegram hanya mengizinkan A-Z a-z 0-9 _ - (1..256 karakter) untuk
+ * `secret_token`. Secret acak yang wajar dibuat orang — base64, misalnya —
+ * mengandung `+`, `/`, dan `=`, dan Telegram menolaknya mentah-mentah.
+ *
+ * Daripada menuntut pemakainya menghafal daftar karakter yang boleh, nilai env
+ * apa pun diterima di sini: kalau sudah aman ia dipakai apa adanya (supaya
+ * gampang dicocokkan manual saat menelusuri masalah), kalau tidak ia diturunkan
+ * jadi sha256 heksadesimal — tetap rahasia, tetap deterministik, dan pasti lolos.
+ *
+ * PENTING: fungsi ini WAJIB dipakai di DUA tempat — saat mendaftarkan webhook
+ * dan saat memeriksa header kiriman masuk. Kalau hanya salah satu, pendaftaran
+ * berhasil tapi setiap kiriman ditolak 401, dan kanalnya mati tanpa suara.
+ */
+export async function tokenWebhookTg(): Promise<string | null> {
+  const mentah = (process.env.TG_WEBHOOK_SECRET ?? "").trim();
+  if (!mentah) return null;
+  if (/^[A-Za-z0-9_-]{1,256}$/.test(mentah)) return mentah;
+  return sha256Hex(new TextEncoder().encode(mentah));
+}
+
 async function tgCall<T = any>(method: string, payload: Record<string, unknown>): Promise<HasilTg<T>> {
   const token = ambilToken();
   if (!token) return { ok: false, error: "TG_MUTASI_BOT_TOKEN belum di-set" };

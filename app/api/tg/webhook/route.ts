@@ -36,6 +36,7 @@ import {
   sha256Hex,
   ukuranManusiawi,
   tgSiap,
+  tokenWebhookTg,
   BATAS_UNDUH_BYTE,
 } from "@/lib/telegram/bot";
 
@@ -76,7 +77,11 @@ function berkasSah(namaFile: string, mime: string): boolean {
 
 export async function POST(request: NextRequest) {
   // ── Gerbang 1: secret token (FAIL-CLOSED) ──
-  const rahasia = process.env.TG_WEBHOOK_SECRET;
+  // Dibandingkan dengan bentuk yang SAMA seperti saat didaftarkan — lihat
+  // tokenWebhookTg(). Kalau di sini memakai env mentah sementara pendaftaran
+  // memakai bentuk turunan, pendaftaran akan berhasil tapi setiap kiriman
+  // ditolak 401 dan kanalnya mati tanpa satu pun pesan galat.
+  const rahasia = await tokenWebhookTg();
   const dibawa = request.headers.get("x-telegram-bot-api-secret-token");
   if (!rahasia || dibawa !== rahasia) {
     return NextResponse.json({ ok: false }, { status: 401 });

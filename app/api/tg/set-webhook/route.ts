@@ -17,7 +17,7 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from "next/server";
-import { pasangWebhook, infoWebhook, copotWebhook, tgSiap } from "@/lib/telegram/bot";
+import { pasangWebhook, infoWebhook, copotWebhook, tgSiap, tokenWebhookTg } from "@/lib/telegram/bot";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,7 +50,10 @@ export async function POST(request: NextRequest) {
   const t = tolak(request);
   if (t) return t;
 
-  const rahasiaWebhook = process.env.TG_WEBHOOK_SECRET;
+  // Bentuk yang diterima Telegram; kalau env-nya memuat karakter terlarang
+  // (base64 misalnya), fungsi ini menurunkannya jadi hex. Nilai yang SAMA
+  // dipakai webhook untuk memeriksa kiriman masuk.
+  const rahasiaWebhook = await tokenWebhookTg();
   if (!rahasiaWebhook) {
     return NextResponse.json(
       { ok: false, error: "TG_WEBHOOK_SECRET belum di-set. Tanpa itu webhook akan menolak semua kiriman." },
