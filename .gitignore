@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...kecuali contohnya. Tanpa baris ini .env.example tidak pernah masuk repo,
+# sehingga satu-satunya catatan nama variabel hidup di satu laptop saja.
+# Isinya hanya nilai contoh — tidak ada token atau rahasia asli di dalamnya.
+!.env.example
 
 # vercel
 .vercel

@@ -27,6 +27,10 @@ function isPublicPath(path: string): boolean {
   // Server-to-server internal API (AI Hub) — auth sendiri via x-internal-secret
   // di route-nya (fail-closed), jangan di-redirect ke /login.
   if (path.startsWith("/api/internal/")) return true;
+  // Webhook Telegram (kanal masuk mutasi) — auth sendiri lewat header
+  // X-Telegram-Bot-Api-Secret-Token di route-nya (fail-closed). Tanpa baris ini
+  // POST dari Telegram akan di-redirect ke /login dan webhook mati diam-diam.
+  if (path.startsWith("/api/tg/")) return true;
   return false;
 }
 

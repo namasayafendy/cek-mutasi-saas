@@ -11,36 +11,16 @@ import {
   Trash2,
   Play,
 } from "lucide-react";
-import { renderAllPages } from "@/lib/pdf/renderer";
-import { parsePdfByParserId, ParserNotImplementedError } from "@/lib/parsers";
-import {
-  persistTransactions,
-  lookupParsedTxIds,
-  rowLookupKey,
-  type PersistResult,
-} from "@/lib/parsers/persist";
 import { getParserSpec } from "@/lib/banks/registry";
-import { analyzeIntegrity, type IntegrityResult } from "@/lib/parsers/integrity";
 import { createClient } from "@/lib/supabase/client";
-import type { ParsedPdf } from "@/lib/pdf/parser";
-import type { RenderedPage } from "@/lib/pdf/renderer";
-import type { Bank, Jenis, PdfTransaction } from "@/lib/types";
+import { prosesSatuBank, type BankUpload } from "@/lib/pipeline/prosesSatuBank";
+import type { Bank, Jenis } from "@/lib/types";
 
-export type BankUpload = {
-  bank: Bank;
-  /** Active-jenis ParsedPdf — kept for backward compat with code that
-   *  doesn't care about pass-1 vs pass-2 (mostly pdf-viewer + persistInfo
-   *  display). check-client.tsx now uses parsedKredit/parsedDebet directly
-   *  and picks based on current jenis state. */
-  parsed: ParsedPdf;
-  parsedKredit: ParsedPdf;
-  parsedDebet: ParsedPdf;
-  pages: RenderedPage[];
-  persistInfo: PersistResult;
-  parsedKreditCount: number;
-  parsedDebetCount: number;
-  integrity?: IntegrityResult;
-};
+// BankUpload dulu didefinisikan di sini. Sejak Fase 1 (kanal mutasi Telegram)
+// ia pindah ke lib/pipeline/prosesSatuBank.ts supaya auto-runner bisa memakai
+// tipenya tanpa menarik seluruh komponen React ini. Di-re-export agar
+// check-client.tsx dan pdf-viewer.tsx tidak perlu berubah sebaris pun.
+export type { BankUpload };
 
 type QueueRow = {
   id: string;
@@ -116,115 +96,30 @@ export function UploadStep({
       return;
     }
     updateRow(row.id, { status: "parsing", progress: `Parsing ${spec.label}...`, error: undefined });
-    try {
-      const doc = await parsePdfByParserId(row.file, bank.parser_id, {
-        password: row.password || undefined,
-      });
 
-      // Cek kelengkapan (A) + kontinuitas/bolong (B) vs titik terakhir bank.
-      const integrity = analyzeIntegrity(doc, bank.recon_last_saldo ?? null);
+    // Seluruh isi blok ini dulu ada di sini; sejak Fase 1 ia tinggal di
+    // lib/pipeline/prosesSatuBank.ts dan dipakai bersama oleh alur Telegram.
+    // Perilakunya sengaja dibuat identik: urutan langkah, pesan galat, dan
+    // pemetaan error semuanya ikut pindah apa adanya.
+    const hasil = await prosesSatuBank({
+      supabase: createClient(),
+      accountId,
+      bank,
+      file: row.file,
+      password: row.password,
+      jenis,
+      // Alur manual: layarnya butuh gambar halaman, dan nol transaksi pada
+      // jenis aktif memang harus jadi galat merah (perilaku lama).
+      renderHalaman: true,
+      gagalKalauJenisKosong: true,
+      onLangkah: (teks) => updateRow(row.id, { progress: teks }),
+    });
 
-      updateRow(row.id, { progress: "Menyimpan ke history (auto dedup)..." });
-      const supabase = createClient();
-      const persisted = await persistTransactions(supabase, accountId, bank.id, doc.rows);
-      const idMap = await lookupParsedTxIds(supabase, accountId, bank.id, doc.rows);
-
-      // Update "titik terakhir" rekonsiliasi bank (kalau statement ini lebih baru).
-      const sm = doc.statementMeta;
-      if (sm?.saldoAkhir != null && sm.lastDate) {
-        const prev = bank.recon_last_date ?? null;
-        if (!prev || sm.lastDate >= prev) {
-          await supabase
-            .from("banks")
-            .update({ recon_last_saldo: sm.saldoAkhir, recon_last_date: sm.lastDate })
-            .eq("id", bank.id);
-        }
-      }
-
-      const parsedKreditCount = doc.rows.filter((r) => r.kredit > 0).length;
-      const parsedDebetCount = doc.rows.filter((r) => r.debet > 0).length;
-      const otherJenisCount = jenis === "kredit" ? parsedDebetCount : parsedKreditCount;
-      const otherJenisLabel = jenis === "kredit" ? "debet (transaksi keluar)" : "kredit (transaksi masuk)";
-
-      const bankIdLocal = bank.id;
-      // Build PdfTransaction arrays for BOTH jenis upfront. This enables the
-      // "Lanjut Cek Debet/Kredit" continuation flow in check-client without
-      // requiring a re-upload or re-parse of the same PDF.
-      function buildTx(j: Jenis): PdfTransaction[] {
-        return doc.rows
-          .filter((r) => (j === "kredit" ? r.kredit > 0 : r.debet > 0))
-          .map((r) => ({
-            no: r.no,
-            page: r.page,
-            tanggal: r.tanggal,
-            tanggalDate: r.tanggalDate,
-            waktu: r.waktu,
-            namaPengirim: r.namaPengirim,
-            deskripsi: r.deskripsi,
-            kredit: j === "kredit" ? r.kredit : r.debet,
-            bbox: r.bbox,
-            parsedTxId: idMap.get(rowLookupKey(r)),
-            source: "current",
-            bankId: bankIdLocal,
-            noRef: r.noRef,
-          }));
-      }
-      const kreditTransactions = buildTx("kredit");
-      const debetTransactions = buildTx("debet");
-      const activeTransactions = jenis === "kredit" ? kreditTransactions : debetTransactions;
-
-      if (activeTransactions.length === 0) {
-        const hint =
-          otherJenisCount > 0
-            ? ` Tapi ada ${otherJenisCount} tx ${otherJenisLabel} — kalau yang ingin dicek itu, pilih sesi sebaliknya.`
-            : "";
-        updateRow(row.id, {
-          status: "error",
-          error: `Tidak ada transaksi ${jenis} di file ini.${hint}`,
-          progress: undefined,
-        });
-        return;
-      }
-
-      updateRow(row.id, { progress: `Render ${doc.pages.length} halaman...` });
-      const pages = await renderAllPages(doc.fileBuffer, 1.4);
-
-      const parsedKredit: ParsedPdf = {
-        transactions: kreditTransactions,
-        pages: doc.pages,
-        fileBuffer: doc.fileBuffer,
-      };
-      const parsedDebet: ParsedPdf = {
-        transactions: debetTransactions,
-        pages: doc.pages,
-        fileBuffer: doc.fileBuffer,
-      };
-
-      updateRow(row.id, {
-        status: "ready",
-        progress: undefined,
-        result: {
-          bank,
-          parsed: jenis === "kredit" ? parsedKredit : parsedDebet,
-          parsedKredit,
-          parsedDebet,
-          pages,
-          persistInfo: persisted,
-          parsedKreditCount,
-          parsedDebetCount,
-          integrity,
-        },
-      });
-    } catch (err) {
-      console.error(err);
-      const msg =
-        err instanceof ParserNotImplementedError
-          ? `Parser ${err.parserId} belum tersedia.`
-          : err instanceof Error
-            ? err.message
-            : "Gagal parse file";
-      updateRow(row.id, { status: "error", error: msg, progress: undefined });
+    if (!hasil.ok) {
+      updateRow(row.id, { status: "error", error: hasil.alasan, progress: undefined });
+      return;
     }
+    updateRow(row.id, { status: "ready", progress: undefined, result: hasil.upload });
   }
 
   function handleFileChange(rowId: string, file: File | null) {
