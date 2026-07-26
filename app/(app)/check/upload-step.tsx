@@ -116,15 +116,37 @@ export function UploadStep({
       onLangkah: (teks) => updateRow(row.id, { progress: teks }),
     });
 
-    if (!hasil.ok) {
-      updateRow(row.id, { status: "error", error: hasil.alasan, progress: undefined });
-      return;
-    }
-
     // Catat cakupan juga dari jalur MANUAL, bukan hanya jalur Telegram.
     // Kalau hanya satu jalur yang mencatat, berkas yang pernah diunggah lewat
     // layar ini akan tampak seperti tanggal yang tak pernah diperiksa — alarm
     // palsu berulang, dan alarm palsu berulang membuat laporan berhenti dibaca.
+    //
+    // Dijalankan JUGA pada kegagalan "tidak ada transaksi jenis ini", karena
+    // barisnya memang sudah masuk DB dan periodenya nyata. Kegagalan itu soal
+    // jenis yang sedang dilihat, bukan soal berkasnya.
+    if (!hasil.ok) {
+      const igGagal = hasil.integrity;
+      if (igGagal?.firstDate && igGagal?.lastDate) {
+        try {
+          await catatCakupan({
+            bankId: bank.id,
+            tglAwal: igGagal.firstDate,
+            tglAkhir: igGagal.lastDate,
+            saldoAwal: igGagal.saldoAwal,
+            saldoAkhir: igGagal.saldoAkhir,
+            complete: igGagal.complete,
+            chainBreaks: igGagal.chainBreaks,
+            connected: igGagal.connected,
+            sumber: "manual",
+          });
+        } catch (e) {
+          console.error("[cakupan] manual (jenis kosong) gagal:", e);
+        }
+      }
+      updateRow(row.id, { status: "error", error: hasil.alasan, progress: undefined });
+      return;
+    }
+
     const ig = hasil.upload.integrity;
     let peringatanCakupan: string | undefined;
     if (ig?.firstDate && ig?.lastDate) {

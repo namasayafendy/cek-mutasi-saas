@@ -101,16 +101,28 @@ async function tandai(db: any, id: number, berhasil: boolean, error: string | nu
  * Kirim ulang yang masih tertahan. Dipanggil cron.
  * @returns jumlah terkirim, masih tertahan, dan yang menyerah.
  */
-export async function kurasOutbox(batas = 20): Promise<{ terkirim: number; tertahan: number; menyerah: number }> {
+export async function kurasOutbox(
+  batas = 20,
+): Promise<{ terkirim: number; tertahan: number; menyerah: number; rusak: string | null }> {
   const db = createAdminClient();
-  const hasil = { terkirim: 0, tertahan: 0, menyerah: 0 };
+  const hasil = { terkirim: 0, tertahan: 0, menyerah: 0, rusak: null as string | null };
 
-  const { data } = await db
+  const { data, error } = await db
     .from("mutasi_laporan_outbox")
     .select("id, chat_id, teks, balas_ke, percobaan")
     .eq("status", "PENDING")
     .order("created_at", { ascending: true })
     .limit(batas);
+
+  // Antrean yang TIDAK BISA DIBACA jangan dilaporkan sebagai "0 tertahan" —
+  // nol karena tidak terbaca dan nol karena memang kosong terlihat sama persis
+  // di ringkasan harian, padahal yang satu berarti laporan sedang menumpuk
+  // tanpa ada yang tahu.
+  if (error) {
+    console.error("[outbox] gagal membaca antrean:", error);
+    hasil.rusak = error.message;
+    return hasil;
+  }
 
   for (const row of ((data ?? []) as any[])) {
     const kirim = await kirimPesan(String(row.chat_id), String(row.teks), {

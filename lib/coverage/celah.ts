@@ -19,8 +19,15 @@
 //
 // ── YANG MENENGAHI ADALAH UANG ──
 // Kalau saldo_akhir rentang sebelumnya sama persis dengan saldo_awal rentang
-// sesudahnya, maka secara aritmetika TIDAK ADA transaksi di antara keduanya.
-// Celahnya terbukti kosong. Kalender bisa bohong; rantai saldo tidak.
+// sesudahnya, maka perubahan saldo NETO di antara keduanya adalah nol.
+//
+// Batas kejujuran yang harus disebut: neto nol BUKAN berarti tidak ada
+// transaksi — masuk Rp 1 jt lalu keluar Rp 1 jt menghasilkan saldo yang sama
+// persis. Untuk tujuan kita ia tetap cukup kuat, karena transfer MASUK yang
+// tidak diimbangi keluar pasti menggeser saldo. Tapi celahnya tetap disebut
+// di laporan sebagai baris informasi, bukan disembunyikan — pembaca berhak
+// tahu tanggal mana yang dilewati dan atas dasar apa.
+//
 // Celah yang saldonya TIDAK bertemu dilaporkan lengkap dengan selisih
 // rupiahnya — itu bukan lagi dugaan, itu bukti ada uang yang belum terperiksa.
 // ============================================================
@@ -38,8 +45,15 @@ export interface Celah {
   hari: number;
   /** Selisih saldo di batas celah. 0 = saldo bertemu (celah terbukti kosong). */
   selisih: number;
-  /** true = saldo di kedua sisi bertemu, jadi celah ini PASTI tidak menyimpan
-   *  transaksi apa pun. Tidak perlu dilaporkan sebagai masalah. */
+  /**
+   * true = saldo di kedua sisi bertemu.
+   *
+   * HATI-HATI MENAFSIRKAN INI. Yang terbukti adalah perubahan saldo NETO nol,
+   * BUKAN ketiadaan transaksi: masuk Rp 1 jt lalu keluar Rp 1 jt di hari yang
+   * sama menghasilkan saldo yang sama persis. Untuk tujuan kita ia cukup —
+   * transfer masuk yang tidak diimbangi keluar PASTI menggeser saldo — tapi
+   * jangan pernah menuliskannya sebagai "tidak ada transaksi".
+   */
   terbuktiKosong: boolean;
 }
 

@@ -57,6 +57,16 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Mode "kuras": HANYA mengosongkan antrean, tanpa menyusun ringkasan.
+  // Dipanggil tiap 30 menit di jam kerja. Tanpa ini, satu laporan yang gagal
+  // terkirim baru dicoba lagi 24 jam kemudian, dan siklus 6 percobaan memakan
+  // enam HARI — laporan rekonsiliasi yang datang enam hari terlambat sama
+  // tidak bergunanya dengan yang hilang.
+  if (request.nextUrl.searchParams.get("mode") === "kuras") {
+    const hasilKuras = await kurasOutbox(30);
+    return NextResponse.json({ ok: true, mode: "kuras", outbox: hasilKuras });
+  }
+
   const db = createAdminClient();
   const hariIni = hariIniWIB();
 
@@ -202,6 +212,12 @@ export async function GET(request: NextRequest) {
                 `${p.debet?.jml ?? 0} keluar (${rpJt(p.debet?.total ?? 0)})`,
             );
           }
+          if (Number(j.diLuarJendela ?? 0) > 0) {
+            adaYangPerluDitindak = true;
+            barisKlaim.push(
+              `🚨 ${j.diLuarJendela} klaim sudah TERLANJUR di luar jangkauan — ia tidak akan pernah ditarik lagi dan harus dibereskan manual.`,
+            );
+          }
           if (j.alarmMenua) {
             adaYangPerluDitindak = true;
             barisKlaim.push(
@@ -245,7 +261,9 @@ export async function GET(request: NextRequest) {
   b.push(`📅 Ringkasan mutasi — ${tglID(hariIni)}`);
   b.push(...barisRekening);
   b.push(...barisKlaim);
-  if (outbox.tertahan > 0 || outbox.menyerah > 0) {
+  if (outbox.rusak) {
+    gagalBaca.push(`antrean laporan (${outbox.rusak})`);
+  } else if (outbox.tertahan > 0 || outbox.menyerah > 0) {
     adaYangPerluDitindak = true;
     b.push(`⚠️ Laporan tertahan: ${outbox.tertahan} menunggu, ${outbox.menyerah} menyerah`);
   }

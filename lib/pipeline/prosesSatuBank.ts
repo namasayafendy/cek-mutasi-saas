@@ -98,7 +98,22 @@ export interface OpsiProsesBank {
 
 export type HasilProsesBank =
   | { ok: true; upload: BankUpload }
-  | { ok: false; alasan: string };
+  | {
+      ok: false;
+      alasan: string;
+      /**
+       * Terisi HANYA pada kegagalan "tidak ada transaksi jenis ini" — kegagalan
+       * yang terjadi SESUDAH baris berhasil masuk database.
+       *
+       * Ini penting dan mudah terlewat: berkasnya sah, barisnya tersimpan, dan
+       * periodenya nyata — yang tidak ada cuma transaksi pada jenis yang sedang
+       * dilihat. Kalau cakupannya ikut hangus bersama pesan galat ini, tanggal
+       * yang sudah benar-benar diperiksa akan muncul sebagai BOLONG besok, dan
+       * alarm palsu yang berulang membuat seluruh laporan berhenti dibaca.
+       */
+      integrity?: IntegrityResult;
+      persistInfo?: PersistResult;
+    };
 
 /**
  * Terjemahkan galat menjadi kalimat yang dilihat manusia.
@@ -190,7 +205,14 @@ export async function prosesSatuBank(opsi: OpsiProsesBank): Promise<HasilProsesB
         otherJenisCount > 0
           ? ` Tapi ada ${otherJenisCount} tx ${otherJenisLabel} — kalau yang ingin dicek itu, pilih sesi sebaliknya.`
           : "";
-      return { ok: false, alasan: `Tidak ada transaksi ${jenis} di file ini.${hint}` };
+      // integrity + persistInfo sengaja ikut dikembalikan — lihat catatan di
+      // tipe HasilProsesBank. Barisnya SUDAH masuk DB di atas.
+      return {
+        ok: false,
+        alasan: `Tidak ada transaksi ${jenis} di file ini.${hint}`,
+        integrity,
+        persistInfo: persisted,
+      };
     }
 
     let pages: RenderedPage[] = [];

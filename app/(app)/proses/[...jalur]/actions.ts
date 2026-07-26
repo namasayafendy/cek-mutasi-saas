@@ -235,8 +235,20 @@ function susunLaporan(
       }
       if (cakupan.celah.length > 4) b.push(`   …dan ${cakupan.celah.length - 4} celah lain`);
     }
+    // Celah yang dilewati TETAP disebut tanggalnya. Menyembunyikannya sama
+    // saja mengubah "saya memutuskan ini aman" jadi "tidak ada apa-apa di sini",
+    // dan yang dibuktikan saldo hanyalah perubahan NETO nol — bukan ketiadaan
+    // transaksi.
     if (cakupan.celahTerbuktiKosong.length > 0) {
-      b.push(`   (${cakupan.celahTerbuktiKosong.length} celah lain terbukti kosong dari saldo — aman)`);
+      const daftar = cakupan.celahTerbuktiKosong
+        .slice(0, 3)
+        .map((c) => (c.dari === c.sampai ? tglID(c.dari) : `${tglID(c.dari)}–${tglID(c.sampai)}`))
+        .join(", ");
+      b.push(
+        `   (dilewati karena saldo bertemu: ${daftar}` +
+          (cakupan.celahTerbuktiKosong.length > 3 ? ` +${cakupan.celahTerbuktiKosong.length - 3} lagi` : "") +
+          ")",
+      );
     }
 
     // Keterkinian: diam bukan berarti mutakhir.
