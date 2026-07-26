@@ -55,6 +55,18 @@ export interface HasilCakupan {
   akhir: string | null;
   /** Berapa hari mutasi tertinggal dari hari ini (WIB). null kalau belum ada data. */
   umurHari: number | null;
+  /** Jumlah hari yang BENAR-BENAR tercakup (gabungan rentang). */
+  hariTercakup: number;
+  /**
+   * Lebar jendela yang diperiksa, dalam hari.
+   *
+   * Ini bukan hiasan. Tanpa angka ini, laporan yang cuma punya SATU rentang
+   * akan berbunyi "tidak ada tanggal bolong" — vakum secara logika (tidak ada
+   * celah karena tidak ada apa pun untuk dicelahi) tapi terbaca sebagai
+   * jaminan bahwa 60 hari terakhir sudah bersih. Itu justru bentuk kebohongan
+   * yang paling ingin dihindari sistem ini.
+   */
+  jendelaHari: number;
 }
 
 const HARI_MS = 86_400_000;
@@ -83,10 +95,11 @@ export function selisihHari(a: string, b: string): number {
  * @param baris   seluruh rentang tercatat (satu bank, sudah difilter periode)
  * @param sampai  batas kanan pemeriksaan; default hari ini WIB
  */
-export function hitungCakupan(baris: BarisCakupan[], sampai?: string): HasilCakupan {
+export function hitungCakupan(baris: BarisCakupan[], sampai?: string, jendelaHari = 60): HasilCakupan {
   const kosong: HasilCakupan = {
     rentang: [], celah: [], celahTerbuktiKosong: [],
     awal: null, akhir: null, umurHari: null,
+    hariTercakup: 0, jendelaHari,
   };
   const sah = (baris ?? []).filter(
     (b) => b && /^\d{4}-\d{2}-\d{2}$/.test(b.tgl_awal) && /^\d{4}-\d{2}-\d{2}$/.test(b.tgl_akhir),
@@ -145,6 +158,8 @@ export function hitungCakupan(baris: BarisCakupan[], sampai?: string): HasilCaku
   const akhir = gabung[gabung.length - 1].sampai;
   const batas = sampai || hariIniWIB();
 
+  const hariTercakup = gabung.reduce((s, g) => s + selisihHari(g.dari, g.sampai) + 1, 0);
+
   return {
     rentang: gabung.map((g) => ({ dari: g.dari, sampai: g.sampai })),
     celah,
@@ -152,6 +167,8 @@ export function hitungCakupan(baris: BarisCakupan[], sampai?: string): HasilCaku
     awal,
     akhir,
     umurHari: Math.max(0, selisihHari(akhir, batas)),
+    hariTercakup,
+    jendelaHari,
   };
 }
 

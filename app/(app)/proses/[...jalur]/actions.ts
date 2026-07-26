@@ -216,7 +216,15 @@ function susunLaporan(
   // palsu tiap kali ada hari libur di ujung sebuah export.
   if (cakupan && cakupan.akhir) {
     if (cakupan.celah.length === 0) {
-      b.push("✅ Cakupan 60 hari: tidak ada tanggal bolong");
+      // JANGAN berkata "60 hari bersih" kalau yang kita tahu cuma beberapa hari.
+      // Nol celah bisa berarti nol pengetahuan — dan itu terbaca sebagai jaminan.
+      const cukupPanjang = cakupan.hariTercakup >= cakupan.jendelaHari - 1;
+      b.push(
+        cukupPanjang
+          ? `✅ Cakupan ${cakupan.jendelaHari} hari: tidak ada tanggal bolong`
+          : `✅ Tidak ada tanggal bolong di ${tglID(cakupan.awal!)} s/d ${tglID(cakupan.akhir)}` +
+              ` — baru ${cakupan.hariTercakup} dari ${cakupan.jendelaHari} hari terakhir yang pernah diperiksa`,
+      );
     } else {
       for (const c of cakupan.celah.slice(0, 4)) {
         const rentang = c.dari === c.sampai ? tglID(c.dari) : `${tglID(c.dari)} s/d ${tglID(c.sampai)}`;
