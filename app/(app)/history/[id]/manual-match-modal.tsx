@@ -241,6 +241,20 @@ export function ManualMatchModal({
     // Kegagalan di sini TIDAK membatalkan pencocokan yang sudah tersimpan —
     // hanya ditampilkan sebagai peringatan supaya bisa diulang.
     const klaimId = (input as { gadai_klaim_id?: string | null }).gadai_klaim_id;
+    // HANYA kirim ke gadai kalau jumlahnya PAS. Aturan di sana: "cocok" berarti
+    // selisih NOL rupiah, tanpa toleransi. Mengirim pencocokan yang masih
+    // berselisih akan menutup klaimnya sebagai COCOK di gadai dan menghapus
+    // selisih yang justru harus ditindaklanjuti (mis. nasabah kurang/lebih bayar).
+    // Di sini tetap tersimpan sebagai manual_claimed — hanya tidak diakui gadai.
+    if (klaimId && diff !== 0) {
+      setError(
+        `Pencocokan TERSIMPAN di sini, tapi TIDAK dikirim ke Aceh Gadai karena masih ada selisih ` +
+        `${diff > 0 ? "+" : "-"}Rp ${formatRupiah(Math.abs(diff))}. Di sana "cocok" berarti selisih NOL. ` +
+        `Selesaikan selisihnya dulu lewat menu Kotak Masuk Transfer di aplikasi gadai.`,
+      );
+      setSubmitting(false);
+      return;
+    }
     if (klaimId) {
       const push = await pushManualMatchToGadai(klaimId, reason);
       if (!push.ok) {
