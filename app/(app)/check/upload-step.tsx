@@ -126,21 +126,36 @@ export function UploadStep({
     // layar ini akan tampak seperti tanggal yang tak pernah diperiksa — alarm
     // palsu berulang, dan alarm palsu berulang membuat laporan berhenti dibaca.
     const ig = hasil.upload.integrity;
+    let peringatanCakupan: string | undefined;
     if (ig?.firstDate && ig?.lastDate) {
-      void catatCakupan({
-        bankId: bank.id,
-        tglAwal: ig.firstDate,
-        tglAkhir: ig.lastDate,
-        saldoAwal: ig.saldoAwal,
-        saldoAkhir: ig.saldoAkhir,
-        complete: ig.complete,
-        chainBreaks: ig.chainBreaks,
-        connected: ig.connected,
-        sumber: "manual",
-      }).catch((e) => console.error("[cakupan] manual gagal:", e));
+      try {
+        const r = await catatCakupan({
+          bankId: bank.id,
+          tglAwal: ig.firstDate,
+          tglAkhir: ig.lastDate,
+          saldoAwal: ig.saldoAwal,
+          saldoAkhir: ig.saldoAkhir,
+          complete: ig.complete,
+          chainBreaks: ig.chainBreaks,
+          connected: ig.connected,
+          sumber: "manual",
+        });
+        // Kegagalannya TIDAK boleh menggagalkan upload — barisnya sudah masuk
+        // dan itu yang penting. Tapi juga tidak boleh ditelan: cakupan yang
+        // gagal dicatat akan melahirkan alarm BOLONG palsu besok, dan tanpa
+        // peringatan ini alarm itu mustahil dilacak kembali ke sini.
+        if (!r.ok) peringatanCakupan = r.error;
+      } catch (e) {
+        peringatanCakupan = e instanceof Error ? e.message : String(e);
+      }
     }
+    if (peringatanCakupan) console.warn("[cakupan] manual tidak tercatat:", peringatanCakupan);
 
-    updateRow(row.id, { status: "ready", progress: undefined, result: hasil.upload });
+    updateRow(row.id, {
+      status: "ready",
+      progress: peringatanCakupan ? `⚠️ Cakupan tidak tercatat: ${peringatanCakupan}` : undefined,
+      result: hasil.upload,
+    });
   }
 
   function handleFileChange(rowId: string, file: File | null) {

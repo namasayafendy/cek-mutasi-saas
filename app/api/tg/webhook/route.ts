@@ -267,13 +267,29 @@ export async function POST(request: NextRequest) {
 
     // Penanda "sudah dikirim" SENGAJA tidak direset: kalau pass kredit sudah
     // mendarat di Aceh Gadai sebelum gagal, ia tidak boleh dikirim dua kali.
+    // Kalau rekeningnya belum pasti (bank_id null), tombol tunggal akan
+    // mendarat di halaman yang menolak dengan "Rekening belum jelas" — jalan
+    // buntu. Tawarkan satu tombol per rekening, sama seperti jalur berkas baru.
+    let tombolUlang = [[{ text: "▶️ Proses sekarang", url: `${situsUlang}/proses/${tokenBaru}` }]];
+    if (!k.bank_id) {
+      const { data: bankUlang } = await db
+        .from("banks")
+        .select("id, kode, label")
+        .eq("account_id", accountId)
+        .eq("is_active", true)
+        .order("urutan");
+      const daftar = (bankUlang ?? []) as any[];
+      if (daftar.length > 1) {
+        tombolUlang = daftar.map((x) => [
+          { text: `▶️ Proses sebagai ${x.label || x.kode}`, url: `${situsUlang}/proses/${tokenBaru}/${x.id}` },
+        ]);
+      }
+    }
+
     await kirimPesan(
       chatId,
       `🔁 Berkas ini pernah masuk (${tanggalWIB(String(k.created_at))}) tapi belum selesai.\nTautan barunya di bawah — yang sudah terkirim ke Aceh Gadai tidak akan dikirim dua kali.`,
-      {
-        balasKe: msg.message_id,
-        tombol: tombolBaris([[{ text: "▶️ Proses sekarang", url: `${situsUlang}/proses/${tokenBaru}` }]]),
-      },
+      { balasKe: msg.message_id, tombol: tombolBaris(tombolUlang) },
     );
     return sudah("tautan diterbitkan ulang");
   }

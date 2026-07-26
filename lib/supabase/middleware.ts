@@ -31,6 +31,16 @@ function isPublicPath(path: string): boolean {
   // X-Telegram-Bot-Api-Secret-Token di route-nya (fail-closed). Tanpa baris ini
   // POST dari Telegram akan di-redirect ke /login dan webhook mati diam-diam.
   if (path.startsWith("/api/tg/")) return true;
+  // Cron Vercel — auth sendiri lewat "Authorization: Bearer CRON_SECRET"
+  // (fail-closed di route-nya). TANPA baris ini middleware membalas 307 ke
+  // /login SEBELUM route sempat jalan, sehingga cron tidak pernah dieksekusi
+  // dan tidak ada satu pun galat yang muncul. Terbukti di produksi: seluruh
+  // pengingat harian mati diam-diam — justru kesenyapan yang ia dibangun
+  // untuk menghapus.
+  if (path.startsWith("/api/cron/")) return true;
+  // Worker pdfjs (berkas statis di /public). Bukan soal rahasia — ia hanya
+  // tidak perlu melewati pemeriksaan sesi untuk berkas 1,2 MB.
+  if (path.endsWith(".mjs")) return true;
   return false;
 }
 

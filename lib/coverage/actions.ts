@@ -40,9 +40,19 @@ function angkaAtauNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Panjang satu export yang masih masuk akal. Lebih dari ini hampir pasti
+ *  tanggal salah-parse, dan satu rentang raksasa akan MENELAN seluruh celah
+ *  di dalamnya — permanen, karena barisnya tak pernah ditulis ulang. */
+const MAKS_RENTANG_HARI = 120;
+const MAKS_UMUR_HARI = 400;
+
 export async function catatCakupan(input: CatatCakupanInput): Promise<{ ok: boolean; error?: string }> {
   const ctx = await getAccountContext();
   if (!ctx) return { ok: false, error: "Sesi tidak valid." };
+  // Cakupan adalah BUKTI bahwa suatu tanggal sudah diperiksa. Bukti palsu
+  // membungkam deteksi bolong untuk selamanya, jadi haknya disamakan dengan
+  // hak menutup transfer: hanya pemilik.
+  if (ctx.member.role !== "owner") return { ok: false, error: "Hanya pemilik." };
 
   const bankId = String(input?.bankId ?? "");
   const tglAwal = String(input?.tglAwal ?? "");
@@ -50,6 +60,43 @@ export async function catatCakupan(input: CatatCakupanInput): Promise<{ ok: bool
   if (!/^[0-9a-f-]{36}$/i.test(bankId)) return { ok: false, error: "Bank tidak sah." };
   if (!ISO.test(tglAwal) || !ISO.test(tglAkhir)) return { ok: false, error: "Tanggal tidak sah." };
   if (tglAwal > tglAkhir) return { ok: false, error: "Rentang terbalik." };
+
+  // ── Berkas yang TIDAK LAYAK tidak boleh menyumbang cakupan ──
+  //
+  // jalankanPass menolak memproses berkas yang complete === false, rantai
+  // saldonya putus, atau ada baris gagal simpan — artinya TIDAK SATU klaim pun
+  // dinilai untuk periode itu. Kalau rentangnya tetap dicatat di sini,
+  // tanggal-tanggal itu berubah status jadi "sudah diperiksa" padahal
+  // pencocokannya tidak pernah jalan, dan besok ringkasan harian akan
+  // menutupnya dengan "Semua mutakhir. Tidak ada tunggakan."
+  //
+  // Lebih buruk lagi: bolong DI DALAM satu rentang (halaman PDF yang hilang)
+  // secara struktural tidak bisa dilihat oleh uji celah, yang hanya
+  // membandingkan ANTAR-rentang. Jadi satu-satunya penjaganya adalah menolak
+  // mencatatnya sejak awal.
+  if (input.complete === false) {
+    return { ok: false, error: "Mutasi tidak utuh — cakupan tidak dicatat." };
+  }
+  if (Number(input.chainBreaks ?? 0) > 0) {
+    return { ok: false, error: "Rantai saldo putus — cakupan tidak dicatat." };
+  }
+
+  const hariIni = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+  if (tglAkhir > hariIni) {
+    return { ok: false, error: `Tanggal akhir (${tglAkhir}) di masa depan.` };
+  }
+  const panjang = Math.round(
+    (Date.parse(`${tglAkhir}T00:00:00Z`) - Date.parse(`${tglAwal}T00:00:00Z`)) / 86_400_000,
+  ) + 1;
+  if (panjang > MAKS_RENTANG_HARI) {
+    return { ok: false, error: `Rentang ${panjang} hari tidak wajar untuk satu export.` };
+  }
+  const umur = Math.round(
+    (Date.parse(`${hariIni}T00:00:00Z`) - Date.parse(`${tglAwal}T00:00:00Z`)) / 86_400_000,
+  );
+  if (umur > MAKS_UMUR_HARI) {
+    return { ok: false, error: `Tanggal awal (${tglAwal}) terlalu tua.` };
+  }
 
   const db = createAdminClient();
 

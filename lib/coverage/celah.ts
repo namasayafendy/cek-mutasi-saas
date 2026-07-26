@@ -106,7 +106,34 @@ export function hitungCakupan(baris: BarisCakupan[], sampai?: string, jendelaHar
   );
   if (sah.length === 0) return kosong;
 
-  const urut = [...sah].sort((a, b) => (a.tgl_awal < b.tgl_awal ? -1 : a.tgl_awal > b.tgl_awal ? 1 : 0));
+  const batasKanan = sampai || hariIniWIB();
+  const batasKiri = dari(ke(batasKanan) - (jendelaHari - 1) * HARI_MS);
+
+  // Rentang DIPOTONG ke jendela sebelum apa pun dihitung.
+  //
+  // Tanpa pemotongan ini, satu baris tunggal berisi 85 hari dari masa lampau
+  // membuat hariTercakup >= 60 dan laporan mencetak "✅ Cakupan 60 hari:
+  // tidak ada tanggal bolong" — padahal 54 hari terakhir tidak pernah sekali
+  // pun diperiksa. Jendelanya benar jumlahnya, cuma bukan jendela yang itu.
+  const dipotong: BarisCakupan[] = [];
+  for (const b of sah) {
+    if (b.tgl_akhir < batasKiri || b.tgl_awal > batasKanan) continue;
+    dipotong.push({
+      ...b,
+      tgl_awal: b.tgl_awal < batasKiri ? batasKiri : b.tgl_awal,
+      tgl_akhir: b.tgl_akhir > batasKanan ? batasKanan : b.tgl_akhir,
+      // Saldo batas ikut dibuang kalau ujungnya terpotong — saldo itu milik
+      // tanggal aslinya, dan memakainya sebagai batas baru akan MENGARANG
+      // bukti "celah terbukti kosong" yang tidak pernah ada.
+      saldo_awal: b.tgl_awal < batasKiri ? null : b.saldo_awal,
+      saldo_akhir: b.tgl_akhir > batasKanan ? null : b.saldo_akhir,
+    });
+  }
+  if (dipotong.length === 0) return kosong;
+
+  const urut = [...dipotong].sort((a, b) =>
+    a.tgl_awal < b.tgl_awal ? -1 : a.tgl_awal > b.tgl_awal ? 1 : a.tgl_akhir < b.tgl_akhir ? -1 : 1,
+  );
 
   // Gabungkan rentang yang bertindihan ATAU bersambungan (akhir + 1 hari = awal
   // berikutnya). Bersambungan wajib ikut digabung, kalau tidak setiap pergantian
@@ -156,8 +183,9 @@ export function hitungCakupan(baris: BarisCakupan[], sampai?: string, jendelaHar
 
   const awal = gabung[0].dari;
   const akhir = gabung[gabung.length - 1].sampai;
-  const batas = sampai || hariIniWIB();
 
+  // Hanya hari DI DALAM jendela yang dihitung — rentangnya sudah dipotong
+  // di atas, jadi penjumlahan ini tidak bisa lagi melampaui jendelaHari.
   const hariTercakup = gabung.reduce((s, g) => s + selisihHari(g.dari, g.sampai) + 1, 0);
 
   return {
@@ -166,7 +194,7 @@ export function hitungCakupan(baris: BarisCakupan[], sampai?: string, jendelaHar
     celahTerbuktiKosong: kosongTerbukti,
     awal,
     akhir,
-    umurHari: Math.max(0, selisihHari(akhir, batas)),
+    umurHari: Math.max(0, selisihHari(akhir, batasKanan)),
     hariTercakup,
     jendelaHari,
   };

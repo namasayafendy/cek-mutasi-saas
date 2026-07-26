@@ -60,12 +60,18 @@ export async function GET(request: NextRequest) {
   const db = createAdminClient();
   const hariIni = hariIniWIB();
 
+  // Kalau ada SATU saja bacaan yang gagal, vonis hijau haram terbit.
+  // "Semua mutakhir. Tidak ada tunggakan." yang terkirim padahal query-nya
+  // error adalah bentuk kebohongan terburuk di sini: ia melatih pembacanya
+  // untuk percaya pada pesan yang tidak memeriksa apa pun.
+  const gagalBaca: string[] = [];
+
   // ── 1. Kuras antrean laporan ──
   const outbox = await kurasOutbox(20);
 
   // ── 2. Jemput job menggantung ──
   const batasGantung = new Date(Date.now() - JAM_MENGGANTUNG * 3600 * 1000).toISOString();
-  const { data: gantung } = await db
+  const { data: gantung, error: errGantung } = await db
     .from("mutasi_jobs")
     .select("id, file_name, created_at, status, langkah")
     .eq("account_id", accountId)
@@ -73,6 +79,7 @@ export async function GET(request: NextRequest) {
     .lt("created_at", batasGantung)
     .order("created_at", { ascending: true })
     .limit(10);
+  if (errGantung) gagalBaca.push(`daftar berkas menggantung (${errGantung.message})`);
   const jobGantung = (gantung ?? []) as any[];
 
   // Job yang sudah lewat masa berlaku tautannya ditandai KEDALUWARSA supaya
@@ -87,19 +94,26 @@ export async function GET(request: NextRequest) {
     .lt("token_exp", batasToken);
 
   // ── 3. Usia data per rekening ──
-  const { data: bankRows } = await db
+  const { data: bankRows, error: errBank } = await db
     .from("banks")
     .select("id, kode, label")
     .eq("account_id", accountId)
     .eq("is_active", true)
     .order("urutan");
+  if (errBank) gagalBaca.push(`daftar rekening (${errBank.message})`);
 
   const barisRekening: string[] = [];
   let adaYangPerluDitindak = false;
 
+  // Nol rekening aktif BUKAN keadaan sehat — itu berarti tidak ada apa pun
+  // yang bisa diperiksa, dan laporan hijau akan menyesatkan total.
+  if (!errBank && (bankRows ?? []).length === 0) {
+    gagalBaca.push("tidak ada rekening aktif sama sekali");
+  }
+
   for (const b of ((bankRows ?? []) as any[])) {
     const batasBawah = new Date(Date.now() - 60 * 86_400_000).toISOString().slice(0, 10);
-    const { data: cov } = await db
+    const { data: cov, error: errCov } = await db
       .from("mutasi_coverage")
       .select("tgl_awal, tgl_akhir, saldo_awal, saldo_akhir")
       .eq("account_id", accountId)
@@ -109,6 +123,10 @@ export async function GET(request: NextRequest) {
       .limit(500);
 
     const nama = String(b.label || b.kode || "Rekening");
+    if (errCov) {
+      gagalBaca.push(`cakupan ${nama} (${errCov.message})`);
+      continue;
+    }
     const rows = (cov ?? []) as BarisCakupan[];
     if (rows.length === 0) {
       barisRekening.push(`• ${nama}: belum ada mutasi tercatat sama sekali`);
@@ -121,6 +139,14 @@ export async function GET(request: NextRequest) {
     const potongan: string[] = [`• ${nama}: terbaca s/d ${tglID(h.akhir!)}`];
     if (umur > HARI_WAJAR) {
       potongan.push(`sudah ${umur} hari`);
+      adaYangPerluDitindak = true;
+    }
+    // Jendela yang belum penuh WAJIB disebut. Tanpa ini, hari pertama fitur
+    // ini hidup akan langsung berbunyi "Tidak ada tunggakan" padahal yang
+    // diketahui baru beberapa hari — dan itu jaminan palsu yang paling awal
+    // dibaca pemilik.
+    if (h.hariTercakup < h.jendelaHari) {
+      potongan.push(`baru ${h.hariTercakup}/${h.jendelaHari} hari pernah diperiksa`);
       adaYangPerluDitindak = true;
     }
     if (h.celah.length > 0) {
@@ -156,9 +182,14 @@ export async function GET(request: NextRequest) {
     const c = cfg as any;
     if (c?.gadai_sync_enabled && c.gadai_api_url && c.gadai_api_key) {
       const base = String(c.gadai_api_url).replace(/\/+$/, "");
+      // Timeout WAJIB. Tanpa ini, gadai yang lambat menghabiskan maxDuration 60
+      // detik dan seluruh cron mati SEBELUM sempat mengantre laporan apa pun —
+      // bagian yang paling wajib sampai digagalkan oleh bagian yang paling
+      // mungkin gagal.
       const res = await fetch(`${base}/api/transfer-klaim/coverage`, {
         headers: { Authorization: `Bearer ${c.gadai_api_key}` },
         cache: "no-store",
+        signal: AbortSignal.timeout(8000),
       });
       if (res.ok) {
         const j = await res.json();
@@ -174,18 +205,28 @@ export async function GET(request: NextRequest) {
           if (j.alarmMenua) {
             adaYangPerluDitindak = true;
             barisKlaim.push(
-              `🚨 Klaim tertua sudah ${j.tertua?.hari} hari (${tglID(String(j.tertua?.tgl ?? ""))}). ` +
-                `Lewat ${j.batasTarikHari} hari ia TIDAK akan ditarik lagi dan hilang dari pandangan.`,
+              `🚨 Klaim tertua sudah ${j.tarikTertuaHari} hari sejak dicatat` +
+                (j.tertua?.tgl ? ` (transfer ${tglID(String(j.tertua.tgl))})` : "") +
+                `. Sisa ${j.sisaHariSebelumLenyap} hari sebelum ia TIDAK ditarik lagi dan hilang dari pandangan.`,
             );
           }
         }
       } else {
-        barisKlaim.push(`⚠️ Tidak bisa menghubungi Aceh Gadai (HTTP ${res.status})`);
+        adaYangPerluDitindak = true;
+        // 404 hampir selalu berarti repo gadai belum di-promote. Menyebutnya
+        // apa adanya menghemat satu jam penelusuran.
+        barisKlaim.push(
+          res.status === 404
+            ? "⚠️ Endpoint cakupan Aceh Gadai belum ada (HTTP 404) — kemungkinan besar deploy gadai belum di-promote"
+            : `⚠️ Tidak bisa menghubungi Aceh Gadai (HTTP ${res.status})`,
+        );
       }
     }
   } catch (e) {
     console.error("[nudge] gagal membaca cakupan klaim gadai:", e);
-    barisKlaim.push("⚠️ Gagal membaca daftar klaim di Aceh Gadai");
+    adaYangPerluDitindak = true;
+    const sebab = e instanceof Error && e.name === "TimeoutError" ? "tidak menjawab dalam 8 detik" : "gagal dihubungi";
+    barisKlaim.push(`⚠️ Daftar klaim di Aceh Gadai ${sebab} — jumlah tunggakan TIDAK diperiksa hari ini`);
   }
 
   // ── Susun pesan ──
@@ -209,7 +250,15 @@ export async function GET(request: NextRequest) {
     b.push(`⚠️ Laporan tertahan: ${outbox.tertahan} menunggu, ${outbox.menyerah} menyerah`);
   }
   b.push("────────────");
-  b.push(adaYangPerluDitindak ? "Ada yang perlu ditindak di atas." : "Semua mutakhir. Tidak ada tunggakan.");
+  if (gagalBaca.length > 0) {
+    // Vonis hijau HANYA boleh keluar kalau semua bacaan berhasil. Kalau
+    // pemeriksaannya sendiri gagal, katakan begitu — jangan pernah menyamarkan
+    // "saya tidak bisa memeriksa" jadi "tidak ada masalah".
+    b.push(`⛔ SAYA TIDAK BISA MEMERIKSA SEPENUHNYA: ${gagalBaca.join("; ")}`);
+    b.push("Jangan anggap laporan ini sebagai jaminan.");
+  } else {
+    b.push(adaYangPerluDitindak ? "Ada yang perlu ditindak di atas." : "Semua mutakhir. Tidak ada tunggakan.");
+  }
 
   // SELALU dikirim, walau semuanya beres. Kalau pesan ini yang hilang, itu
   // sendiri sudah jadi isyarat bahwa ada yang mati — dan itulah gunanya.

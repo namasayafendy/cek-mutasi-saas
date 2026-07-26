@@ -355,7 +355,14 @@ export async function tandaiSelesai(
   const adaBatal = pass.some((p) => p.batal);
   const teks = susunLaporan(berkas, pass, dariDb, cakupan);
 
-  await r.db
+  // Penutupan ini adalah COMPARE-AND-SET, bukan update biasa.
+  //
+  // Tautan bisa diterbitkan ulang, dan halaman bisa terbuka di dua tempat.
+  // Tanpa penjaga status, dua penutupan akan melahirkan DUA laporan Telegram
+  // untuk berkas yang sama — dan kalau isinya berbeda (karena yang kedua
+  // berjalan setelah keadaan berubah), pemiliknya menerima dua vonis yang
+  // saling bertentangan tanpa cara tahu mana yang benar.
+  const { data: ditutup } = await r.db
     .from("mutasi_jobs")
     .update({
       status: adaBatal ? "SELESAI_RAGU" : "SELESAI",
@@ -364,7 +371,14 @@ export async function tandaiSelesai(
       ringkasan: { berkas, pass } as any,
     })
     .eq("id", jobId)
-    .eq("account_id", r.ctx.account.id);
+    .eq("account_id", r.ctx.account.id)
+    .in("status", ["ANTRI", "DIBUKA", "PARSE_OK", "KEDALUWARSA"])
+    .select("id");
+
+  if (!ditutup || ditutup.length === 0) {
+    // Sudah ditutup pihak lain. Laporannya sudah (atau sedang) dikirim di sana.
+    return { ok: true, teks };
+  }
 
   if (r.job.tg_chat_id) {
     // Lewat antrean, bukan kirim langsung: laporan hasil rekonsiliasi terlalu

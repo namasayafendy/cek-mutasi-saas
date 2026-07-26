@@ -129,5 +129,44 @@ console.log("\n12. selisihHari melintasi pergantian bulan & tahun");
   cek("tahun kabisat 28 Feb -> 1 Mar 2028 = 2", selisihHari("2028-02-28", "2028-03-01") === 2);
 }
 
+console.log("\n13. JENDELA — rentang lama tidak boleh mengaku memenuhi 60 hari terakhir");
+{
+  // 85 hari dari masa lampau; ujung kanannya masih menyentuh jendela.
+  const h = hitungCakupan([B("2026-03-10", "2026-06-02", 0, 999)], "2026-07-26", 60);
+  cek("hariTercakup DIPOTONG ke jendela", h.hariTercakup <= 60, `dapat ${h.hariTercakup}`);
+  cek("jauh di bawah 60 -> tidak boleh mengaku bersih", h.hariTercakup < 60, `dapat ${h.hariTercakup}`);
+  cek("umur besar (data basi)", (h.umurHari ?? 0) > 50, `dapat ${h.umurHari}`);
+}
+
+console.log("14. JENDELA — rentang di luar jendela dibuang seluruhnya");
+{
+  const h = hitungCakupan([B("2025-01-01", "2025-02-01", 0, 100)], "2026-07-26", 60);
+  cek("tidak menyumbang cakupan apa pun", h.hariTercakup === 0 && h.rentang.length === 0);
+}
+
+console.log("15. JENDELA — saldo di ujung yang TERPOTONG tidak boleh jadi bukti");
+{
+  // Rentang kiri dipotong batas jendela; saldo_akhir-nya milik tanggal asli.
+  const h = hitungCakupan(
+    [B("2026-04-01", "2026-06-10", 0, 5_000_000), B("2026-06-20", "2026-07-26", 5_000_000, 9_000_000)],
+    "2026-07-26",
+    60, // jendela mulai 2026-05-28
+  );
+  const semuaCelah = [...h.celah, ...h.celahTerbuktiKosong];
+  cek("celah 11-19 Jun terdeteksi", semuaCelah.length === 1, JSON.stringify(semuaCelah));
+  cek(
+    "saldo ujung kiri TIDAK terpotong (10 Jun di dalam jendela) -> terbukti kosong",
+    h.celahTerbuktiKosong.length === 1,
+    JSON.stringify(h.celah),
+  );
+}
+
+console.log("16. JENDELA — cakupan penuh boleh mengaku bersih");
+{
+  const h = hitungCakupan([B("2026-05-01", "2026-07-26", 0, 100)], "2026-07-26", 60);
+  cek("hariTercakup = 60 tepat", h.hariTercakup === 60, `dapat ${h.hariTercakup}`);
+  cek("tanpa celah", h.celah.length === 0);
+}
+
 console.log(`\n===== ${lulus} lulus, ${gagal} gagal =====`);
 process.exit(gagal > 0 ? 1 : 0);
