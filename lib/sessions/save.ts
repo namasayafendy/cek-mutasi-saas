@@ -106,6 +106,12 @@ export async function saveSession(
       i.match?.status === "all_taken" ? i.match.conflictDates : null,
     matched_by: i.match?.status === "matched" ? (i.match.matchedBy ?? null) : null,
     ref_issue: i.match?.refIssue ?? null,
+    // Simpan id klaim Aceh Gadai. Sebelumnya id ini dibawa saat menarik data
+    // lalu HILANG begitu halaman ditutup, sehingga hasil "Cocokkan manual"
+    // tidak pernah bisa dikembalikan ke gadai dan klaimnya beku UNMATCHED
+    // selamanya. Hanya id berpola klaim gadai yang disimpan supaya input
+    // manual biasa (id lokal) tidak ikut terbawa.
+    gadai_klaim_id: /^TFK[DM]?-/.test(String(i.id ?? "")) ? String(i.id) : null,
   }));
 
   let carryoverClaimed = 0;

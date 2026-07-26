@@ -43,6 +43,8 @@ export type InputRow = {
   manual_claim_reason: string | null;
   claim_category: string | null;
   deleted_at: string | null;
+  /** id klaim Aceh Gadai — dipakai mengirim balik hasil cocok-manual */
+  gadai_klaim_id?: string | null;
 };
 
 export type OutletLite = { id: string; nama: string; warna_hex: string };

@@ -155,6 +155,56 @@ export type GadaiUnclaimedCredit = {
   p: string; // nama pengirim
 };
 
+/**
+ * Kirim hasil COCOK-MANUAL satu input ke Aceh Gadai.
+ *
+ * Selama ini hasil cocok-manual tidak pernah kembali ke sana, sehingga klaimnya
+ * beku UNMATCHED selamanya dan laporan rekonsiliasi di gadai terus menampilkan
+ * selisih yang sebenarnya sudah owner bereskan (4 kasus, Rp 2.366.000).
+ *
+ * Memakai endpoint RINGAN /api/transfer-klaim/manual — bukan /result yang berat —
+ * supaya satu koreksi tidak memicu laporan rekonsiliasi penuh ke Telegram.
+ * Tidak pernah melempar error: gagal mengabari gadai tidak boleh membatalkan
+ * pencocokan manual yang sudah tersimpan di sini.
+ */
+export async function pushManualMatchToGadai(
+  gadaiKlaimId: string,
+  catatan?: string,
+): Promise<{ ok: boolean; error?: string; berubah?: boolean }> {
+  try {
+    if (!gadaiKlaimId) return { ok: false, error: "Bukan klaim dari Aceh Gadai." };
+    const ctx = await getAccountContext();
+    if (!ctx) return { ok: false, error: "Sesi tidak valid." };
+
+    const supabase = await createClient();
+    const { data: cfg } = await supabase
+      .from("account_settings")
+      .select("gadai_api_url, gadai_api_key, gadai_sync_enabled")
+      .eq("account_id", ctx.account.id)
+      .maybeSingle();
+    const c = cfg as
+      | { gadai_api_url: string | null; gadai_api_key: string | null; gadai_sync_enabled: boolean }
+      | null;
+    if (!c?.gadai_sync_enabled || !c.gadai_api_url || !c.gadai_api_key) {
+      return { ok: false, error: "Integrasi Aceh Gadai belum diaktifkan." };
+    }
+
+    const base = c.gadai_api_url.replace(/\/+$/, "");
+    const res = await fetch(`${base}/api/transfer-klaim/manual`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${c.gadai_api_key}` },
+      body: JSON.stringify({ klaimId: gadaiKlaimId, catatan: catatan ?? null }),
+      cache: "no-store",
+    });
+    if (!res.ok) return { ok: false, error: `Aceh Gadai HTTP ${res.status}` };
+    const j = await res.json();
+    if (!j?.ok) return { ok: false, error: j?.msg || "ditolak Aceh Gadai" };
+    return { ok: true, berubah: !!j.berubah };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "gagal menghubungi Aceh Gadai" };
+  }
+}
+
 export async function pushGadaiResults(
   results: GadaiPushRow[],
   arah: "kredit" | "debet" = "kredit",

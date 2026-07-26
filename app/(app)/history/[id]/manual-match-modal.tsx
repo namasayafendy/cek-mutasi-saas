@@ -6,6 +6,7 @@ import { X, Loader2, CheckCircle2, AlertCircle, Search, Globe } from "lucide-rea
 import { createClient } from "@/lib/supabase/client";
 import { formatRupiah, formatDateID, parseDateISO, toDateISO } from "@/lib/format";
 import type { InputRow, BankLite } from "./page";
+import { pushManualMatchToGadai } from "@/app/(app)/check/actions-gadai";
 
 type Candidate = {
   id: string;
@@ -233,6 +234,24 @@ export function ManualMatchModal({
         diff,
       },
     });
+
+    // Kabari Aceh Gadai supaya klaimnya di sana ikut beres. Tanpa ini, owner
+    // sudah membereskannya di sini tapi di sana tetap UNMATCHED selamanya dan
+    // laporan rekonsiliasi terus menampilkan selisih yang sudah tidak ada.
+    // Kegagalan di sini TIDAK membatalkan pencocokan yang sudah tersimpan —
+    // hanya ditampilkan sebagai peringatan supaya bisa diulang.
+    const klaimId = (input as { gadai_klaim_id?: string | null }).gadai_klaim_id;
+    if (klaimId) {
+      const push = await pushManualMatchToGadai(klaimId, reason);
+      if (!push.ok) {
+        setError(
+          `Pencocokan TERSIMPAN di sini, tapi gagal mengabari Aceh Gadai (${push.error ?? "tidak diketahui"}). ` +
+          `Di sana statusnya masih belum cocok — coba ulangi nanti.`,
+        );
+        setSubmitting(false);
+        return;
+      }
+    }
 
     setSubmitting(false);
     onClose();
