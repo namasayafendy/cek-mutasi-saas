@@ -44,7 +44,26 @@ const HARI_WAJAR = 2;
 export async function GET(request: NextRequest) {
   const rahasia = process.env.CRON_SECRET;
   const dibawa = request.headers.get("authorization");
-  if (!rahasia || dibawa !== `Bearer ${rahasia}`) {
+
+  // DUA sebab kegagalan yang berbeda dibedakan dengan sengaja.
+  //
+  // Versi pertama menjawab 401 untuk keduanya, dan akibatnya persis cacat yang
+  // sama seperti yang ditutup di tempat lain hari ini: dari luar, "kunci belum
+  // dipasang" dan "kunci salah" terlihat identik, sehingga penyebabnya harus
+  // ditebak. Menyebut bahwa cron BELUM DIKONFIGURASI tidak membocorkan apa pun
+  // — tidak ada rahasia untuk dibocorkan — tapi menghemat satu jam penelusuran.
+  if (!rahasia) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "CRON_SECRET belum terbaca oleh deployment ini. Isi env-nya di Vercel " +
+          "lalu REDEPLOY — env baru tidak terbaca oleh deployment yang sudah jalan.",
+      },
+      { status: 503 },
+    );
+  }
+  if (dibawa !== `Bearer ${rahasia}`) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
