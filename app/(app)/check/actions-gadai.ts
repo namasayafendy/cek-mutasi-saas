@@ -16,6 +16,8 @@ export interface GadaiPullInput {
   id: string; // id klaim dari Aceh Gadai (utk referensi/dedup)
   tanggalISO: string; // YYYY-MM-DD (tanggal transfer)
   outletId: string; // outlet cek-mutasi hasil mapping ("" kalau tak ketemu)
+  noFaktur?: string | null;   // hanya untuk laporan
+  outletNama?: string | null; // nama outlet APA ADANYA dari gadai
   bankId: string; // bank default ("" = cross-bank)
   matchRuleId: string;
   nominal: number;
@@ -119,6 +121,11 @@ export async function pullGadaiClaims(
       refFt: cl.ref_ft ? String(cl.ref_ft) : null,
       jamResi: cl.jam_transfer ? String(cl.jam_transfer) : null,
       namaPengirimResi: cl.nama_pengirim ? String(cl.nama_pengirim) : null,
+      // Dibawa apa adanya untuk laporan. outletId di atas adalah hasil
+      // pemetaan dan bisa kosong kalau namanya tak dikenal — memakai itu
+      // untuk laporan membuat outlet hilang justru saat paling dibutuhkan.
+      noFaktur: cl.no_faktur ? String(cl.no_faktur) : null,
+      outletNama: cl.outlet ? String(cl.outlet) : null,
     });
   }
 

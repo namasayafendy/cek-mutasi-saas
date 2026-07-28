@@ -317,6 +317,12 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       refFt: i.refFt,
       jamResi: i.jamResi,
       namaPengirimResi: i.namaPengirimResi,
+      // Ikut dibawa supaya daftar "tidak ditemukan" bisa menyebut kontrak dan
+      // outletnya. Sebelum ini keduanya dibuang di sini, sehingga laporan
+      // menulis "1. - · -" dan pemiliknya cuma dapat nominal — cukup untuk
+      // tahu ada masalah, tidak cukup untuk tahu harus membuka apa.
+      noFaktur: i.noFaktur ?? null,
+      outletNama: i.outletNama ?? null,
     });
   }
   if (inputs.length === 0) {
@@ -589,8 +595,8 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     // tidak bisa ditindaklanjuti — pemilik harus tahu harus membuka apa.
     if (hasil.tidakKetemu.length < 60) {
       hasil.tidakKetemu.push({
-        no_faktur: String((i as any).no_faktur ?? "-"),
-        outlet:    String((i as any).outlet ?? "-"),
+        no_faktur: String((i as any).noFaktur ?? (i as any).no_faktur ?? "-"),
+        outlet:    String((i as any).outletNama ?? (i as any).outlet ?? "-"),
         tgl:       toDateISO(i.tanggal),
         nominal:   Number((i as any).nominal ?? 0),
         sebab:     m?.refIssue ? "nomor resi bermasalah" : "tidak ada di rekening",

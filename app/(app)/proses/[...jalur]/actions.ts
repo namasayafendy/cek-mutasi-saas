@@ -256,7 +256,7 @@ async function susunLaporanLapis2(
   for (const p of pass) if (p.batal) gagal.push(`${p.jenis}: ${p.batal.pesan}`);
   try {
     const { data: cfg } = await r.db
-      .from("gadai_sync_config")
+      .from("account_settings")
       .select("gadai_sync_enabled, gadai_api_url, gadai_api_key")
       .eq("account_id", r.ctx.account.id)
       .maybeSingle();

@@ -213,6 +213,12 @@ export type UserInput = {
   jamResi?: string | null;
   /** Fase B (klaim gadai): nama pengirim di resi (dibaca AI) — kunci Pass-2 */
   namaPengirimResi?: string | null;
+
+  /** Identitas asal klaim — dibawa HANYA untuk laporan, tidak dipakai
+   *  mencocokkan. Tanpa ini daftar "tidak ditemukan" cuma bisa menyebut
+   *  nominal, dan pemiliknya tidak tahu kontrak mana yang harus dibuka. */
+  noFaktur?: string | null;
+  outletNama?: string | null;
 };
 
 /** Fase B: bagaimana sebuah input ter-match (label keyakinan) */

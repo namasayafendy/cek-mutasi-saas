@@ -23,7 +23,7 @@ async function konfigGadai() {
   if (!ctx) return null;
   const db = await createClient();
   const { data } = await db
-    .from("gadai_sync_config")
+    .from("account_settings")
     .select("gadai_sync_enabled, gadai_api_url, gadai_api_key")
     .eq("account_id", ctx.account.id)
     .maybeSingle();
