@@ -55,8 +55,13 @@ export interface IsiLapis2 {
   rantaiPutus: number;
   nyambung: boolean | null;
   selisihSambungan: number;
-  /** Gabungan dua arah. */
-  perTanggal: { tgl: string; jml: number; rp: number }[];
+  /** Per tanggal, MASUK dan KELUAR dipisah.
+   *  Digabung, angkanya tidak bisa disandingkan dengan Lapis 1 — di sana
+   *  keduanya memang dilaporkan terpisah. */
+  perTanggal: {
+    tgl: string; jml: number; rp: number;
+    masukJml?: number; masukRp?: number; keluarJml?: number; keluarRp?: number;
+  }[];
   nDiuji: number;
   rpDiuji: number;
   nCocok: number;
@@ -112,13 +117,30 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   }
 
   // ── Rekap per tanggal: alat sanding-menyanding dengan Lapis 1 ──
+  const totMasuk = isi.perTanggal.reduce((s, x) => s + Number(x.masukRp ?? 0), 0);
+  const totKeluar = isi.perTanggal.reduce((s, x) => s + Number(x.keluarRp ?? 0), 0);
+  const nMasuk = isi.perTanggal.reduce((s, x) => s + Number(x.masukJml ?? 0), 0);
+  const nKeluar = isi.perTanggal.reduce((s, x) => s + Number(x.keluarJml ?? 0), 0);
+
   L.push(`RESI YANG DIUJI  ${isi.nDiuji} · ${rp(isi.rpDiuji)}`);
+  L.push(`   MASUK  ${String(nMasuk).padStart(3)} resi · ${rp(totMasuk)}`);
+  L.push(`   KELUAR ${String(nKeluar).padStart(3)} resi · ${rp(totKeluar)}`);
   if (isi.perTanggal.length) {
+    L.push("");
     isi.perTanggal.slice(0, 40).forEach((x) => {
-      L.push(`   ${tgl(x.tgl).padEnd(7)} ${String(x.jml).padStart(3)} resi · ${rp(x.rp)}`);
+      // Satu tanggal = dua baris, bukan satu angka gabungan. Pemilik memeriksa
+      // Lapis 1 masuk dan keluar SECARA TERPISAH, jadi rekap ini harus bisa
+      // dibaca dengan cara yang sama tanpa hitung-hitungan di kepala.
+      L.push(`   ${tgl(x.tgl)}`);
+      L.push(`      masuk  ${String(x.masukJml ?? 0).padStart(3)} resi · ${rp(Number(x.masukRp ?? 0))}`);
+      L.push(`      keluar ${String(x.keluarJml ?? 0).padStart(3)} resi · ${rp(Number(x.keluarRp ?? 0))}`);
     });
-    L.push(`   ↳ sandingkan dengan baris "Cocok dgn slip" di LAPIS 1 tanggal itu.`);
-    L.push(`     Kalau beda, ada resi yang lolos di antara dua lapisan.`);
+    L.push("");
+    L.push(`   ↳ sandingkan dengan baris "TOTAL RESI HARI INI" di LAPIS 1 tanggal itu.`);
+    L.push(`     Angkanya harus SAMA PERSIS. Kalau beda, ada resi yang lolos`);
+    L.push(`     di antara dua lapisan.`);
+    L.push(`     (JANGAN disandingkan dengan "Cocok dgn slip" — itu nilai KONTRAK,`);
+    L.push(`      bukan nilai resi; keduanya memang berbeda.)`);
   }
   L.push("");
 

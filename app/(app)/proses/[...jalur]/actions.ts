@@ -147,7 +147,8 @@ export interface RingkasPass {
   unclaimedCount: number;
   unclaimedTotal: number;
   /** Rekap resi yang diuji per tanggal — alat sanding-menyanding dengan LAPIS 1. */
-  perTanggal?: { tgl: string; jml: number; rp: number }[];
+  perTanggal?: { tgl: string; jml: number; rp: number;
+                 masukJml?: number; masukRp?: number; keluarJml?: number; keluarRp?: number }[];
   /** Resi yang tidak ada di rekening, lengkap dengan kontrak & outletnya. */
   tidakKetemu?: { no_faktur: string; outlet: string; tgl: string; nominal: number; sebab: string }[];
   /** Baris mutasi tanpa pemilik — kredit maupun DEBET. */
@@ -220,13 +221,22 @@ async function susunLaporanLapis2(
   const debet = pass.find((p) => p.jenis === "debet");
 
   // Rekap per tanggal digabung dua arah, lalu disaring lantai.
-  const petaTgl = new Map<string, { tgl: string; jml: number; rp: number }>();
+  type Rekap = { tgl: string; jml: number; rp: number;
+                 masukJml: number; masukRp: number; keluarJml: number; keluarRp: number };
+  const petaTgl = new Map<string, Rekap>();
   for (const p of pass) {
     for (const x of (p.perTanggal ?? [])) {
       if (x.tgl < LANTAI_LAPIS2) continue;
-      const ada = petaTgl.get(x.tgl);
-      if (ada) { ada.jml += x.jml; ada.rp += x.rp; }
-      else petaTgl.set(x.tgl, { ...x });
+      let ada = petaTgl.get(x.tgl);
+      if (!ada) {
+        ada = { tgl: x.tgl, jml: 0, rp: 0, masukJml: 0, masukRp: 0, keluarJml: 0, keluarRp: 0 };
+        petaTgl.set(x.tgl, ada);
+      }
+      ada.jml += x.jml; ada.rp += x.rp;
+      // Pass lama (sebelum arah dipisah) tidak punya medan ini; tanpa fallback
+      // laporan akan menampilkan nol pada berkas yang diproses ulang.
+      ada.masukJml += Number(x.masukJml ?? 0); ada.masukRp += Number(x.masukRp ?? 0);
+      ada.keluarJml += Number(x.keluarJml ?? 0); ada.keluarRp += Number(x.keluarRp ?? 0);
     }
   }
   const perTanggal = [...petaTgl.values()].sort((a, b) => (a.tgl < b.tgl ? -1 : 1));

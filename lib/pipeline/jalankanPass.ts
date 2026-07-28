@@ -56,13 +56,23 @@ import type { BankUpload } from "@/lib/pipeline/prosesSatuBank";
  * berarti ada resi yang lolos di antara keduanya — dan tanpa rekap ini,
  * kebocoran semacam itu tidak punya tempat untuk terlihat.
  */
-function catatTanggal(hasil: any, klaim: any) {
+function catatTanggal(hasil: any, klaim: any, arah: string) {
   const tgl = toDateISO(klaim.tanggal);
   if (!tgl) return;
   const nominal = Number(klaim.nominal ?? 0);
-  const ada = hasil.perTanggal.find((x: any) => x.tgl === tgl);
-  if (ada) { ada.jml += 1; ada.rp += nominal; }
-  else hasil.perTanggal.push({ tgl, jml: 1, rp: nominal });
+  // Arah dicatat TERPISAH. Menggabungkan masuk dan keluar jadi satu angka
+  // membuat rekap ini mustahil disandingkan dengan Lapis 1 — di sana keduanya
+  // memang dilaporkan terpisah, dan menjumlahkannya di sini berarti pemiliknya
+  // harus membongkar sendiri angka yang kita gabungkan tanpa alasan.
+  const masuk = arah !== 'debet';
+  let ada = hasil.perTanggal.find((x: any) => x.tgl === tgl);
+  if (!ada) {
+    ada = { tgl, jml: 0, rp: 0, masukJml: 0, masukRp: 0, keluarJml: 0, keluarRp: 0 };
+    hasil.perTanggal.push(ada);
+  }
+  ada.jml += 1; ada.rp += nominal;
+  if (masuk) { ada.masukJml += 1; ada.masukRp += nominal; }
+  else { ada.keluarJml += 1; ada.keluarRp += nominal; }
 }
 import type {
   Jenis,
@@ -147,7 +157,12 @@ export interface HasilPass {
    *  Lapis 1 tiap hari; kalau jumlah resi tanggal X di sini tidak sama dengan
    *  yang dinyatakan cocok di Lapis 1 tanggal X, ada resi yang lolos di antara
    *  keduanya — dan tanpa rekap ini, kebocoran itu tidak punya tempat terlihat. */
-  perTanggal: { tgl: string; jml: number; rp: number }[];
+  /** Rekap per tanggal, MASUK dan KELUAR dipisah — angka inilah yang
+   *  disandingkan dengan baris "total resi" di laporan Lapis 1. */
+  perTanggal: {
+    tgl: string; jml: number; rp: number;
+    masukJml: number; masukRp: number; keluarJml: number; keluarRp: number;
+  }[];
 
   /** Resi yang divonis tidak ada di rekening, LENGKAP dengan kontrak & outlet.
    *  Cacah saja tidak bisa ditindaklanjuti — pemilik harus tahu membuka apa. */
@@ -497,7 +512,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       // hiasan: pemilik memeriksa Lapis 1 tiap hari, jadi angka per tanggal
       // di sini HARUS bisa disandingkan dengan angka hari itu di Lapis 1.
       // Kalau keduanya beda, ada resi yang lolos di antara dua lapisan.
-      catatTanggal(hasil, i);
+      catatTanggal(hasil, i, arah);
       laporan.push({
         id: i.id,
         matched: true,
@@ -534,7 +549,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       continue;
     }
 
-    catatTanggal(hasil, i);
+    catatTanggal(hasil, i, arah);
     // Yang tidak ketemu disebut LENGKAP dengan kontrak & outletnya. Cacah saja
     // tidak bisa ditindaklanjuti — pemilik harus tahu harus membuka apa.
     if (hasil.tidakKetemu.length < 60) {
