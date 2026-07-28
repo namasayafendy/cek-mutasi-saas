@@ -146,6 +146,7 @@ export interface RingkasPass {
   batal: { kode: string; pesan: string } | null;
   unclaimedCount: number;
   unclaimedTotal: number;
+  unclaimedBelumLapor?: number;
   /** Rekap resi yang diuji per tanggal — alat sanding-menyanding dengan LAPIS 1. */
   perTanggal?: { tgl: string; jml: number; rp: number;
                  masukJml?: number; masukRp?: number; keluarJml?: number; keluarRp?: number }[];
@@ -301,8 +302,12 @@ async function susunLaporanLapis2(
     ditahanLuarPeriode: pass.reduce((s, p) => s + Number(p.ditahanDiLuarPeriode ?? 0), 0),
     ditahanKonflik: pass.reduce((s, p) => s + Number(p.ditahanKonflik ?? 0), 0),
     kreditNganggur: rowsK,
+    // Cacah UTUH yang belum pernah dilaporkan. Daftarnya dipotong 25 di
+    // pipeline; menyebut cuma yang tampil berbunyi persis seperti "cuma segini".
+    sisaKreditNganggur: Math.max(0, Number(kredit?.unclaimedBelumLapor ?? rowsK.length) - rowsK.length),
     rpKreditNganggur: rowsK.reduce((s, x) => s + Number(x.nominal || 0), 0),
     debetNganggur: rowsD,
+    sisaDebetNganggur: Math.max(0, Number(debet?.unclaimedBelumLapor ?? rowsD.length) - rowsD.length),
     rpDebetNganggur: rowsD.reduce((s, x) => s + Number(x.nominal || 0), 0),
     tunggakan,
     gagal,

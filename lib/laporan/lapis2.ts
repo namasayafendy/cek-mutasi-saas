@@ -70,8 +70,11 @@ export interface IsiLapis2 {
   ditahanKonflik: number;
   kreditNganggur: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
   rpKreditNganggur: number;
+  /** Sisa yang belum pernah dilaporkan tapi tidak muat di daftar ini. */
+  sisaKreditNganggur?: number;
   debetNganggur: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
   rpDebetNganggur: number;
+  sisaDebetNganggur?: number;
   /** Resi yang sudah lama tidak ketemu dan belum dibereskan (dari sisi gadai). */
   tunggakan: { no_faktur: string; outlet: string; tgl: string; nominal: number; umur: number }[];
   gagal: string[];
@@ -178,6 +181,16 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     isi.kreditNganggur.slice(0, 10).forEach((x) => {
       L.push(`   • ${tgl(x.tgl)} ${x.jam} · ${rp(x.nominal)}${x.pihak ? ` · ${x.pihak}` : ""}`);
     });
+    if (isi.kreditNganggur.length > 10) {
+      L.push(`   … ${isi.kreditNganggur.length - 10} lagi tidak ditampilkan di sini`);
+    }
+    // Sisa yang belum pernah dilaporkan SAMA SEKALI harus disebut, bukan
+    // didiamkan sampai kiriman berikutnya. Daftar yang dipotong diam-diam
+    // berbunyi persis seperti daftar yang lengkap.
+    if (Number(isi.sisaKreditNganggur ?? 0) > 0) {
+      L.push(`   ↳ masih ada ${isi.sisaKreditNganggur} baris lagi yang belum pernah`);
+      L.push(`     dilaporkan — akan disebut pada kiriman mutasi berikutnya.`);
+    }
   }
 
   L.push(`💸 DEBET TANPA PERMINTAAN (${isi.debetNganggur.length})` +
@@ -187,6 +200,13 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     isi.debetNganggur.slice(0, 10).forEach((x) => {
       L.push(`   • ${tgl(x.tgl)} ${x.jam} · ${rp(x.nominal)}${x.pihak ? ` · ${x.pihak}` : ""}`);
     });
+    if (isi.debetNganggur.length > 10) {
+      L.push(`   … ${isi.debetNganggur.length - 10} lagi tidak ditampilkan di sini`);
+    }
+    if (Number(isi.sisaDebetNganggur ?? 0) > 0) {
+      L.push(`   ↳ masih ada ${isi.sisaDebetNganggur} baris lagi yang belum pernah`);
+      L.push(`     dilaporkan — akan disebut pada kiriman mutasi berikutnya.`);
+    }
   }
   L.push("");
 

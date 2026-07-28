@@ -173,6 +173,11 @@ export interface HasilPass {
    *  mahal yang paling lama tidak pernah ditanyakan sistem ini. */
   unclaimedRows: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
 
+  /** Cacah UTUH baris tak terklaim yang BELUM PERNAH dilaporkan. Bisa lebih
+   *  besar dari unclaimedRows.length — daftarnya dipotong 25, cacahnya tidak.
+   *  Beda dari unclaimedTotal, yang berisi RUPIAH baris tak terklaim periode ini. */
+  unclaimedBelumLapor: number;
+
   /** Klaim yang benar-benar dinilai dan dilaporkan ke gadai. */
   klaimDinilai: number;
   cocok: number;
@@ -239,7 +244,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   const hasil: HasilPass = {
     jenis, periodStart, periodEnd,
     klaimDitarik: 0, klaimDibuang: 0, outletTakDikenal: [],
-    perTanggal: [], tidakKetemu: [], unclaimedRows: [],
+    perTanggal: [], tidakKetemu: [], unclaimedRows: [], unclaimedBelumLapor: 0,
     klaimDinilai: 0, cocok: 0, belumKetemu: 0,
     ditahanDiLuarPeriode: 0, ditahanKonflik: 0, sudahTerbuktiSebelumnya: 0,
     terkirim: null, batal: null,
@@ -445,40 +450,70 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   // kalimat yang hanya menguji arah sebaliknya (permintaan → mutasi), tidak
   // pernah mutasi → permintaan. Uang keluar tanpa pasangan tidak punya satu
   // tempat pun untuk muncul.
-  // ── DISEBUT SEKALI SAJA ──
+  // ── DISEBUT SEKALI SAJA, DAN "SEKALI" HARUS BENAR-BENAR TERJADI ──
   //
-  // Yang dilaporkan HANYA baris yang benar-benar BARU masuk pada unggahan ini
-  // (sidik jarinya dikembalikan persist) DAN sampai sekarang tak berpemilik.
+  // Versi pertama menandai per-UNGGAHAN: hanya baris yang sidik jarinya baru
+  // masuk pada berkas ini yang dilaporkan. Itu keliru halus dengan akibat
+  // besar. Berkas 28 Juli memuat 19-28 Juli, dan sebagian besar barisnya sudah
+  // tersimpan oleh unggahan 27 Juli — yang berjalan SEBELUM laporan Lapis 2
+  // ada. Baris-baris itu tidak akan pernah "baru" lagi, jadi tidak pernah
+  // punya kesempatan kedua: "sekali" berubah menjadi NOL kali. Yang tak pernah
+  // disebut satu kali pun: 33 baris kredit (Rp 125.714.000) dan 27 baris debet
+  // (Rp 58.042.500) sejak 22 Juli.
   //
-  // Kolam pencocokan tidak bisa dipakai sebagai sumber: unggahan berikutnya
-  // yang periodenya bertumpang tindih akan mengurai ulang baris yang sama dan
-  // menandainya "current", sehingga baris yang sudah pernah disebut muncul
-  // lagi setiap kali. Sebagian di antaranya memang wajar — cicilan orang,
-  // pengeluaran di luar aplikasi — dan peringatan yang berulang untuk hal yang
-  // sudah diketahui akan berhenti dibaca. Saat itu terjadi, ia juga berhenti
-  // melindungi.
+  // Sekarang yang ditandai adalah BARISNYA. Sebuah baris dilaporkan kalau ia
+  // belum terklaim DAN belum pernah dilaporkan; sesudah masuk laporan ia
+  // distempel. Kebaruan tidak bisa menggantikan ingatan — ia hanya tahu "baru
+  // bagi berkas ini", sedangkan yang perlu diketahui adalah "sudah pernah
+  // dikatakan kepada pemiliknya atau belum".
   //
   // Keputusan pemilik 28 Juli 2026: "cukup beritahu sekali saja."
   hasil.unclaimedRows = [];
-  const fpBaru = (upload.persistInfo?.baruFingerprints ?? []) as string[];
-  if (fpBaru.length > 0) {
+  hasil.unclaimedBelumLapor = 0;
+  if (periodStart && periodEnd) {
     try {
       const kolom = jenis === "debet" ? "nominal_debet" : "nominal_kredit";
-      const { data: barisBaru } = await supabase
+      const dasar = () => supabase
         .from("parsed_transactions")
-        .select(`tanggal, jam, ${kolom}, nama_pengirim, nama_penerima, deskripsi`)
-        .in("fingerprint", fpBaru.slice(0, 900))
+        .select(`id, tanggal, jam, ${kolom}, nama_pengirim, nama_penerima, deskripsi`, { count: "exact" })
+        .eq("account_id", accountId)
+        .gte("tanggal", periodStart as string)
+        .lte("tanggal", periodEnd as string)
         .is("claimed_by_input_id", null)
-        .gt(kolom, 0)
+        .is("unclaimed_reported_at", null)
+        .gt(kolom, 0);
+
+      const { data: barisBaru, count } = await dasar()
         .order("tanggal", { ascending: true })
         .limit(25);
-      hasil.unclaimedRows = ((barisBaru ?? []) as any[]).map((t) => ({
+
+      const rows = (barisBaru ?? []) as any[];
+      // Cacah UTUH dilaporkan terpisah dari yang ditampilkan. Memotong di 25
+      // tanpa menyebut sisanya berbunyi persis seperti "cuma segini".
+      hasil.unclaimedBelumLapor = Number(count ?? rows.length);
+      hasil.unclaimedRows = rows.map((t) => ({
         tgl: String(t.tanggal ?? "").slice(0, 10),
         jam: String(t.jam ?? ""),
         nominal: Number(t[kolom] ?? 0),
         pihak: String(t.nama_pengirim || t.nama_penerima || ""),
         ket: String(t.deskripsi ?? "").slice(0, 60),
       }));
+
+      // Stempel HANYA yang benar-benar masuk laporan. Sisanya sengaja
+      // dibiarkan bertanda kosong supaya muncul pada kiriman berikutnya —
+      // dipotong DAN dianggap sudah diberitahukan adalah cara paling rapi
+      // untuk menghilangkan sesuatu tanpa seorang pun menyadarinya.
+      if (rows.length > 0) {
+        const { error: eCap } = await supabase
+          .from("parsed_transactions")
+          .update({ unclaimed_reported_at: new Date().toISOString() })
+          .in("id", rows.map((t) => t.id));
+        if (eCap) {
+          // Gagal menstempel berarti baris ini akan disebut lagi besok.
+          // Mengulang itu jauh lebih baik daripada menghilangkannya.
+          console.error("[jalankanPass] gagal menstempel baris tanpa pemilik:", eCap.message);
+        }
+      }
     } catch (e) {
       // Gagal membaca BUKAN berarti tidak ada. Dikosongkan, tapi laporan
       // menyebutnya lewat daftar `gagal` di sisi penyusun.
