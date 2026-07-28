@@ -104,16 +104,33 @@ export async function POST(request: NextRequest) {
   const msg = update?.message;
   if (!msg) return sudah("bukan pesan");
 
-  // ── Gerbang 2 & 3: chat pribadi milik owner ──
-  const chatDiizinkan = String(process.env.TG_MUTASI_CHAT_ID ?? "").trim();
+  // ── Gerbang 2 & 3: chat yang diizinkan ──
+  //
+  // DUA chat diterima, dan syaratnya berbeda karena sifatnya berbeda:
+  //
+  //   TG_MUTASI_CHAT_ID   chat PRIBADI owner. Wajib from.id == chat.id —
+  //                       di chat pribadi keduanya memang selalu sama, jadi
+  //                       ketidaksamaan berarti ada yang tidak beres.
+  //   TG_LAPORAN_CHAT_ID  GRUP laporan. Di grup, from.id != chat.id itu
+  //                       normal, jadi syarat itu tidak berlaku — yang
+  //                       menjaga adalah keanggotaan grupnya.
+  //
+  // Pemilik memilih grup demi kesederhanaan (28 Juli 2026): unggah dan laporan
+  // di satu tempat. Konsekuensinya JELAS dan perlu diingat — siapa pun yang
+  // ada di grup itu bisa memasukkan berkas mutasi. Selama isinya hanya pemilik
+  // dan bot, itu setara chat pribadi; begitu ada anggota lain, tidak lagi.
+  const chatPribadi = String(process.env.TG_MUTASI_CHAT_ID ?? "").trim();
+  const chatGrup = String(process.env.TG_LAPORAN_CHAT_ID ?? "").trim();
   const chatId = String(msg.chat?.id ?? "");
   const dariId = String(msg.from?.id ?? "");
-  if (
-    !chatDiizinkan ||
-    msg.chat?.type !== "private" ||
-    chatId !== chatDiizinkan ||
-    dariId !== chatId
-  ) {
+
+  const lewatPribadi =
+    !!chatPribadi && msg.chat?.type === "private" && chatId === chatPribadi && dariId === chatId;
+  const lewatGrup =
+    !!chatGrup && chatId === chatGrup &&
+    (msg.chat?.type === "group" || msg.chat?.type === "supergroup");
+
+  if (!lewatPribadi && !lewatGrup) {
     console.warn("[tg] pesan ditolak", {
       chatId, dariId, tipe: msg.chat?.type, adaDoc: !!msg.document,
     });

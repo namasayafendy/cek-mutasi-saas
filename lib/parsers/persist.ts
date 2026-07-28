@@ -30,6 +30,14 @@ export type PersistResult = {
   dupCount: number;
   errorCount: number;
   errors: string[];
+  /** Sidik jari baris yang BENAR-BENAR baru masuk pada unggahan ini.
+   *
+   *  Laporan LAPIS 2 memakainya supaya "kredit/debet tanpa pemilik" disebut
+   *  HANYA SEKALI. Unggahan berikutnya yang periodenya bertumpang tindih tidak
+   *  menyebutnya lagi — sebagian memang wajar (cicilan orang, pengeluaran di
+   *  luar aplikasi), dan peringatan berulang untuk hal yang sudah diketahui
+   *  berhenti dibaca. Saat itu terjadi, ia juga berhenti melindungi. */
+  baruFingerprints: string[];
 };
 
 type DBRow = {
@@ -94,6 +102,15 @@ export async function persistTransactions(
     dupCount: 0,
     errorCount: 0,
     errors: [],
+    // Sidik jari baris yang BENAR-BENAR baru masuk kali ini.
+    //
+    // Dipakai laporan LAPIS 2 untuk memberitahu "kredit/debet tanpa pemilik"
+    // HANYA SEKALI. Tanpa ini, setiap unggahan yang periodenya bertumpang
+    // tindih akan menyebut ulang baris yang sama — padahal sebagiannya memang
+    // wajar (cicilan orang, pengeluaran di luar aplikasi). Peringatan yang
+    // berulang untuk hal yang sudah diketahui berhenti dibaca, dan saat itu
+    // terjadi ia juga berhenti melindungi.
+    baruFingerprints: [] as string[],
   };
   if (rows.length === 0) return result;
 
@@ -112,7 +129,7 @@ export async function persistTransactions(
       const { data, error } = await supabase
         .from("parsed_transactions")
         .upsert(slice, { onConflict, ignoreDuplicates: true })
-        .select("id");
+        .select("id, fingerprint");
 
       if (error) {
         result.errorCount += slice.length;
@@ -122,6 +139,9 @@ export async function persistTransactions(
       const insertedCount = data?.length ?? 0;
       result.newCount += insertedCount;
       result.dupCount += slice.length - insertedCount;
+      for (const r of ((data ?? []) as any[])) {
+        if (r?.fingerprint) result.baruFingerprints.push(String(r.fingerprint));
+      }
     }
   }
 

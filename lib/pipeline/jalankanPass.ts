@@ -430,13 +430,46 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   // kalimat yang hanya menguji arah sebaliknya (permintaan → mutasi), tidak
   // pernah mutasi → permintaan. Uang keluar tanpa pasangan tidak punya satu
   // tempat pun untuk muncul.
-  hasil.unclaimedRows = unclaimedIni.slice(0, 25).map((t: any) => ({
-    tgl: toDateISO(t.tanggalDate),
-    jam: t.waktu || "",
-    nominal: nilaiBaris(t),
-    pihak: t.namaPengirim || t.namaPenerima || "",
-    ket: String(t.deskripsi ?? "").slice(0, 60),
-  }));
+  // ── DISEBUT SEKALI SAJA ──
+  //
+  // Yang dilaporkan HANYA baris yang benar-benar BARU masuk pada unggahan ini
+  // (sidik jarinya dikembalikan persist) DAN sampai sekarang tak berpemilik.
+  //
+  // Kolam pencocokan tidak bisa dipakai sebagai sumber: unggahan berikutnya
+  // yang periodenya bertumpang tindih akan mengurai ulang baris yang sama dan
+  // menandainya "current", sehingga baris yang sudah pernah disebut muncul
+  // lagi setiap kali. Sebagian di antaranya memang wajar — cicilan orang,
+  // pengeluaran di luar aplikasi — dan peringatan yang berulang untuk hal yang
+  // sudah diketahui akan berhenti dibaca. Saat itu terjadi, ia juga berhenti
+  // melindungi.
+  //
+  // Keputusan pemilik 28 Juli 2026: "cukup beritahu sekali saja."
+  hasil.unclaimedRows = [];
+  const fpBaru = (upload.persistInfo?.baruFingerprints ?? []) as string[];
+  if (fpBaru.length > 0) {
+    try {
+      const kolom = jenis === "debet" ? "nominal_debet" : "nominal_kredit";
+      const { data: barisBaru } = await supabase
+        .from("parsed_transactions")
+        .select(`tanggal, jam, ${kolom}, nama_pengirim, nama_penerima, deskripsi`)
+        .in("fingerprint", fpBaru.slice(0, 900))
+        .is("claimed_by_input_id", null)
+        .gt(kolom, 0)
+        .order("tanggal", { ascending: true })
+        .limit(25);
+      hasil.unclaimedRows = ((barisBaru ?? []) as any[]).map((t) => ({
+        tgl: String(t.tanggal ?? "").slice(0, 10),
+        jam: String(t.jam ?? ""),
+        nominal: Number(t[kolom] ?? 0),
+        pihak: String(t.nama_pengirim || t.nama_penerima || ""),
+        ket: String(t.deskripsi ?? "").slice(0, 60),
+      }));
+    } catch (e) {
+      // Gagal membaca BUKAN berarti tidak ada. Dikosongkan, tapi laporan
+      // menyebutnya lewat daftar `gagal` di sisi penyusun.
+      console.error("[jalankanPass] gagal baca baris tanpa pemilik:", e);
+    }
+  }
 
   // ── P3: jangan memvonis klaim di luar periode ──
   const laporan: { id: string; matched: boolean; matched_by: string | null; ref_issue: string | null; ambiguous: number }[] = [];
