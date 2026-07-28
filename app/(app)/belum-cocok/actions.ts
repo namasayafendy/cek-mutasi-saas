@@ -70,6 +70,10 @@ export interface KandidatMutasi {
   dipegang: null | {
     /** true = klaim gadai lain; false = input ketikan tangan di menu /check. */
     dariGadai: boolean;
+    /** Id klaim gadai pemegangnya. "Klaim lain" tanpa nama tidak bisa
+     *  ditindaklanjuti — kejadian nyata: TFKD-367 (Bireuen) menyambar baris
+     *  milik Lhokseumawe, dan itu baru bisa dilihat setelah namanya disebut. */
+    klaimPemegang: string | null;
     tanggalInput: string;
     nominalInput: number;
     caraCocok: string;
@@ -121,6 +125,17 @@ export async function cariKandidat(
   tgl: string,
   nominal: number,
   arah: string,
+  /**
+   * Nominal yang DICARI, kalau berbeda dari nilai resi.
+   *
+   * Dibutuhkan untuk kasus SATU TRANSFER MENUTUP BEBERAPA PERMINTAAN: kasir
+   * membuat permintaan 4jt lalu 1jt, tapi mentransfernya sekali sebesar 5jt
+   * (kejadian nyata 23 Juli 2026, permintaan #380 + #381). Klaim 4jt tidak
+   * akan pernah menemukan baris 5jt lewat pencarian bawaan, karena jendelanya
+   * cuma selebar biaya bank. Tanpa jalan ini, penutupan yang benar mustahil
+   * dan satu-satunya pilihan tersisa adalah menuliskan sesuatu yang salah.
+   */
+  nominalCari?: number,
 ): Promise<{ ok: true; items: KandidatMutasi[] } | { ok: false; msg: string }> {
   const k = await konfigGadai();
   if (!k) return { ok: false, msg: "Sinkronisasi belum dikonfigurasi." };
@@ -132,7 +147,13 @@ export async function cariKandidat(
     return d.toISOString().slice(0, 10);
   };
   const kolom = String(arah).toUpperCase() === "DEBET" ? "nominal_debet" : "nominal_kredit";
-  const TOLERANSI = 50_000; // sama dengan batas biaya bank di sisi gadai
+  // Pencarian bawaan bertoleransi sempit — cukup untuk biaya bank, tidak cukup
+  // untuk menyamakan dua transaksi berbeda. Kalau pemilik menyebut nominal
+  // sendiri, yang dicari angka ITU dan toleransinya nol: ia sedang menunjuk
+  // baris tertentu, bukan menebak-nebak.
+  const pakaiCustom = typeof nominalCari === "number" && nominalCari > 0;
+  const target = pakaiCustom ? Math.round(nominalCari as number) : nominal;
+  const TOLERANSI = pakaiCustom ? 0 : 50_000;
 
   try {
     const { data, error } = await k.db
@@ -141,8 +162,8 @@ export async function cariKandidat(
       .eq("account_id", k.ctx.account.id)
       .gte("tanggal", geser(-JENDELA_HARI))
       .lte("tanggal", geser(JENDELA_HARI))
-      .gte(kolom, Math.max(1, nominal - TOLERANSI))
-      .lte(kolom, nominal + TOLERANSI)
+      .gte(kolom, Math.max(1, target - TOLERANSI))
+      .lte(kolom, target + TOLERANSI)
       .order("tanggal", { ascending: true })
       .limit(40);
     if (error) return { ok: false, msg: error.message };
@@ -172,6 +193,7 @@ export async function cariKandidat(
           dipegang: p
             ? {
                 dariGadai: !!p.gadai_klaim_id,
+                klaimPemegang: p.gadai_klaim_id ? String(p.gadai_klaim_id) : null,
                 tanggalInput: String(p.tanggal_input ?? "").slice(0, 10),
                 nominalInput: Number(p.nominal ?? 0),
                 caraCocok: String(p.matched_by ?? (p.manual_claim_reason ? "COCOK MANUAL" : "-")),

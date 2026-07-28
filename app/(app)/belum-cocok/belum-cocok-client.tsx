@@ -39,6 +39,7 @@ export function BelumCocokClient() {
   const [kandidat, setKandidat] = useState<KandidatMutasi[] | null>(null);
   const [pilih, setPilih] = useState<KandidatMutasi | null>(null);
   const [aksi, setAksi] = useState<"" | "COCOK" | "BATAL">("");
+  const [cariLain, setCariLain] = useState("");
   const [catatan, setCatatan] = useState("");
   const [sibuk, mulai] = useTransition();
 
@@ -57,8 +58,21 @@ export function BelumCocokClient() {
   }
 
   async function bukaBaris(it: BarisBelumCocok) {
-    setBuka(it); setKandidat(null); setPilih(null); setAksi(""); setCatatan(""); setError("");
+    setBuka(it); setKandidat(null); setPilih(null); setAksi(""); setCatatan(""); setError(""); setCariLain("");
     const r = await cariKandidat(it.tgl, it.nominal, it.arah ?? "KREDIT");
+    if (r.ok) setKandidat(r.items);
+    else { setKandidat([]); setError(r.msg); }
+  }
+
+  /** Cari ulang dengan nominal yang disebut sendiri — untuk satu transfer yang
+   *  menutup beberapa permintaan sekaligus (mis. permintaan 4jt + 1jt yang
+   *  ditransfer sekali 5jt). */
+  async function cariNominalLain() {
+    if (!buka) return;
+    const n = Math.round(Number(cariLain.replace(/[^\d]/g, "") || 0));
+    if (!(n > 0)) return;
+    setKandidat(null); setPilih(null); setError("");
+    const r = await cariKandidat(buka.tgl, buka.nominal, buka.arah ?? "KREDIT", n);
     if (r.ok) setKandidat(r.items);
     else { setKandidat([]); setError(r.msg); }
   }
@@ -172,6 +186,38 @@ export function BelumCocokClient() {
                 menagih sampai jelas.
               </p>
             )}
+            {/* ── Cari nominal lain ──
+                Satu transfer bisa menutup BEBERAPA permintaan: kasir membuat
+                permintaan 4jt lalu 1jt, tapi mentransfernya sekali 5jt. Klaim
+                4jt tidak akan pernah menemukan baris 5jt lewat pencarian
+                bawaan, dan tanpa jalan ini penutupan yang benar mustahil —
+                yang tersisa cuma menuliskan sesuatu yang salah. */}
+            <div className="mb-3 flex items-center gap-2 rounded-lg bg-slate-50 p-2">
+              <span className="text-xs text-slate-600">Cari nominal lain:</span>
+              <input
+                value={cariLain}
+                onChange={(e) => setCariLain(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") void cariNominalLain(); }}
+                placeholder="mis. 5000000"
+                inputMode="numeric"
+                className="w-36 rounded border border-slate-300 px-2 py-1 text-sm"
+              />
+              <button onClick={() => void cariNominalLain()} className="btn-secondary text-xs">Cari</button>
+              {cariLain && (
+                <button
+                  onClick={() => { setCariLain(""); void bukaBaris(buka); }}
+                  className="text-xs text-slate-500 underline"
+                >
+                  kembali ke nominal resi
+                </button>
+              )}
+            </div>
+            <p className="mb-3 text-xs text-slate-500">
+              Pakai ini kalau satu transfer menutup beberapa permintaan sekaligus —
+              tutup tiap permintaannya satu per satu ke baris yang sama, dan sebutkan
+              itu di catatannya.
+            </p>
+
             {kandidat?.map((k) => (
               <label
                 key={k.id}
@@ -209,7 +255,7 @@ export function BelumCocokClient() {
                 {k.dipegang && (
                   <div className={"ml-6 text-xs " + (k.dipegang.dariGadai ? "text-red-700" : "text-amber-700")}>
                     {k.dipegang.dariGadai
-                      ? "⚠️ sudah dipakai klaim gadai LAIN — jangan dipakai dua kali"
+                      ? `⚠️ sudah dipakai klaim gadai ${k.dipegang.klaimPemegang ?? "lain"} (cara: ${k.dipegang.caraCocok}) — periksa dulu apakah klaim itu memang berhak atas baris ini`
                       : `sudah dipegang input ketikan manual (tanggal input ${tglID(k.dipegang.tanggalInput)}, ${rp(k.dipegang.nominalInput)}, cara: ${k.dipegang.caraCocok}) — inilah sebab klaim ini tidak kebagian`}
                   </div>
                 )}
