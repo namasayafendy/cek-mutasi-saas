@@ -245,6 +245,39 @@ export async function GET(request: NextRequest) {
                 `. Sisa ${j.sisaHariSebelumLenyap} hari sebelum ia TIDAK ditarik lagi dan hilang dari pandangan.`,
             );
           }
+
+          // ── PENGAWAS SILANG: apakah laporan LAPIS 1 masih hidup? ──
+          //
+          // Laporan Lapis 1 di aplikasi gadai adalah pembawa alarm "cron lain
+          // mati". Tapi ia tidak bisa melaporkan kematiannya sendiri — dan
+          // kalau seluruh aplikasi gadai tumbang, tidak ada satu pun cron di
+          // sana yang bisa berteriak. Pengawas yang berada DI DALAM sistem
+          // yang diawasi bukan pengawas; ia bagian dari hal yang ikut mati.
+          //
+          // Karena itu penilaiannya dikerjakan DI SINI, di aplikasi seberang,
+          // dari angka mentah yang dikirim gadai — bukan dari vonis gadai.
+          const L1 = j.lapis1 ?? {};
+          if (!L1.adaDenyut) {
+            adaYangPerluDitindak = true;
+            barisKlaim.push(
+              `🚨 Laporan LAPIS 1 BELUM PERNAH tercatat berjalan. Selama ini tidak jalan, ` +
+                `tidak ada satu pun yang memeriksa apakah transaksi bank cocok dengan slipnya.`,
+            );
+          } else if (Number(L1.jamDiam ?? 0) > 30) {
+            adaYangPerluDitindak = true;
+            barisKlaim.push(
+              `🚨 Laporan LAPIS 1 DIAM ${L1.jamDiam} jam` +
+                (L1.nomorTerakhir ? ` (terakhir #${L1.nomorTerakhir}, periode ${L1.periodeTerakhir})` : "") +
+                `. Ia yang membawa alarm cron lain — kalau ia mati, alarmnya ikut mati.`,
+            );
+          } else if (L1.terakhirOk === false) {
+            adaYangPerluDitindak = true;
+            barisKlaim.push(
+              `⚠️ Laporan LAPIS 1 berjalan tapi GAGAL terkirim` +
+                (L1.nomorTerakhir ? ` (terakhir sukses #${L1.nomorTerakhir})` : "") +
+                `. Periksa grup Telegram-nya.`,
+            );
+          }
         }
       } else {
         adaYangPerluDitindak = true;
