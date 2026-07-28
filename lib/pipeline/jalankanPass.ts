@@ -46,6 +46,24 @@ import { loadRefPoolTxs } from "@/lib/sessions/ref-pool";
 import { toDateISO, parseDateISO } from "@/lib/format";
 import { pullGadaiClaims, pushGadaiResults } from "@/app/(app)/check/actions-gadai";
 import type { BankUpload } from "@/lib/pipeline/prosesSatuBank";
+
+/**
+ * Catat satu klaim ke rekap PER TANGGAL.
+ *
+ * Rekap ini adalah alat sanding-menyanding antara dua lapisan. Pemilik
+ * memeriksa Lapis 1 setiap hari; kalau jumlah resi tanggal X di Lapis 2 tidak
+ * sama dengan jumlah yang dinyatakan cocok pada laporan Lapis 1 tanggal X,
+ * berarti ada resi yang lolos di antara keduanya — dan tanpa rekap ini,
+ * kebocoran semacam itu tidak punya tempat untuk terlihat.
+ */
+function catatTanggal(hasil: any, klaim: any) {
+  const tgl = toDateISO(klaim.tanggal);
+  if (!tgl) return;
+  const nominal = Number(klaim.nominal ?? 0);
+  const ada = hasil.perTanggal.find((x: any) => x.tgl === tgl);
+  if (ada) { ada.jml += 1; ada.rp += nominal; }
+  else hasil.perTanggal.push({ tgl, jml: 1, rp: nominal });
+}
 import type {
   Jenis,
   MatchRulePreset,
@@ -123,6 +141,23 @@ export interface HasilPass {
   klaimDibuang: number;
   outletTakDikenal: string[];
 
+  /** Rekap resi yang diuji, PER TANGGAL.
+   *
+   *  Ini alat sanding-menyanding antar lapisan, bukan hiasan. Pemilik membaca
+   *  Lapis 1 tiap hari; kalau jumlah resi tanggal X di sini tidak sama dengan
+   *  yang dinyatakan cocok di Lapis 1 tanggal X, ada resi yang lolos di antara
+   *  keduanya — dan tanpa rekap ini, kebocoran itu tidak punya tempat terlihat. */
+  perTanggal: { tgl: string; jml: number; rp: number }[];
+
+  /** Resi yang divonis tidak ada di rekening, LENGKAP dengan kontrak & outlet.
+   *  Cacah saja tidak bisa ditindaklanjuti — pemilik harus tahu membuka apa. */
+  tidakKetemu: { no_faktur: string; outlet: string; tgl: string; nominal: number; sebab: string }[];
+
+  /** Baris mutasi yang tidak diklaim transaksi mana pun — KEDUA arah.
+   *  Arah debet = uang KELUAR yang tidak diminta siapa pun; pertanyaan paling
+   *  mahal yang paling lama tidak pernah ditanyakan sistem ini. */
+  unclaimedRows: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
+
   /** Klaim yang benar-benar dinilai dan dilaporkan ke gadai. */
   klaimDinilai: number;
   cocok: number;
@@ -189,6 +224,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   const hasil: HasilPass = {
     jenis, periodStart, periodEnd,
     klaimDitarik: 0, klaimDibuang: 0, outletTakDikenal: [],
+    perTanggal: [], tidakKetemu: [], unclaimedRows: [],
     klaimDinilai: 0, cocok: 0, belumKetemu: 0,
     ditahanDiLuarPeriode: 0, ditahanKonflik: 0, sudahTerbuktiSebelumnya: 0,
     terkirim: null, batal: null,
@@ -380,7 +416,27 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
 
   const unclaimedIni = summary.unclaimed.filter((t) => t.source === "current");
   hasil.unclaimedCount = unclaimedIni.length;
-  hasil.unclaimedTotal = unclaimedIni.reduce((s, t) => s + t.kredit, 0);
+  // Untuk arah debet, nilainya ada di kolom debet — bukan kredit. Dulu kedua
+  // arah sama-sama menjumlah `kredit`, sehingga total debet-nganggur selalu
+  // nol dan "tidak ada uang keluar yang mencurigakan" terlihat benar tanpa
+  // pernah diperiksa.
+  const nilaiBaris = (t: any) => Number(jenis === "debet" ? (t.debet ?? 0) : (t.kredit ?? 0));
+  hasil.unclaimedTotal = unclaimedIni.reduce((s, t) => s + nilaiBaris(t), 0);
+  // Barisnya dibawa ke laporan untuk KEDUA arah.
+  //
+  // Arah debet adalah pertanyaan yang paling mahal dan paling lama tidak
+  // ditanya: "uang KELUAR dari rekening yang tidak diminta siapa pun".
+  // Selama ini laporan berkata "✅ Semua transfer keluar ketemu di mutasi" —
+  // kalimat yang hanya menguji arah sebaliknya (permintaan → mutasi), tidak
+  // pernah mutasi → permintaan. Uang keluar tanpa pasangan tidak punya satu
+  // tempat pun untuk muncul.
+  hasil.unclaimedRows = unclaimedIni.slice(0, 25).map((t: any) => ({
+    tgl: toDateISO(t.tanggalDate),
+    jam: t.waktu || "",
+    nominal: nilaiBaris(t),
+    pihak: t.namaPengirim || t.namaPenerima || "",
+    ket: String(t.deskripsi ?? "").slice(0, 60),
+  }));
 
   // ── P3: jangan memvonis klaim di luar periode ──
   const laporan: { id: string; matched: boolean; matched_by: string | null; ref_issue: string | null; ambiguous: number }[] = [];
@@ -404,6 +460,11 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     }
 
     if (m?.status === "matched") {
+      // Rincian per tanggal dikumpulkan untuk laporan LAPIS 2. Gunanya bukan
+      // hiasan: pemilik memeriksa Lapis 1 tiap hari, jadi angka per tanggal
+      // di sini HARUS bisa disandingkan dengan angka hari itu di Lapis 1.
+      // Kalau keduanya beda, ada resi yang lolos di antara dua lapisan.
+      catatTanggal(hasil, i);
       laporan.push({
         id: i.id,
         matched: true,
@@ -440,6 +501,18 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       continue;
     }
 
+    catatTanggal(hasil, i);
+    // Yang tidak ketemu disebut LENGKAP dengan kontrak & outletnya. Cacah saja
+    // tidak bisa ditindaklanjuti — pemilik harus tahu harus membuka apa.
+    if (hasil.tidakKetemu.length < 60) {
+      hasil.tidakKetemu.push({
+        no_faktur: String((i as any).no_faktur ?? "-"),
+        outlet:    String((i as any).outlet ?? "-"),
+        tgl:       toDateISO(i.tanggal),
+        nominal:   Number((i as any).nominal ?? 0),
+        sebab:     m?.refIssue ? "nomor resi bermasalah" : "tidak ada di rekening",
+      });
+    }
     laporan.push({
       id: i.id,
       matched: false,
@@ -529,19 +602,19 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   let kirim: Awaited<ReturnType<typeof pushGadaiResults>>;
   try {
     onLangkah?.(`Mengirim ${laporan.length} hasil ke Aceh Gadai...`);
-    const unclaimedPayload =
-      jenis === "kredit"
-        ? {
-            count: unclaimedIni.length,
-            total: hasil.unclaimedTotal,
-            rows: unclaimedIni.slice(0, 40).map((t) => ({
-              t: toDateISO(t.tanggalDate),
-              j: t.waktu || "",
-              n: t.kredit,
-              p: t.namaPengirim || "",
-            })),
-          }
-        : null;
+    // Dikirim untuk KEDUA arah. Dulu `null` untuk debet — itulah kenapa uang
+    // keluar tanpa pasangan tidak pernah sampai ke sisi gadai sama sekali.
+    const unclaimedPayload = {
+      arah: jenis,
+      count: unclaimedIni.length,
+      total: hasil.unclaimedTotal,
+      rows: unclaimedIni.slice(0, 40).map((t: any) => ({
+        t: toDateISO(t.tanggalDate),
+        j: t.waktu || "",
+        n: nilaiBaris(t),
+        p: t.namaPengirim || t.namaPenerima || "",
+      })),
+    };
     kirim = await pushGadaiResults(laporan, arah, periodEnd, periodStart, unclaimedPayload);
   } catch (e) {
     if (opsi.lepasKunci) await opsi.lepasKunci();

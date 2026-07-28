@@ -22,6 +22,7 @@ import { getAccountContext } from "@/lib/supabase/context";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { antreLaporan } from "@/lib/telegram/outbox";
 import { hitungCakupan, saranExport, tglID, type BarisCakupan, type HasilCakupan } from "@/lib/coverage/celah";
+import { susunLapis2, type IsiLapis2 } from "@/lib/laporan/lapis2";
 
 export type Balasan = { ok: boolean; error?: string };
 
@@ -145,6 +146,12 @@ export interface RingkasPass {
   batal: { kode: string; pesan: string } | null;
   unclaimedCount: number;
   unclaimedTotal: number;
+  /** Rekap resi yang diuji per tanggal — alat sanding-menyanding dengan LAPIS 1. */
+  perTanggal?: { tgl: string; jml: number; rp: number }[];
+  /** Resi yang tidak ada di rekening, lengkap dengan kontrak & outletnya. */
+  tidakKetemu?: { no_faktur: string; outlet: string; tgl: string; nominal: number; sebab: string }[];
+  /** Baris mutasi tanpa pemilik — kredit maupun DEBET. */
+  unclaimedRows?: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
 }
 
 export interface RingkasBerkas {
@@ -187,6 +194,113 @@ function tgl(iso: string | null): string {
  * semuanya string milik klien. Sekarang nama berkas dan label rekening dibaca
  * ULANG dari database, dan sisa string dijinakkan sebelum dipakai.
  */
+
+/** Lantai tanggal — keputusan pemilik: apa pun sebelum ini dianggap sudah
+ *  beres dan diperiksa manual. Sama dengan lantai LAPIS 1. */
+const LANTAI_LAPIS2 = "2026-07-22";
+
+/**
+ * Rangkai isi laporan LAPIS 2 dari hasil pass, lalu serahkan penyusunan
+ * teksnya ke lib/laporan/lapis2.
+ *
+ * Tunggakan (resi lama yang belum ketemu dan belum dibereskan) TIDAK ada di
+ * sisi ini — ia hidup di aplikasi gadai. Diambil lewat endpoint cakupan yang
+ * memang sudah dipanggil tiap hari. Kalau gagal diambil, laporan berkata
+ * terus terang bahwa bagian itu tidak bisa dinilai — bukan mencetak "(0)"
+ * yang tak bisa dibedakan dari "memang tidak ada".
+ */
+async function susunLaporanLapis2(
+  r: any,
+  berkas: RingkasBerkas,
+  pass: RingkasPass[],
+  dariDb: { namaFile: string; bankLabel: string },
+  cakupan: HasilCakupan | null,
+): Promise<string> {
+  const kredit = pass.find((p) => p.jenis === "kredit");
+  const debet = pass.find((p) => p.jenis === "debet");
+
+  // Rekap per tanggal digabung dua arah, lalu disaring lantai.
+  const petaTgl = new Map<string, { tgl: string; jml: number; rp: number }>();
+  for (const p of pass) {
+    for (const x of (p.perTanggal ?? [])) {
+      if (x.tgl < LANTAI_LAPIS2) continue;
+      const ada = petaTgl.get(x.tgl);
+      if (ada) { ada.jml += x.jml; ada.rp += x.rp; }
+      else petaTgl.set(x.tgl, { ...x });
+    }
+  }
+  const perTanggal = [...petaTgl.values()].sort((a, b) => (a.tgl < b.tgl ? -1 : 1));
+
+  const tidakKetemu = pass
+    .flatMap((p) => p.tidakKetemu ?? [])
+    .filter((x) => x.tgl >= LANTAI_LAPIS2)
+    .sort((a, b) => (a.tgl < b.tgl ? -1 : a.tgl > b.tgl ? 1 : 0));
+
+  const rowsK = (kredit?.unclaimedRows ?? []).filter((x) => x.tgl >= LANTAI_LAPIS2);
+  const rowsD = (debet?.unclaimedRows ?? []).filter((x) => x.tgl >= LANTAI_LAPIS2);
+
+  // Tunggakan dari sisi gadai.
+  let tunggakan: IsiLapis2["tunggakan"] = [];
+  const gagal: string[] = [];
+  for (const p of pass) if (p.batal) gagal.push(`${p.jenis}: ${p.batal.pesan}`);
+  try {
+    const { data: cfg } = await r.db
+      .from("gadai_sync_config")
+      .select("gadai_sync_enabled, gadai_api_url, gadai_api_key")
+      .eq("account_id", r.ctx.account.id)
+      .maybeSingle();
+    const c = cfg as any;
+    if (c?.gadai_sync_enabled && c.gadai_api_url && c.gadai_api_key) {
+      const base = String(c.gadai_api_url).replace(/\/+$/, "");
+      const res = await fetch(`${base}/api/transfer-klaim/tunggakan?sejak=${LANTAI_LAPIS2}`, {
+        headers: { Authorization: `Bearer ${c.gadai_api_key}` },
+        cache: "no-store",
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        if (j?.ok) tunggakan = (j.items ?? []) as IsiLapis2["tunggakan"];
+        else gagal.push(`tunggakan tidak bisa dibaca: ${j?.msg ?? "-"}`);
+      } else if (res.status === 404) {
+        // Endpoint belum tayang — sebutkan, jangan diamkan.
+        gagal.push("daftar tunggakan belum tersedia di Aceh Gadai (endpoint 404, kemungkinan belum di-promote)");
+      } else {
+        gagal.push(`tunggakan tidak bisa dibaca (HTTP ${res.status})`);
+      }
+    }
+  } catch (e) {
+    gagal.push(`tunggakan tidak bisa dibaca: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  const isi: IsiLapis2 = {
+    bankLabel: dariDb.bankLabel,
+    namaFile: dariDb.namaFile,
+    berkasDari: kredit?.periodStart ?? debet?.periodStart ?? null,
+    berkasSampai: kredit?.periodEnd ?? debet?.periodEnd ?? null,
+    nilaiDari: perTanggal[0]?.tgl ?? null,
+    nilaiSampai: perTanggal[perTanggal.length - 1]?.tgl ?? null,
+    utuh: berkas.utuh,
+    rantaiPutus: Number(berkas.rantaiPutus ?? 0),
+    nyambung: berkas.nyambung,
+    selisihSambungan: Number(berkas.selisihSambungan ?? 0),
+    perTanggal,
+    nDiuji: perTanggal.reduce((s, x) => s + x.jml, 0),
+    rpDiuji: perTanggal.reduce((s, x) => s + x.rp, 0),
+    nCocok: pass.reduce((s, p) => s + Number(p.cocok ?? 0), 0),
+    tidakKetemu,
+    ditahanLuarPeriode: pass.reduce((s, p) => s + Number(p.ditahanDiLuarPeriode ?? 0), 0),
+    ditahanKonflik: pass.reduce((s, p) => s + Number(p.ditahanKonflik ?? 0), 0),
+    kreditNganggur: rowsK,
+    rpKreditNganggur: rowsK.reduce((s, x) => s + Number(x.nominal || 0), 0),
+    debetNganggur: rowsD,
+    rpDebetNganggur: rowsD.reduce((s, x) => s + Number(x.nominal || 0), 0),
+    tunggakan,
+    gagal,
+  };
+
+  return susunLapis2(isi, { nomor: null, sebelumNomor: null, sebelumKapan: null });
+}
+
 function susunLaporan(
   berkas: RingkasBerkas,
   pass: RingkasPass[],
@@ -365,7 +479,7 @@ export async function tandaiSelesai(
   }
 
   const adaBatal = pass.some((p) => p.batal);
-  const teks = susunLaporan(berkas, pass, dariDb, cakupan);
+  const teks = await susunLaporanLapis2(r, berkas, pass, dariDb, cakupan);
 
   // Penutupan ini adalah COMPARE-AND-SET, bukan update biasa.
   //
@@ -392,14 +506,32 @@ export async function tandaiSelesai(
     return { ok: true, teks };
   }
 
-  if (r.job.tg_chat_id) {
+  // ── TUJUAN LAPORAN ──
+  //
+  // Laporan LAPIS 2 dikirim ke grup laporan kalau TG_LAPORAN_CHAT_ID di-set,
+  // BUKAN ke chat tempat PDF-nya diunggah.
+  //
+  // Dua-duanya sengaja dipisah. Gerbang unggah tetap chat pribadi — itu
+  // pengaman nyata: hanya pemilik yang boleh memasukkan mutasi rekening, dan
+  // di grup siapa pun anggotanya bisa. Tapi LAPORANNYA harus mendarat di
+  // tempat yang sama dengan LAPIS 1, supaya kedua lapisan bisa dibaca
+  // bersisian dan angka per tanggalnya bisa disandingkan.
+  const chatLaporan = String(process.env.TG_LAPORAN_CHAT_ID ?? "").trim()
+    || (r.job.tg_chat_id ? String(r.job.tg_chat_id) : "");
+  // Membalas pesan asli hanya masuk akal kalau laporannya memang mendarat di
+  // chat yang sama; di grup lain, message_id itu tidak berarti apa-apa.
+  const balasKe = chatLaporan === String(r.job.tg_chat_id ?? "")
+    ? (r.job.tg_message_id ? Number(r.job.tg_message_id) : null)
+    : null;
+
+  if (chatLaporan) {
     // Lewat antrean, bukan kirim langsung: laporan hasil rekonsiliasi terlalu
     // mahal untuk hilang gara-gara satu panggilan jaringan yang gagal.
     await antreLaporan({
       accountId: r.ctx.account.id,
-      chatId: String(r.job.tg_chat_id),
+      chatId: chatLaporan,
       teks,
-      balasKe: r.job.tg_message_id ? Number(r.job.tg_message_id) : null,
+      balasKe,
       jobId,
     });
   }

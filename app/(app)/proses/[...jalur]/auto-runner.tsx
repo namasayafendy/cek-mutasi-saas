@@ -192,6 +192,10 @@ export function AutoRunner({
           sudahTerbuktiSebelumnya: h.sudahTerbuktiSebelumnya,
           terkirim: h.terkirim, batal: h.batal,
           unclaimedCount: h.unclaimedCount, unclaimedTotal: h.unclaimedTotal,
+          // Rincian untuk laporan LAPIS 2 — tanpa ini yang sampai ke laporan
+          // cuma cacah, dan cacah tidak bisa ditindaklanjuti.
+          perTanggal: h.perTanggal, tidakKetemu: h.tidakKetemu,
+          unclaimedRows: h.unclaimedRows,
         });
         const tutup = await tandaiSelesai(jobId, ringkasBerkas, [bersih(hasilKredit), bersih(hasilDebet)]);
         ubahTerakhir("selesai");
