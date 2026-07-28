@@ -80,6 +80,13 @@ export default async function AppLayout({
                 <Link href="/history" className="text-slate-600 hover:text-slate-900">
                   History
                 </Link>
+                {/* Penutupan Lapis 2. Sengaja bersebelahan dengan Riwayat:
+                    keduanya dibuka untuk pertanyaan yang sama — "baris mutasi
+                    ini milik siapa" — dan memisahkannya membuat yang satu
+                    dicari lewat yang lain. */}
+                <Link href="/belum-cocok" className="text-slate-600 hover:text-slate-900">
+                  Belum Cocok
+                </Link>
                 <Link href="/rekap" className="text-slate-600 hover:text-slate-900">
                   Rekap
                 </Link>

@@ -1,0 +1,272 @@
+"use client";
+
+// ============================================================
+// CEKTRANSFER - Layar penutupan Lapis 2
+// File: app/(app)/belum-cocok/belum-cocok-client.tsx
+//
+// Tiga hal yang bisa dilakukan pada resi yang tidak ketemu di rekening, dan
+// ketiganya menyatakan hal yang BERBEDA tentang dunia nyata:
+//
+//   1. Cocokkan ke baris mutasi  -> uangnya ADA, mesinnya yang melewatkan
+//   2. Batalkan (salah catat)    -> resinya TIDAK PERNAH ADA
+//   3. Biarkan                   -> belum tahu; ia sengaja menagih lagi besok
+//
+// Yang TIDAK disediakan: tombol "tandai beres" tanpa menyebut sebab. Penutupan
+// tanpa pernyataan adalah cara paling cepat membuat daftar ini bersih dan
+// sekaligus tidak berarti apa-apa.
+// ============================================================
+
+import { useCallback, useEffect, useState, useTransition } from "react";
+import {
+  ambilBelumCocok, cariKandidat, cocokkanManual, batalkanKlaim,
+  type BarisBelumCocok, type KandidatMutasi,
+} from "./actions";
+
+const rp = (n: number) => "Rp " + Math.round(n).toLocaleString("id-ID");
+const tglID = (s: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const [y, m, d] = s.split("-");
+  return `${d}/${m}/${y.slice(2)}`;
+};
+
+export function BelumCocokClient() {
+  const [items, setItems] = useState<BarisBelumCocok[]>([]);
+  const [salahArah, setSalahArah] = useState(0);
+  const [muat, setMuat] = useState(true);
+  const [error, setError] = useState("");
+  const [okMsg, setOkMsg] = useState("");
+  const [buka, setBuka] = useState<BarisBelumCocok | null>(null);
+  const [kandidat, setKandidat] = useState<KandidatMutasi[] | null>(null);
+  const [pilih, setPilih] = useState<KandidatMutasi | null>(null);
+  const [aksi, setAksi] = useState<"" | "COCOK" | "BATAL">("");
+  const [catatan, setCatatan] = useState("");
+  const [sibuk, mulai] = useTransition();
+
+  const segarkan = useCallback(async () => {
+    setMuat(true); setError("");
+    const r = await ambilBelumCocok();
+    if (r.ok) { setItems(r.items); setSalahArah(r.salahArah); }
+    else setError(r.msg);
+    setMuat(false);
+  }, []);
+
+  useEffect(() => { void segarkan(); }, [segarkan]);
+
+  function tutup() {
+    setBuka(null); setKandidat(null); setPilih(null); setAksi(""); setCatatan("");
+  }
+
+  async function bukaBaris(it: BarisBelumCocok) {
+    setBuka(it); setKandidat(null); setPilih(null); setAksi(""); setCatatan(""); setError("");
+    const r = await cariKandidat(it.tgl, it.nominal, it.arah ?? "KREDIT");
+    if (r.ok) setKandidat(r.items);
+    else { setKandidat([]); setError(r.msg); }
+  }
+
+  function jalankan() {
+    if (!buka) return;
+    mulai(async () => {
+      setError(""); setOkMsg("");
+      const r = aksi === "BATAL"
+        ? await batalkanKlaim(buka.klaim_id, catatan)
+        : await cocokkanManual(buka.klaim_id, catatan);
+      if (!r.ok) setError(r.msg);
+      else { setOkMsg(r.msg); tutup(); await segarkan(); }
+    });
+  }
+
+  const catatanCukup = catatan.trim().length >= 10;
+
+  if (muat) return <div className="card p-6 text-center text-sm text-slate-500">Memuat…</div>;
+
+  return (
+    <div className="space-y-4">
+      {okMsg && <div className="card border-emerald-300 bg-emerald-50 p-4 text-sm text-emerald-900">{okMsg}</div>}
+      {error && <div className="card border-red-300 bg-red-50 p-4 text-sm text-red-900">{error}</div>}
+
+      {salahArah > 0 && (
+        <div className="card border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          {salahArah} klaim lama berarah salah (transaksi uang KELUAR terlanjur dicatat
+          sebagai klaim masuk). Ia tidak ditagihkan di sini karena tidak akan pernah bisa
+          cocok — bukan uang hilang, hanya sisa cacat lama.
+        </div>
+      )}
+
+      {!buka ? (
+        <>
+          <div className="flex items-baseline justify-between">
+            <div>
+              <div className="text-2xl font-semibold text-slate-900">{items.length}</div>
+              <div className="text-sm text-slate-600">
+                belum diselesaikan · {rp(items.reduce((s, x) => s + x.nominal, 0))}
+              </div>
+            </div>
+            <button onClick={() => void segarkan()} className="btn-secondary text-sm">Muat ulang</button>
+          </div>
+
+          {items.length === 0 && (
+            <div className="card p-6 text-center text-sm text-emerald-700">
+              ✅ Tidak ada resi yang menggantung. Semua sudah ketemu di rekening atau sudah diselesaikan.
+            </div>
+          )}
+
+          {items.map((it) => (
+            <div key={it.klaim_id} className="card p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={
+                      "rounded px-1.5 py-0.5 text-[11px] font-medium " +
+                      ((it.arah ?? "KREDIT") === "DEBET"
+                        ? "bg-rose-100 text-rose-700"
+                        : "bg-sky-100 text-sky-700")
+                    }>
+                      {(it.arah ?? "KREDIT") === "DEBET" ? "uang KELUAR" : "uang MASUK"}
+                    </span>
+                    <span className="truncate font-medium text-slate-900">{it.no_faktur}</span>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {it.outlet} · {tglID(it.tgl)} · {it.umur} hari menggantung
+                  </div>
+                </div>
+                <div className="shrink-0 text-right font-semibold text-slate-900">{rp(it.nominal)}</div>
+              </div>
+              <button onClick={() => void bukaBaris(it)} className="btn-primary mt-3 w-full text-sm">
+                Periksa
+              </button>
+            </div>
+          ))}
+        </>
+      ) : (
+        <>
+          <button onClick={tutup} className="btn-secondary text-sm">← Kembali</button>
+
+          <div className="card p-4">
+            <div className="font-medium text-slate-900">{buka.no_faktur}</div>
+            <div className="mt-1 text-xs text-slate-500">
+              {buka.outlet} · {tglID(buka.tgl)} ·{" "}
+              {(buka.arah ?? "KREDIT") === "DEBET" ? "uang KELUAR" : "uang MASUK"}
+            </div>
+            <div className="mt-2 text-lg font-semibold text-slate-900">{rp(buka.nominal)}</div>
+            <p className="mt-2 text-xs text-slate-600">
+              Dicari di mutasi rekening dan tidak ditemukan. Itu belum tentu berarti uangnya
+              tidak ada — periksa dulu baris calon di bawah.
+            </p>
+          </div>
+
+          {/* ── Baris calon ──
+              Inilah bagian yang menjawab kebingungan paling sering: barisnya
+              ADA di rekening, tapi sudah dipegang input lain, sehingga klaim
+              ini tidak kebagian. Tanpa menyebut pemegangnya, pemilik hanya
+              melihat "tidak ditemukan" dan menyimpulkan uangnya hilang. */}
+          <div className="card p-4">
+            <div className="mb-2 font-medium text-slate-900">
+              Baris mutasi yang mungkin cocok {kandidat ? `(${kandidat.length})` : ""}
+            </div>
+            {kandidat === null && <div className="text-sm text-slate-500">Mencari…</div>}
+            {kandidat?.length === 0 && (
+              <p className="text-sm text-slate-600">
+                Tidak ada baris mutasi bernominal sekitar segini pada rentang tanggalnya.
+                Kalau menurut Bapak uangnya memang tidak pernah keluar/masuk, gunakan
+                <b> Batalkan</b>. Kalau uangnya seharusnya ada, jangan ditutup — biarkan
+                menagih sampai jelas.
+              </p>
+            )}
+            {kandidat?.map((k) => (
+              <label
+                key={k.id}
+                className={
+                  "mb-2 block cursor-pointer rounded-lg border p-3 text-sm " +
+                  (pilih?.id === k.id ? "border-slate-900 bg-slate-50" : "border-slate-200")
+                }
+              >
+                <input
+                  type="radio" name="kandidat" className="mr-2"
+                  checked={pilih?.id === k.id}
+                  onChange={() => {
+                    setPilih(k);
+                    setCatatan(
+                      `Cocok ke baris mutasi ${tglID(k.tgl)} ${k.jam} ${rp(k.nominal)}` +
+                      (k.pihak ? ` a.n. ${k.pihak}` : "") +
+                      (k.no_ref ? ` ref ${k.no_ref}` : "") +
+                      (k.dipegang && !k.dipegang.dariGadai
+                        ? " — barisnya sudah dipegang input ketikan manual"
+                        : ""),
+                    );
+                  }}
+                />
+                <span className="font-medium text-slate-900">{rp(k.nominal)}</span>{" "}
+                <span className="text-slate-600">
+                  {tglID(k.tgl)} {k.jam}
+                  {k.pihak ? ` · ${k.pihak}` : ""}
+                </span>
+                {k.no_ref && <div className="ml-6 truncate text-xs text-slate-400">{k.no_ref}</div>}
+                {k.nominal !== buka.nominal && (
+                  <div className="ml-6 text-xs text-amber-700">
+                    beda {rp(Math.abs(k.nominal - buka.nominal))} dari nilai resi — biasanya biaya admin
+                  </div>
+                )}
+                {k.dipegang && (
+                  <div className={"ml-6 text-xs " + (k.dipegang.dariGadai ? "text-red-700" : "text-amber-700")}>
+                    {k.dipegang.dariGadai
+                      ? "⚠️ sudah dipakai klaim gadai LAIN — jangan dipakai dua kali"
+                      : `sudah dipegang input ketikan manual (tanggal input ${tglID(k.dipegang.tanggalInput)}, ${rp(k.dipegang.nominalInput)}, cara: ${k.dipegang.caraCocok}) — inilah sebab klaim ini tidak kebagian`}
+                  </div>
+                )}
+              </label>
+            ))}
+          </div>
+
+          {aksi === "" ? (
+            <div className="flex gap-2">
+              <button
+                onClick={() => setAksi("COCOK")}
+                disabled={!pilih}
+                className="btn-primary flex-1 text-sm disabled:opacity-40"
+              >
+                ✓ Cocokkan ke baris terpilih
+              </button>
+              <button onClick={() => { setAksi("BATAL"); setCatatan(""); }} className="btn-secondary flex-1 text-sm">
+                Batalkan (salah catat)
+              </button>
+            </div>
+          ) : (
+            <div className="card p-4">
+              <div className="mb-2 font-medium text-slate-900">
+                {aksi === "BATAL" ? "Batalkan — resi ini tidak pernah ada" : "Cocokkan manual"}
+              </div>
+              <p className="mb-3 text-xs text-slate-600">
+                {aksi === "BATAL"
+                  ? "Pakai ini HANYA kalau resinya memang salah catat: salah ketik, AI membaca slip hantu, atau tercatat dua kali. JANGAN dipakai untuk resi yang benar ada tapi tidak ketemu — itu tuduhan uang hilang, dan membatalkannya menghapus pertanyaannya, bukan menjawabnya. Klaimnya tidak dihapus, hanya dicabut daya buktinya, dan transaksinya bisa kembali terbuka di Lapis 1."
+                  : "Bapak menyatakan baris mutasi di atas memang milik resi ini. Klaimnya akan ditandai cocok di Aceh Gadai."}
+              </p>
+              <textarea
+                value={catatan}
+                onChange={(e) => setCatatan(e.target.value)}
+                rows={3}
+                placeholder={aksi === "BATAL" ? "Kenapa resi ini dianggap tidak pernah ada?" : "Baris mutasi mana yang cocok?"}
+                className="w-full rounded-lg border border-slate-300 p-2 text-sm"
+              />
+              <div className="mt-1 text-xs text-slate-400">
+                {catatan.trim().length}/10 huruf minimum
+              </div>
+              <div className="mt-3 flex gap-2">
+                <button onClick={() => setAksi("")} className="btn-secondary flex-1 text-sm">Batal</button>
+                <button
+                  onClick={jalankan}
+                  disabled={sibuk || !catatanCukup}
+                  className={
+                    "flex-1 text-sm disabled:opacity-40 " +
+                    (aksi === "BATAL" ? "btn-secondary" : "btn-primary")
+                  }
+                >
+                  {sibuk ? "Menyimpan…" : "Simpan"}
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
