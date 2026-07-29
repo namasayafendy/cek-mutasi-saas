@@ -288,11 +288,23 @@ async function susunLaporanLapis2(
             try {
               const arahT = String((t as any).arah ?? "KREDIT").toUpperCase();
               const kol = arahT === "DEBET" ? "nominal_debet" : "nominal_kredit";
+              // Jendela tanggal WAJIB, dan harus sama dengan yang dipakai
+              // /belum-cocok (±4 hari). Tanpa itu cacahnya menghitung seluruh
+              // riwayat — "ADA 12 baris bernominal sama" untuk klaim 4jt tidak
+              // menolong siapa pun, ia cuma angka besar yang tidak bisa
+              // ditindaklanjuti.
+              const geserHariT = (n: number) => {
+                const d = new Date(`${t.tgl}T00:00:00Z`);
+                d.setUTCDate(d.getUTCDate() + n);
+                return d.toISOString().slice(0, 10);
+              };
               const { count } = await r.db
                 .from("parsed_transactions")
                 .select("id", { count: "exact", head: true })
                 .eq("account_id", r.ctx.account.id)
                 .is("claimed_by_input_id", null)
+                .gte("tanggal", geserHariT(-4))
+                .lte("tanggal", geserHariT(4))
                 .gte(kol, Math.max(1, t.nominal - 50_000))
                 .lte(kol, t.nominal + 50_000);
               (t as any).calonBebas = Number(count ?? 0);
