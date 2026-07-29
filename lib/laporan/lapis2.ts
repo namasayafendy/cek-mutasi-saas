@@ -76,7 +76,12 @@ export interface IsiLapis2 {
   rpDebetNganggur: number;
   sisaDebetNganggur?: number;
   /** Resi yang sudah lama tidak ketemu dan belum dibereskan (dari sisi gadai). */
-  tunggakan: { no_faktur: string; outlet: string; tgl: string; nominal: number; umur: number }[];
+  tunggakan: {
+    no_faktur: string; outlet: string; tgl: string; nominal: number; umur: number;
+    /** Hasil penelusuran ulang ke mutasi yang BARU diunggah:
+     *  jumlah baris bernominal sama yang masih BEBAS. null = tidak ditelusuri. */
+    calonBebas?: number | null;
+  }[];
   gagal: string[];
 }
 
@@ -126,6 +131,12 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   const nKeluar = isi.perTanggal.reduce((s, x) => s + Number(x.keluarJml ?? 0), 0);
 
   L.push(`RESI YANG DIUJI  ${isi.nDiuji} · ${rp(isi.rpDiuji)}`);
+  // Diam BUKAN jawaban. Sebelum ini, "semua ketemu" hanya bisa disimpulkan
+  // dari TIDAK ADANYA blok "tidak ditemukan" — pembaca harus menebak dari
+  // sesuatu yang tidak tertulis. Sekarang keduanya selalu disebut, termasuk
+  // saat nol, supaya "lengkap" jadi pernyataan dan bukan dugaan.
+  L.push(`   ✅ ketemu di rekening  ${isi.nDiuji - nGagal}`);
+  L.push(`   ${nGagal > 0 ? '⛔' : '✅'} tidak ketemu          ${nGagal}`);
   L.push(`   MASUK  ${String(nMasuk).padStart(3)} resi · ${rp(totMasuk)}`);
   L.push(`   KELUAR ${String(nKeluar).padStart(3)} resi · ${rp(totKeluar)}`);
   if (isi.perTanggal.length) {
@@ -160,8 +171,16 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
 
   if (nTunggak > 0) {
     L.push(`🔁 BELUM BERES DARI SEBELUMNYA (${nTunggak})`);
+    L.push(`   ditelusuri ULANG ke mutasi yang baru diunggah:`);
     isi.tunggakan.slice(0, 15).forEach((x) => {
       L.push(`• ${x.no_faktur} · ${x.outlet} · ${tgl(x.tgl)} · ${rp(x.nominal)} · ${x.umur} hari`);
+      // Menyebut daftar tunggakan tanpa menelusurinya ulang berarti menyuruh
+      // pemilik membuka /belum-cocok satu per satu hanya untuk tahu apakah ada
+      // yang berubah. Kabari hasilnya di sini.
+      const c = x.calonBebas;
+      if (c == null) L.push(`   ↳ belum ditelusuri`);
+      else if (c > 0) L.push(`   ↳ ADA ${c} baris mutasi bernominal sama yang masih bebas — buka /belum-cocok`);
+      else L.push(`   ↳ masih TIDAK ADA di mutasi. Tetap dibawa ke besok sampai ditutup.`);
     });
     if (nTunggak > 15) L.push(`   …dan ${nTunggak - 15} lagi`);
     L.push("");
@@ -178,12 +197,17 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
          (isi.kreditNganggur.length ? ` · ${rp(isi.rpKreditNganggur)}` : ""));
   if (isi.kreditNganggur.length) {
     L.push(`   uang MASUK yang tidak diklaim transaksi mana pun`);
-    isi.kreditNganggur.slice(0, 10).forEach((x) => {
+    // SEMUA ditampilkan, tidak dipotong.
+    //
+    // Versi pertama menampilkan 10 lalu menulis "… N lagi tidak ditampilkan" —
+    // padahal N baris itu SUDAH distempel "pernah dilaporkan" di pipeline, jadi
+    // mereka tidak akan pernah muncul lagi. Dipotong DAN dianggap sudah
+    // diberitahukan adalah cara paling rapi menghilangkan sesuatu tanpa
+    // seorang pun menyadarinya. Yang ditampilkan harus SAMA PERSIS dengan yang
+    // distempel; batas 25 per arah sudah dijaga di pipeline.
+    isi.kreditNganggur.forEach((x) => {
       L.push(`   • ${tgl(x.tgl)} ${x.jam} · ${rp(x.nominal)}${x.pihak ? ` · ${x.pihak}` : ""}`);
     });
-    if (isi.kreditNganggur.length > 10) {
-      L.push(`   … ${isi.kreditNganggur.length - 10} lagi tidak ditampilkan di sini`);
-    }
     // Sisa yang belum pernah dilaporkan SAMA SEKALI harus disebut, bukan
     // didiamkan sampai kiriman berikutnya. Daftar yang dipotong diam-diam
     // berbunyi persis seperti daftar yang lengkap.
@@ -197,12 +221,9 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
          (isi.debetNganggur.length ? ` · ${rp(isi.rpDebetNganggur)}` : ""));
   if (isi.debetNganggur.length) {
     L.push(`   ⚠️ uang KELUAR yang tidak diminta permintaan transfer mana pun`);
-    isi.debetNganggur.slice(0, 10).forEach((x) => {
+    isi.debetNganggur.forEach((x) => {
       L.push(`   • ${tgl(x.tgl)} ${x.jam} · ${rp(x.nominal)}${x.pihak ? ` · ${x.pihak}` : ""}`);
     });
-    if (isi.debetNganggur.length > 10) {
-      L.push(`   … ${isi.debetNganggur.length - 10} lagi tidak ditampilkan di sini`);
-    }
     if (Number(isi.sisaDebetNganggur ?? 0) > 0) {
       L.push(`   ↳ masih ada ${isi.sisaDebetNganggur} baris lagi yang belum pernah`);
       L.push(`     dilaporkan — akan disebut pada kiriman mutasi berikutnya.`);

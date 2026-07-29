@@ -270,7 +270,37 @@ async function susunLaporanLapis2(
       });
       if (res.ok) {
         const j = await res.json();
-        if (j?.ok) tunggakan = (j.items ?? []) as IsiLapis2["tunggakan"];
+        if (j?.ok) {
+          tunggakan = (j.items ?? []) as IsiLapis2["tunggakan"];
+
+          // ── TELUSURI ULANG KE MUTASI YANG BARU DIUNGGAH ──
+          //
+          // Klaim yang sudah divonis UNMATCHED tidak pernah ditarik lagi, jadi
+          // ia TIDAK ikut diuji otomatis pada unggahan berikutnya. Tanpa
+          // penelusuran di sini, daftarnya cuma diulang apa adanya tiap hari
+          // dan pemilik harus membuka /belum-cocok satu per satu hanya untuk
+          // tahu apakah ada yang berubah.
+          //
+          // Ini TIDAK mencocokkan apa pun — hanya melapor apakah ada calon.
+          // Penutupan tetap keputusan manusia di /belum-cocok, karena satu
+          // baris bisa saja milik permintaan lain.
+          for (const t of tunggakan) {
+            try {
+              const arahT = String((t as any).arah ?? "KREDIT").toUpperCase();
+              const kol = arahT === "DEBET" ? "nominal_debet" : "nominal_kredit";
+              const { count } = await r.db
+                .from("parsed_transactions")
+                .select("id", { count: "exact", head: true })
+                .eq("account_id", r.ctx.account.id)
+                .is("claimed_by_input_id", null)
+                .gte(kol, Math.max(1, t.nominal - 50_000))
+                .lte(kol, t.nominal + 50_000);
+              (t as any).calonBebas = Number(count ?? 0);
+            } catch {
+              (t as any).calonBebas = null;   // gagal menelusuri != tidak ada
+            }
+          }
+        }
         else gagal.push(`tunggakan tidak bisa dibaca: ${j?.msg ?? "-"}`);
       } else if (res.status === 404) {
         // Endpoint belum tayang — sebutkan, jangan diamkan.
