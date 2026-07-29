@@ -154,6 +154,14 @@ export interface RingkasPass {
   tidakKetemu?: { no_faktur: string; outlet: string; tgl: string; nominal: number; sebab: string }[];
   /** Baris mutasi tanpa pemilik — kredit maupun DEBET. */
   unclaimedRows?: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
+  /** Resi yang diketik OWNER sendiri (sumber MANUAL), dihitung TERPISAH. */
+  manualDinilai?: number;
+  manualCocok?: number;
+  /** Yang DITAHAN gerbang Lapis 1 dan tidak pernah sampai ke sini.
+   *  undefined/null = gadai belum mengirimkannya — "tidak diketahui", bukan nol. */
+  tertahanGerbang?: { jml: number; rp: number;
+                      perSebab: { sebab: string; teks: string; n: number; rp: number }[];
+                      gerbangError: string | null } | null;
 }
 
 export interface RingkasBerkas {
@@ -340,6 +348,36 @@ async function susunLaporanLapis2(
     nDiuji: perTanggal.reduce((s, x) => s + x.jml, 0),
     rpDiuji: perTanggal.reduce((s, x) => s + x.rp, 0),
     nCocok: pass.reduce((s, p) => s + Number(p.cocok ?? 0), 0),
+    // Berapa yang "normal", berapa yang hasil penanganan manual. Angka manual
+    // adalah bagian DARI nDiuji/nCocok, bukan tambahan atasnya.
+    nManual: pass.reduce((s, p) => s + Number(p.manualDinilai ?? 0), 0),
+    nManualCocok: pass.reduce((s, p) => s + Number(p.manualCocok ?? 0), 0),
+    // Digabung dua arah. gerbangError dari arah mana pun cukup untuk membuat
+    // seluruh laporan ini tidak boleh dibaca sebagai "sudah tersaring".
+    tertahanGerbang: (() => {
+      const ada = pass.map((p) => p.tertahanGerbang).filter(Boolean) as NonNullable<
+        RingkasPass["tertahanGerbang"]
+      >[];
+      if (!ada.length) return null;          // tidak diketahui, bukan nol
+      // Sebab yang sama dari dua arah HARUS dijumlah, bukan dicetak dua kali.
+      // Dua baris "bukti belum dibaca mesin" pada satu laporan terbaca seperti
+      // dua persoalan berbeda.
+      const peta = new Map<string, { sebab: string; teks: string; n: number; rp: number }>();
+      for (const x of ada) {
+        for (const s of (x.perSebab ?? [])) {
+          const k = String(s.sebab);
+          const kini = peta.get(k) ?? { sebab: k, teks: String(s.teks ?? k), n: 0, rp: 0 };
+          kini.n += Number(s.n ?? 0); kini.rp += Number(s.rp ?? 0);
+          peta.set(k, kini);
+        }
+      }
+      return {
+        jml: ada.reduce((s, x) => s + Number(x.jml ?? 0), 0),
+        rp: ada.reduce((s, x) => s + Number(x.rp ?? 0), 0),
+        perSebab: [...peta.values()].sort((a, b) => b.rp - a.rp),
+        gerbangError: ada.map((x) => x.gerbangError).find(Boolean) ?? null,
+      };
+    })(),
     tidakKetemu,
     ditahanLuarPeriode: pass.reduce((s, p) => s + Number(p.ditahanDiLuarPeriode ?? 0), 0),
     ditahanKonflik: pass.reduce((s, p) => s + Number(p.ditahanKonflik ?? 0), 0),

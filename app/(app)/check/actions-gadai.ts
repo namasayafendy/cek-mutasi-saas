@@ -27,10 +27,25 @@ export interface GadaiPullInput {
   jamResi: string | null;
   /** Fase B: nama pengirim di resi, dibaca AI (kunci Pass-2) */
   namaPengirimResi: string | null;
+  /** 'MANUAL' = resi yang diketik OWNER sendiri di Lapis 1, bukan bacaan AI.
+   *  Dihitung TERPISAH di laporan Lapis 2 (keputusan pemilik 29 Juli 2026):
+   *  "berapa yang normal, berapa yang hasil penanganan manual". Menyatukannya
+   *  membuat penanganan tangan tidak bisa dibedakan dari alur biasa — padahal
+   *  justru barisan itu yang perlu diawasi lebih ketat. */
+  sumber: string | null;
+}
+
+/** Yang gadai TAHAN di Lapis 1 dan tidak pernah sampai ke sini. */
+export interface GadaiTertahan {
+  jml: number;
+  rp: number;
+  perSebab: { sebab: string; teks: string; n: number; rp: number }[];
+  gerbangError: string | null;
 }
 
 export type GadaiPullResult =
-  | { ok: true; inputs: GadaiPullInput[]; unmappedOutlets: string[]; total: number }
+  | { ok: true; inputs: GadaiPullInput[]; unmappedOutlets: string[]; total: number;
+      tertahan: GadaiTertahan | null }
   | { ok: false; error: string };
 
 // Normalisasi nama outlet: trim + rapikan spasi + UPPERCASE (case-insensitive match)
@@ -62,6 +77,7 @@ export async function pullGadaiClaims(
 
   // 2) Tarik klaim PENDING dari Aceh Gadai (read-only)
   let claims: any[] = [];
+  let tertahan: GadaiTertahan | null = null;
   try {
     const base = c.gadai_api_url.replace(/\/+$/, "");
     const res = await fetch(`${base}/api/transfer-klaim?days=60&arah=${arah}`, {
@@ -73,6 +89,16 @@ export async function pullGadaiClaims(
     const json = await res.json();
     if (!json?.ok) return { ok: false, error: json?.msg || "Aceh Gadai menolak permintaan." };
     claims = Array.isArray(json.claims) ? json.claims : [];
+    // Gerbang Lapis 1 → Lapis 2 (29 Juli 2026). Gadai versi lama tidak
+    // mengirim medan ini; null berarti "tidak diketahui", BUKAN nol.
+    if (json.tertahan && typeof json.tertahan === "object") {
+      tertahan = {
+        jml: Number(json.tertahan.jml ?? 0),
+        rp: Number(json.tertahan.rp ?? 0),
+        perSebab: Array.isArray(json.tertahan.perSebab) ? json.tertahan.perSebab : [],
+        gerbangError: json.tertahan.gerbangError ?? null,
+      };
+    }
   } catch (err) {
     return { ok: false, error: "Gagal terhubung ke Aceh Gadai: " + String(err) };
   }
@@ -126,10 +152,11 @@ export async function pullGadaiClaims(
       // untuk laporan membuat outlet hilang justru saat paling dibutuhkan.
       noFaktur: cl.no_faktur ? String(cl.no_faktur) : null,
       outletNama: cl.outlet ? String(cl.outlet) : null,
+      sumber: cl.sumber ? String(cl.sumber) : null,
     });
   }
 
-  return { ok: true, inputs, unmappedOutlets: [...unmapped], total: inputs.length };
+  return { ok: true, inputs, unmappedOutlets: [...unmapped], total: inputs.length, tertahan };
 }
 
 // ============================================================

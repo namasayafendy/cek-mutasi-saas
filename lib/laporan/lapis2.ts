@@ -65,6 +65,20 @@ export interface IsiLapis2 {
   nDiuji: number;
   rpDiuji: number;
   nCocok: number;
+  /** BAGIAN DARI nDiuji/nCocok — resi yang diketik OWNER sendiri di Lapis 1,
+   *  bukan bacaan AI dari foto. Dipisah atas keputusan pemilik 29 Juli 2026:
+   *  "berapa yang normal, berapa yang hasil penanganan manual". Menyatukannya
+   *  membuat baris yang paling perlu diawasi jadi tidak bisa dikenali. */
+  nManual?: number;
+  nManualCocok?: number;
+  /** Yang DITAHAN gerbang Lapis 1 dan memang tidak diuji di sini.
+   *  null/undefined = sisi gadai tidak mengabarkannya (versi lama) —
+   *  "tidak diketahui", BUKAN nol. */
+  tertahanGerbang?: {
+    jml: number; rp: number;
+    perSebab: { sebab: string; teks: string; n: number; rp: number }[];
+    gerbangError: string | null;
+  } | null;
   tidakKetemu: { no_faktur: string; outlet: string; tgl: string; nominal: number; sebab: string }[];
   ditahanLuarPeriode: number;
   ditahanKonflik: number;
@@ -139,6 +153,44 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   L.push(`   ${nGagal > 0 ? '⛔' : '✅'} tidak ketemu          ${nGagal}`);
   L.push(`   MASUK  ${String(nMasuk).padStart(3)} resi · ${rp(totMasuk)}`);
   L.push(`   KELUAR ${String(nKeluar).padStart(3)} resi · ${rp(totKeluar)}`);
+
+  // ── NORMAL vs HASIL PENANGANAN MANUAL ──
+  //
+  // Resi yang diketik OWNER sendiri dibaca mesin dengan cara yang sama persis,
+  // jadi tanpa baris ini ia tidak bisa dibedakan dari resi yang dibaca AI dari
+  // foto. Bedanya penting: yang satu punya foto sebagai lawan, yang satu hanya
+  // punya ingatan orang. Yang diketik tangan LALU tidak ketemu di rekening
+  // adalah kombinasi yang paling perlu dilihat, dan ia tak akan pernah menonjol
+  // kalau angkanya berbaur.
+  const nMan = Number(isi.nManual ?? 0);
+  if (nMan > 0) {
+    const manCocok = Number(isi.nManualCocok ?? 0);
+    L.push(`   ── dari jumlah di atas ──`);
+    L.push(`   normal              ${isi.nDiuji - nMan} · ketemu ${isi.nCocok - manCocok}`);
+    L.push(`   penanganan manual   ${nMan} · ketemu ${manCocok}` +
+           (nMan - manCocok > 0 ? `  ⚠️ ${nMan - manCocok} TIDAK ketemu` : ''));
+    L.push(`   (manual = resi yang diketik sendiri di Lapis 1, bukan bacaan foto)`);
+  }
+
+  // ── APA YANG TIDAK SAMPAI KE SINI ──
+  //
+  // Gerbang Lapis 1 menahan sebagian resi, dan yang tertahan tidak akan pernah
+  // muncul di laporan ini. Kalau itu tidak dikatakan, "RESI YANG DIUJI" terbaca
+  // sebagai "seluruh resi hari itu" — dan selisihnya dengan Lapis 1 akan
+  // terlihat seperti uang hilang, persis salah baca yang blok per-tanggal ini
+  // dibuat untuk menghentikannya.
+  const tg = isi.tertahanGerbang;
+  if (tg?.gerbangError) {
+    L.push(`   🚨 GERBANG LAPIS 1 TIDAK BISA MENILAI — semua resi dilepas apa adanya.`);
+    L.push(`      Jangan anggap yang diuji di sini sudah lulus Lapis 1.`);
+  } else if (tg && tg.jml > 0) {
+    L.push(`   🚧 ${tg.jml} resi · ${rp(tg.rp)} DITAHAN Lapis 1 — sengaja tidak diuji di sini`);
+    tg.perSebab.slice(0, 6).forEach((s) => L.push(`      • ${s.teks} — ${s.n} · ${rp(s.rp)}`));
+    L.push(`      rinciannya di laporan LAPIS 1 (blok TERTAHAN DI GERBANG).`);
+  } else if (tg == null) {
+    L.push(`   ➖ jumlah yang ditahan Lapis 1 tidak dikabarkan — tidak bisa dipastikan`);
+    L.push(`      bahwa seluruh resi hari itu sudah sampai ke sini.`);
+  }
   if (isi.perTanggal.length) {
     L.push("");
     isi.perTanggal.slice(0, 40).forEach((x) => {
@@ -150,7 +202,9 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       L.push(`      keluar ${String(x.keluarJml ?? 0).padStart(3)} resi · ${rp(Number(x.keluarRp ?? 0))}`);
     });
     L.push("");
-    L.push(`   ↳ sandingkan dengan baris "TOTAL RESI HARI INI" di LAPIS 1 tanggal itu.`);
+    L.push(`   ↳ sandingkan dengan baris "dilepas ke Lapis 2" pada blok TOTAL RESI`);
+    L.push(`     HARI INI di LAPIS 1 tanggal itu — BUKAN dengan totalnya, karena`);
+    L.push(`     yang tertahan gerbang memang tidak pernah sampai kemari.`);
     L.push(`     Angkanya harus SAMA PERSIS. Kalau beda, ada resi yang lolos`);
     L.push(`     di antara dua lapisan.`);
     L.push(`     (JANGAN disandingkan dengan "Cocok dgn slip" — itu nilai KONTRAK,`);

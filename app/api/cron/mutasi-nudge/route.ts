@@ -231,6 +231,32 @@ export async function GET(request: NextRequest) {
                 `${p.debet?.jml ?? 0} keluar (${rpJt(p.debet?.total ?? 0)})`,
             );
           }
+          // ── YANG DITAHAN GERBANG LAPIS 1 ──
+          //
+          // Bagian DARI angka "menunggu" di atas, tapi menunggunya hal yang
+          // sama sekali berbeda: bukan mutasi yang belum diunggah, melainkan
+          // baris Lapis 1 yang belum beres. Mengunggah PDF tidak akan
+          // menyelesaikannya. Tanpa baris ini, pengingat harian menyuruh
+          // mengerjakan hal yang tidak akan menggerakkan angkanya sedikit pun.
+          const th = j.tertahan;
+          if (th?.gerbangError) {
+            adaYangPerluDitindak = true;
+            barisKlaim.push(
+              `🚨 Gerbang Lapis 1 di Aceh Gadai TIDAK BISA MENILAI (${String(th.gerbangError).slice(0, 120)}). ` +
+                `Semua resi dilepas apa adanya — jangan anggap sudah tersaring.`,
+            );
+          } else if (th && !th.tidakDinilai && Number(th.jml ?? 0) > 0) {
+            adaYangPerluDitindak = true;
+            const sebab = (th.perSebab ?? [])
+              .slice(0, 3)
+              .map((s: any) => `${s.teks} ${s.n}`)
+              .join(", ");
+            barisKlaim.push(
+              `🚧 ${th.jml} resi (${rpJt(th.rp ?? 0)}) DITAHAN Lapis 1 — tidak akan diuji ke rekening ` +
+                `sampai barisnya dibereskan di Aceh Gadai${sebab ? `. Sebab: ${sebab}` : ""}.`,
+            );
+          }
+
           if (Number(j.diLuarJendela ?? 0) > 0) {
             adaYangPerluDitindak = true;
             barisKlaim.push(

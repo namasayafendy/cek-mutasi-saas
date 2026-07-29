@@ -196,6 +196,25 @@ export interface HasilPass {
    *  terkirim waktu itu), dilaporkan ulang tanpa dicocokkan lagi. */
   sudahTerbuktiSebelumnya: number;
 
+  /** ── HASIL PENANGANAN MANUAL, DIHITUNG TERPISAH ──
+   *
+   *  Resi yang diketik OWNER sendiri di Lapis 1 (sumber MANUAL) masuk ke sini
+   *  seperti resi bacaan AI, tapi asal-usulnya berbeda dan pengawasannya harus
+   *  berbeda pula: yang satu dibaca mesin dari foto, yang satu diketik manusia
+   *  dari ingatan atau catatan. Menyatukan cacahnya membuat penanganan tangan
+   *  tak bisa dibedakan dari alur biasa — padahal justru barisan itu yang
+   *  paling perlu dilihat apakah benar mendarat di rekening.
+   *  Keputusan pemilik 29 Juli 2026. */
+  manualDinilai: number;
+  manualCocok: number;
+
+  /** Klaim yang DITAHAN gerbang Lapis 1 dan tidak pernah sampai ke sini.
+   *  null = sisi gadai belum mengirimkannya (versi lama) — "tidak diketahui",
+   *  BUKAN nol. */
+  tertahanGerbang: { jml: number; rp: number;
+                     perSebab: { sebab: string; teks: string; n: number; rp: number }[];
+                     gerbangError: string | null } | null;
+
   /** null kalau pengiriman memang tidak dilakukan (lihat `batal`). */
   terkirim: { updated: number; unmatched: number; recheck: number; alarm: number; alertSent: boolean } | null;
   batal: AlasanBatal | null;
@@ -247,6 +266,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     perTanggal: [], tidakKetemu: [], unclaimedRows: [], unclaimedBelumLapor: 0,
     klaimDinilai: 0, cocok: 0, belumKetemu: 0,
     ditahanDiLuarPeriode: 0, ditahanKonflik: 0, sudahTerbuktiSebelumnya: 0,
+    manualDinilai: 0, manualCocok: 0, tertahanGerbang: null,
     terkirim: null, batal: null,
     unclaimedCount: 0, unclaimedTotal: 0,
   };
@@ -299,6 +319,14 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   }
   hasil.klaimDitarik = tarik.inputs.length;
   hasil.outletTakDikenal = tarik.unmappedOutlets;
+  hasil.tertahanGerbang = tarik.tertahan ?? null;
+  // Dicatat SEBELUM klaim dibuang/disaring, supaya keanggotaannya tidak ikut
+  // berubah di tengah jalan bersama saringan-saringan di bawah.
+  const manualIds = new Set(
+    tarik.inputs
+      .filter((i) => String(i.sumber ?? "").toUpperCase() === "MANUAL")
+      .map((i) => String(i.id)),
+  );
 
   const inputs: UserInput[] = [];
   for (const i of tarik.inputs) {
@@ -614,6 +642,9 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   hasil.klaimDinilai = laporan.length;
   hasil.cocok = laporan.filter((r) => r.matched).length;
   hasil.belumKetemu = laporan.length - hasil.cocok;
+  const manualDinilaiRows = laporan.filter((r) => manualIds.has(String(r.id)));
+  hasil.manualDinilai = manualDinilaiRows.length;
+  hasil.manualCocok = manualDinilaiRows.filter((r) => r.matched).length;
   if (laporan.length === 0) {
     hasil.batal = {
       kode: "TIDAK_ADA_KLAIM",
