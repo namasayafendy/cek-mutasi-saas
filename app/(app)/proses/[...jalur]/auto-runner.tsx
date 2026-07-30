@@ -196,6 +196,31 @@ export function AutoRunner({
           // cuma cacah, dan cacah tidak bisa ditindaklanjuti.
           perTanggal: h.perTanggal, tidakKetemu: h.tidakKetemu,
           unclaimedRows: h.unclaimedRows,
+          // ── EMPAT MEDAN YANG DULU JATUH DI SINI ──
+          //
+          // Fungsi ini menyalin medan SATU PER SATU, jadi setiap medan baru di
+          // HasilPass diam-diam hilang sampai seseorang ingat menambahkannya.
+          // Tidak ada galat, tidak ada peringatan — laporan hanya kehilangan
+          // sebagian isinya, dan yang hilang terlihat persis seperti nol.
+          //
+          //   unclaimedBelumLapor  -> tanpa ini sisaKreditNganggur SELALU 0,
+          //                           jadi baris "masih ada N lagi yang belum
+          //                           pernah dilaporkan" tidak pernah muncul.
+          //   manualDinilai/Cocok  -> pemisahan "normal vs penanganan manual"
+          //                           tidak pernah tercetak.
+          //   tertahanGerbang      -> baris "N resi ditahan Lapis 1" tidak
+          //                           pernah tercetak, sehingga selisih dengan
+          //                           Lapis 1 tak punya penjelasan.
+          //   unclaimedBatas       -> ekor tanggal yang sengaja tidak diuji
+          //                           tidak pernah disebut.
+          //   unclaimedDiperiksa   -> "(0) karena bersih" tak bisa dibedakan
+          //                           dari "(0) karena belum diperiksa".
+          unclaimedBelumLapor: h.unclaimedBelumLapor,
+          unclaimedBatas: h.unclaimedBatas,
+          unclaimedDiperiksa: h.unclaimedDiperiksa,
+          manualDinilai: h.manualDinilai,
+          manualCocok: h.manualCocok,
+          tertahanGerbang: h.tertahanGerbang,
         });
         const tutup = await tandaiSelesai(jobId, ringkasBerkas, [bersih(hasilKredit), bersih(hasilDebet)]);
         ubahTerakhir("selesai");

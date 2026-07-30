@@ -154,6 +154,12 @@ export interface RingkasPass {
   tidakKetemu?: { no_faktur: string; outlet: string; tgl: string; nominal: number; sebab: string }[];
   /** Baris mutasi tanpa pemilik — kredit maupun DEBET. */
   unclaimedRows?: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
+  /** Tanggal terakhir yang benar-benar diperiksa untuk "tanpa pemilik".
+   *  Terisi = ada ekor tanggal yang sengaja dilewati (klaimnya belum lahir). */
+  unclaimedBatas?: string | null;
+  /** false = pemeriksaan "tanpa pemilik" tidak sempat jalan. Nol baris di situ
+   *  BUKAN "bersih". */
+  unclaimedDiperiksa?: boolean;
   /** Resi yang diketik OWNER sendiri (sumber MANUAL), dihitung TERPISAH. */
   manualDinilai?: number;
   manualCocok?: number;
@@ -389,6 +395,15 @@ async function susunLaporanLapis2(
     debetNganggur: rowsD,
     sisaDebetNganggur: Math.max(0, Number(debet?.unclaimedBelumLapor ?? rowsD.length) - rowsD.length),
     rpDebetNganggur: rowsD.reduce((s, x) => s + Number(x.nominal || 0), 0),
+    // Ekor tanggal yang SENGAJA tidak diuji, dan apakah pemeriksaannya jalan.
+    // Keduanya harus sampai ke laporan: "(0) karena bersih" dan "(0) karena
+    // belum diperiksa" tidak boleh berbunyi sama.
+    nganggurBatas: [kredit?.unclaimedBatas, debet?.unclaimedBatas]
+      .filter((x): x is string => typeof x === "string" && !!x)
+      .sort()[0] ?? null,
+    nganggurDiperiksa: pass.length === 0
+      ? false
+      : pass.every((p) => p.unclaimedDiperiksa !== false),
     tunggakan,
     gagal,
   };

@@ -89,6 +89,12 @@ export interface IsiLapis2 {
   debetNganggur: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
   rpDebetNganggur: number;
   sisaDebetNganggur?: number;
+  /** Tanggal terakhir yang benar-benar diuji untuk "tanpa pemilik". Terisi =
+   *  ada ekor tanggal yang SENGAJA dilewati karena klaim gadai untuk hari itu
+   *  belum lahir (cron malam belum menyapunya). */
+  nganggurBatas?: string | null;
+  /** false = pemeriksaan "tanpa pemilik" TIDAK jalan. Nol baris bukan "bersih". */
+  nganggurDiperiksa?: boolean;
   /** Resi yang sudah lama tidak ketemu dan belum dibereskan (dari sisi gadai). */
   tunggakan: {
     no_faktur: string; outlet: string; tgl: string; nominal: number; umur: number;
@@ -247,6 +253,23 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   // diminta permintaan transfer mana pun. Selama ini laporan berbunyi "semua
   // transfer keluar ketemu di mutasi" — kalimat yang hanya menguji arah
   // sebaliknya dan tidak pernah arah ini.
+  // ── (0) TIDAK BOLEH BERBUNYI SEPERTI "BERSIH" KALAU MEMANG BELUM DIPERIKSA ──
+  //
+  // Sampai 30 Juli 2026 dua blok di bawah dibangun dari kueri yang dijalankan
+  // SEBELUM pemilik barisnya tertulis, sehingga 26 dari 41 barisnya adalah
+  // baris yang justru baru saja dicocokkan. Sesudah dibetulkan, kueri itu bisa
+  // GAGAL atau TIDAK DIJALANKAN — dan kalau itu terjadi, "(0)" adalah bunyi
+  // paling berbahaya di seluruh laporan ini karena ia terbaca sebagai kabar
+  // baik. Jadi keadaannya dikatakan lebih dulu.
+  if (isi.nganggurDiperiksa === false) {
+    L.push(`🚨 UANG TANPA PEMILIK: BELUM DIPERIKSA pada kiriman ini.`);
+    L.push(`   Angka (0) di dua baris berikut BUKAN berarti bersih.`);
+  } else if (isi.nganggurBatas) {
+    L.push(`ℹ️ Uang tanpa pemilik diperiksa sampai ${tgl(isi.nganggurBatas)} saja —`);
+    L.push(`   sesudah itu klaimnya belum lahir (cron malam gadai belum menyapunya),`);
+    L.push(`   jadi belum bisa dinilai. Akan ikut pada kiriman berikutnya.`);
+  }
+
   L.push(`💰 KREDIT TANPA KONTRAK (${isi.kreditNganggur.length})` +
          (isi.kreditNganggur.length ? ` · ${rp(isi.rpKreditNganggur)}` : ""));
   if (isi.kreditNganggur.length) {

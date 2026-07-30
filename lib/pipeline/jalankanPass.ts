@@ -178,6 +178,18 @@ export interface HasilPass {
    *  Beda dari unclaimedTotal, yang berisi RUPIAH baris tak terklaim periode ini. */
   unclaimedBelumLapor: number;
 
+  /** Tanggal terakhir yang BENAR-BENAR diperiksa untuk "tanpa pemilik".
+   *  null = seluruh periode berkas diperiksa. Terisi = ada ekor tanggal yang
+   *  SENGAJA dilewati karena klaimnya belum mungkin lahir (cron malam gadai
+   *  belum menyapunya). Wajib disebut di laporan: ekor yang tidak diuji dan
+   *  ekor yang bersih terdengar sama persis kalau batasnya didiamkan. */
+  unclaimedBatas: string | null;
+
+  /** Apakah pemeriksaan "tanpa pemilik" benar-benar DIJALANKAN.
+   *  false + nol baris BUKAN "bersih" — itu "belum diperiksa", dan (0) adalah
+   *  bunyi paling berbahaya di laporan ini karena terbaca seperti kabar baik. */
+  unclaimedDiperiksa: boolean;
+
   /** Klaim yang benar-benar dinilai dan dilaporkan ke gadai. */
   klaimDinilai: number;
   cocok: number;
@@ -264,11 +276,118 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     jenis, periodStart, periodEnd,
     klaimDitarik: 0, klaimDibuang: 0, outletTakDikenal: [],
     perTanggal: [], tidakKetemu: [], unclaimedRows: [], unclaimedBelumLapor: 0,
+    unclaimedBatas: null, unclaimedDiperiksa: false,
     klaimDinilai: 0, cocok: 0, belumKetemu: 0,
     ditahanDiLuarPeriode: 0, ditahanKonflik: 0, sudahTerbuktiSebelumnya: 0,
     manualDinilai: 0, manualCocok: 0, tertahanGerbang: null,
     terkirim: null, batal: null,
     unclaimedCount: 0, unclaimedTotal: 0,
+  };
+
+  /**
+   * BARIS MUTASI TANPA PEMILIK — dibaca, BELUM distempel.
+   *
+   * Membaca dan menstempel SENGAJA dipisah. Stempel berarti "sudah dikatakan
+   * kepada pemiliknya", dan itu baru benar sesudah vonisnya benar-benar
+   * terkirim — bukan pada saat daftarnya disusun. Versi lama menyatukan
+   * keduanya, dan akibatnya baris bisa berstempel "sudah dilaporkan" pada pass
+   * yang batal di tengah jalan: "sekali saja" berubah jadi NOL kali.
+   *
+   * @param idTerpakai id parsed_transactions yang dipakai run INI. Ini JARING
+   *   KEDUA, bukan penyaring utama. Penyaring utamanya adalah DB sendiri
+   *   (claimed_by_input_id sudah tertulis sebelum fungsi ini dipanggil). Jaring
+   *   ini menutup satu jalur yang penyaring utama tidak bisa lihat: di
+   *   lib/sessions/save.ts insert cek_inputs yang gagal hanya di-console.error
+   *   TANPA melempar, jadi saveSession bisa "berhasil" sambil tidak mengklaim
+   *   apa pun — dan tanpa jaring ini seluruh baris yang cocok akan dituduh
+   *   menganggur.
+   * @returns id baris yang masuk daftar; itulah yang boleh distempel nanti.
+   */
+  const bacaNganggur = async (idTerpakai: Set<string>): Promise<string[]> => {
+    if (!periodStart || !periodEnd) return [];
+    try {
+      // ── JANGAN TANYAKAN YANG JAWABANNYA BELUM MUNGKIN ADA ──
+      //
+      // Klaim gadai lahir dari cron malam: sisi KELUAR 01:25 WIB, sisi MASUK
+      // 02:30-06:30 WIB, dan keduanya menyapu transaksi HARI SEBELUMNYA. Jadi
+      // baris mutasi bertanggal HARI INI mustahil punya pemilik — menyebutnya
+      // "uang tanpa pemilik" adalah kesalahan yang SAMA seperti membaca sebelum
+      // klaimnya tertulis, hanya pada skala hari bukan milidetik. Pada 30 Juli
+      // 2026, 5 dari 15 baris yang benar-benar belum terklaim persis kelas ini.
+      //
+      // Sesudah 07:00 WIB seluruh cron malam untuk KEMARIN pasti sudah selesai;
+      // sebelum itu belum, jadi batasnya mundur satu hari lagi.
+      const wibSkrg = new Date(Date.now() + 7 * 3_600_000);
+      const batasKlaim = geserHari(wibSkrg.toISOString().slice(0, 10),
+                                   wibSkrg.getUTCHours() >= 7 ? -1 : -2);
+      const batasAkhir = batasKlaim < periodEnd ? batasKlaim : periodEnd;
+      hasil.unclaimedBatas = batasAkhir < periodEnd ? batasAkhir : null;
+      hasil.unclaimedDiperiksa = true;
+      if (batasAkhir < periodStart) return [];
+
+      const kolom = jenis === "debet" ? "nominal_debet" : "nominal_kredit";
+      const { data: barisBaru, count } = await supabase
+        .from("parsed_transactions")
+        .select(`id, tanggal, jam, ${kolom}, nama_pengirim, nama_penerima, deskripsi`, { count: "exact" })
+        .eq("account_id", accountId)
+        .gte("tanggal", periodStart as string)
+        .lte("tanggal", batasAkhir)
+        .is("claimed_by_input_id", null)
+        .is("unclaimed_reported_at", null)
+        // Baris yang sudah dihapus bukan "uang tanpa pemilik". Pembaca lain
+        // (carryover, persist) juga belum punya saringan ini — di sini ia
+        // paling mahal kalau luput, karena keluarannya sebuah tuduhan.
+        .is("deleted_at", null)
+        .gt(kolom, 0)
+        .order("tanggal", { ascending: true })
+        .limit(25);
+
+      const semua = (barisBaru ?? []) as any[];
+      const rows = semua.filter((t) => !idTerpakai.has(String(t.id)));
+      const tersaring = semua.length - rows.length;
+
+      // Cacah UTUH dilaporkan terpisah dari yang ditampilkan. Memotong di 25
+      // tanpa menyebut sisanya berbunyi persis seperti "cuma segini".
+      // Dikurangi yang tersaring jaring memori: arah galatnya jadi "sedikit
+      // melebihkan sisa", dan itu arah yang aman — paling banyak ia menambah
+      // baris "masih ada N lagi", bukan menghilangkan sesuatu.
+      hasil.unclaimedBelumLapor = Math.max(0, Number(count ?? semua.length) - tersaring);
+      hasil.unclaimedRows = rows.map((t) => ({
+        tgl: String(t.tanggal ?? "").slice(0, 10),
+        jam: String(t.jam ?? ""),
+        nominal: Number(t[kolom] ?? 0),
+        pihak: String(t.nama_pengirim || t.nama_penerima || ""),
+        ket: String(t.deskripsi ?? "").slice(0, 60),
+      }));
+      if (tersaring > 0) {
+        console.warn(`[jalankanPass] ${tersaring} baris disaring jaring memori — ` +
+                     `saveSession mungkin tidak menulis klaim (${jenis})`);
+      }
+      return rows.map((t) => String(t.id));
+    } catch (e) {
+      // Gagal membaca BUKAN berarti tidak ada. unclaimedDiperiksa dibiarkan
+      // apa adanya supaya laporan bisa membedakan "nol karena diperiksa" dari
+      // "nol karena tidak sempat diperiksa".
+      console.error("[jalankanPass] gagal baca baris tanpa pemilik:", e);
+      hasil.unclaimedDiperiksa = false;
+      return [];
+    }
+  };
+
+  /** Stempel "sudah diberitahukan". Dipanggil HANYA sesudah vonis terkirim. */
+  const stempelNganggur = async (ids: string[]) => {
+    if (!ids.length) return;
+    try {
+      const { error } = await supabase
+        .from("parsed_transactions")
+        .update({ unclaimed_reported_at: new Date().toISOString() })
+        .in("id", ids);
+      // Gagal menstempel berarti baris ini akan disebut lagi besok.
+      // Mengulang jauh lebih baik daripada menghilangkannya.
+      if (error) console.error("[jalankanPass] gagal menstempel baris tanpa pemilik:", error.message);
+    } catch (e) {
+      console.error("[jalankanPass] gagal menstempel baris tanpa pemilik:", e);
+    }
   };
 
   // ── P1: mutasi harus terbukti utuh ──
@@ -354,6 +473,14 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     });
   }
   if (inputs.length === 0) {
+    // TIDAK ADA KLAIM justru keadaan yang PALING perlu melaporkan uang tanpa
+    // pemilik: mutasinya bergerak dan tidak ada satu pun yang mengakuinya.
+    // Memindahkan blok nganggur ke bawah saveSession tanpa jalur ini akan
+    // membuat berkas semacam itu bungkam sama sekali.
+    // DIBACA, TIDAK DISTEMPEL — pass ini batal, jadi hak "disebut sekali"
+    // belum boleh dibakar. Himpunan terpakai kosong karena tidak ada satu pun
+    // klaim yang dicocokkan.
+    await bacaNganggur(new Set());
     hasil.batal = { kode: "TIDAK_ADA_KLAIM", pesan: `Tidak ada klaim ${jenis} yang menunggu.` };
     return hasil;
   }
@@ -502,58 +629,28 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   // dikatakan kepada pemiliknya atau belum".
   //
   // Keputusan pemilik 28 Juli 2026: "cukup beritahu sekali saja."
-  hasil.unclaimedRows = [];
-  hasil.unclaimedBelumLapor = 0;
-  if (periodStart && periodEnd) {
-    try {
-      const kolom = jenis === "debet" ? "nominal_debet" : "nominal_kredit";
-      const dasar = () => supabase
-        .from("parsed_transactions")
-        .select(`id, tanggal, jam, ${kolom}, nama_pengirim, nama_penerima, deskripsi`, { count: "exact" })
-        .eq("account_id", accountId)
-        .gte("tanggal", periodStart as string)
-        .lte("tanggal", periodEnd as string)
-        .is("claimed_by_input_id", null)
-        .is("unclaimed_reported_at", null)
-        .gt(kolom, 0);
-
-      const { data: barisBaru, count } = await dasar()
-        .order("tanggal", { ascending: true })
-        .limit(25);
-
-      const rows = (barisBaru ?? []) as any[];
-      // Cacah UTUH dilaporkan terpisah dari yang ditampilkan. Memotong di 25
-      // tanpa menyebut sisanya berbunyi persis seperti "cuma segini".
-      hasil.unclaimedBelumLapor = Number(count ?? rows.length);
-      hasil.unclaimedRows = rows.map((t) => ({
-        tgl: String(t.tanggal ?? "").slice(0, 10),
-        jam: String(t.jam ?? ""),
-        nominal: Number(t[kolom] ?? 0),
-        pihak: String(t.nama_pengirim || t.nama_penerima || ""),
-        ket: String(t.deskripsi ?? "").slice(0, 60),
-      }));
-
-      // Stempel HANYA yang benar-benar masuk laporan. Sisanya sengaja
-      // dibiarkan bertanda kosong supaya muncul pada kiriman berikutnya —
-      // dipotong DAN dianggap sudah diberitahukan adalah cara paling rapi
-      // untuk menghilangkan sesuatu tanpa seorang pun menyadarinya.
-      if (rows.length > 0) {
-        const { error: eCap } = await supabase
-          .from("parsed_transactions")
-          .update({ unclaimed_reported_at: new Date().toISOString() })
-          .in("id", rows.map((t) => t.id));
-        if (eCap) {
-          // Gagal menstempel berarti baris ini akan disebut lagi besok.
-          // Mengulang itu jauh lebih baik daripada menghilangkannya.
-          console.error("[jalankanPass] gagal menstempel baris tanpa pemilik:", eCap.message);
-        }
-      }
-    } catch (e) {
-      // Gagal membaca BUKAN berarti tidak ada. Dikosongkan, tapi laporan
-      // menyebutnya lewat daftar `gagal` di sisi penyusun.
-      console.error("[jalankanPass] gagal baca baris tanpa pemilik:", e);
-    }
-  }
+  // ── DIPINDAH KE BAWAH, SESUDAH SESI TERSIMPAN (30 Juli 2026) ──
+  //
+  // Blok ini DULU berada di sini, dan di sini ia SELALU salah. Ia bertanya ke
+  // basis data "baris mana yang tidak punya pemilik?" — padahal yang MENULIS
+  // pemiliknya (claimed_by_input_id) adalah saveSession, yang baru berjalan
+  // jauh di bawah. Jadi setiap baris yang baru saja dicocokkan pada jalan INI
+  // masih tampak menganggur, lalu dilaporkan sebagai "uang tanpa pemilik" DAN
+  // distempel "sudah pernah dilaporkan".
+  //
+  // Terukur pada unggahan mutasi asli pertama (30 Juli 2026, 11:25 WIB):
+  // 41 baris dilaporkan, 26 di antaranya diklaim pada jalan yang sama itu juga.
+  // Cap waktunya berselisih 0,4 detik — distempel 04:25:58.898, klaimnya ditulis
+  // 04:25:59.331. Laporannya benar pada mikrodetik ia diambil dan salah sesudahnya.
+  //
+  // Akibatnya bukan cuma angka keliru: 63% isi blok itu kebisingan, dan
+  // kebisingan sebanyak itu membuat blok yang paling mahal di laporan ini
+  // berhenti dibaca — termasuk pada tujuh baris yang memang perlu dijawab.
+  //
+  // Perhatikan bahwa `unclaimedCount`/`unclaimedTotal` di atas TIDAK terkena:
+  // keduanya dihitung dari summary.unclaimed (hasil pencocokan di memori) yang
+  // memang sudah mengecualikan baris yang cocok pada jalan ini. Hanya DAFTAR-nya
+  // yang salah sumber. Itu sebabnya sisi gadai tidak pernah melihat gejalanya.
 
   // ── P3: jangan memvonis klaim di luar periode ──
   const laporan: { id: string; matched: boolean; matched_by: string | null; ref_issue: string | null; ambiguous: number }[] = [];
@@ -646,6 +743,10 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   hasil.manualDinilai = manualDinilaiRows.length;
   hasil.manualCocok = manualDinilaiRows.filter((r) => r.matched).length;
   if (laporan.length === 0) {
+    // Sama seperti cabang di atas: dibaca, tidak distempel. Himpunan terpakai
+    // aman kosong — laporan.length === 0 berarti tidak ada satu pun input
+    // berstatus matched (setiap matched pasti mem-push ke `laporan`).
+    await bacaNganggur(new Set());
     hasil.batal = {
       kode: "TIDAK_ADA_KLAIM",
       pesan: `Semua klaim ${jenis} berada di luar periode berkas ini — tidak ada yang bisa dinilai.`,
@@ -706,6 +807,38 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     return hasil;
   }
 
+  // ── BARIS MUTASI TANPA PEMILIK — DIBACA SESUDAH SESI TERSIMPAN ──
+  //
+  // Tempatnya di SINI, bukan sebelum pencocokan. Sesudah saveSession,
+  // claimed_by_input_id sudah tertulis, jadi basis data SENDIRI yang
+  // mengecualikan baris yang baru diklaim — tanpa daftar id di URL, dan
+  // dengan count:"exact" yang ikut benar.
+  //
+  // Kalau saveSession GAGAL, kode di atas sudah return: tidak dibaca, tidak
+  // distempel. Laporan akan berkata "belum diperiksa", bukan "(0)".
+  //
+  // JARING KEDUA: id baris yang dipakai run ini, disusun dengan kunci yang SAMA
+  // PERSIS seperti findMatchedTxId di lib/sessions/save.ts:81-87. Kesamaan kunci
+  // itu bukan kerapian — ia yang membuat himpunan "yang saya kecualikan" tidak
+  // bisa menyimpang dari himpunan "yang saveSession klaim". Gunanya menutup satu
+  // jalur yang DB tidak bisa perlihatkan: insert cek_inputs yang gagal di
+  // save.ts hanya di-console.error tanpa melempar, jadi saveSession bisa
+  // "berhasil" sambil tidak mengklaim apa pun.
+  const kunciPool = new Map<string, string>();
+  for (const t of pool) {
+    if (!t.parsedTxId) continue;
+    const k = `${t.bankId ?? "_"}|${t.no}|${t.tanggalDate.getTime()}|${t.kredit}`;
+    if (!kunciPool.has(k)) kunciPool.set(k, t.parsedTxId);
+  }
+  const idTerpakai = new Set<string>();
+  for (const i of hasilInputs) {
+    if (i.match?.status !== "matched") continue;
+    const k = `${i.match.txBankId ?? i.bankId ?? "_"}|${i.match.txNo}|${i.match.txDate.getTime()}|${i.nominal}`;
+    const id = kunciPool.get(k);
+    if (id) idTerpakai.add(id);
+  }
+  const idNganggur = await bacaNganggur(idTerpakai);
+
   // ── Kunci sekali-kirim, lalu kirim ──
   if (opsi.kunciKirim) {
     const boleh = await opsi.kunciKirim();
@@ -758,5 +891,18 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     alarm: kirim.alarm,
     alertSent: kirim.alertSent,
   };
+
+  // ── STEMPEL "SUDAH DIBERITAHUKAN" — paling akhir, dan itu disengaja ──
+  //
+  // Stempel adalah pernyataan "pemiliknya sudah diberi tahu", jadi ia hanya
+  // boleh dipasang sesudah vonisnya benar-benar terkirim. Semua jalan keluar di
+  // atas (sesi gagal, kunci ditolak, kirim gagal) meninggalkan barisnya TANPA
+  // stempel, sehingga ia disebut lagi pada unggahan berikutnya.
+  //
+  // Konsekuensinya diterima sadar: satu baris bisa disebut DUA KALI kalau
+  // kiriman pertama gagal di tengah. Mengulang jauh lebih baik daripada
+  // menghilangkan — dan itu sikap yang sama dengan komentar penstempelan sejak
+  // awal, hanya sekarang benar-benar dijalankan.
+  await stempelNganggur(idNganggur);
   return hasil;
 }
