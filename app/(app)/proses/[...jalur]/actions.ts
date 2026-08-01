@@ -266,6 +266,11 @@ async function susunLaporanLapis2(
 
   // Tunggakan dari sisi gadai.
   let tunggakan: IsiLapis2["tunggakan"] = [];
+  // Sandingan Lapis 1 ↔ Lapis 2 — angkanya diambil dari gadai, TIDAK dihitung
+  // di sini. Dua sisi yang menghitung sendiri-sendiri akan menyimpang, dan
+  // menyimpangnya justru terlihat seperti kebocoran.
+  let sandingan: IsiLapis2["sandingan"] = null;
+  let sandinganGagal: string | null = null;
   const gagal: string[] = [];
   for (const p of pass) if (p.batal) gagal.push(`${p.jenis}: ${p.batal.pesan}`);
   try {
@@ -277,6 +282,41 @@ async function susunLaporanLapis2(
     const c = cfg as any;
     if (c?.gadai_sync_enabled && c.gadai_api_url && c.gadai_api_key) {
       const base = String(c.gadai_api_url).replace(/\/+$/, "");
+
+      // ── SANDINGAN, diambil lebih dulu ──
+      //
+      // Rentangnya = periode BERKAS ini, bukan lantai: yang ingin dijawab
+      // adalah "dari yang dilepas untuk hari-hari di berkas ini, adakah yang
+      // tidak sampai kemari?". Memakai lantai akan menyeret tanggal-tanggal
+      // lama yang memang sedang menunggu mutasi lain, lalu melaporkannya
+      // sebagai ketinggalan — alarm palsu yang membuat blok ini berhenti dibaca.
+      //
+      // Kegagalannya TIDAK didiamkan: sandingan yang tak bisa diambil dicetak
+      // apa adanya, karena "tidak ada blok" dan "semua cocok" terlihat sama.
+      const sDari = kredit?.periodStart ?? debet?.periodStart ?? null;
+      const sSampai = kredit?.periodEnd ?? debet?.periodEnd ?? null;
+      if (sDari && sSampai) {
+        try {
+          const resS = await fetch(
+            `${base}/api/transfer-klaim/sandingan?dari=${sDari}&sampai=${sSampai}`,
+            { headers: { Authorization: `Bearer ${c.gadai_api_key}` },
+              cache: "no-store", signal: AbortSignal.timeout(8000) });
+          if (resS.ok) {
+            const j = await resS.json();
+            if (j?.ok) sandingan = j as IsiLapis2["sandingan"];
+            else sandinganGagal = String(j?.msg ?? "ditolak Aceh Gadai");
+          } else if (resS.status === 404) {
+            sandinganGagal = "endpoint belum tayang di Aceh Gadai (404, kemungkinan belum di-promote)";
+          } else {
+            sandinganGagal = `HTTP ${resS.status}`;
+          }
+        } catch (e) {
+          sandinganGagal = e instanceof Error ? e.message : String(e);
+        }
+      } else {
+        sandinganGagal = "periode berkas tidak terbaca";
+      }
+
       const res = await fetch(`${base}/api/transfer-klaim/tunggakan?sejak=${LANTAI_LAPIS2}`, {
         headers: { Authorization: `Bearer ${c.gadai_api_key}` },
         cache: "no-store",
@@ -404,6 +444,8 @@ async function susunLaporanLapis2(
     nganggurDiperiksa: pass.length === 0
       ? false
       : pass.every((p) => p.unclaimedDiperiksa !== false),
+    sandingan,
+    sandinganGagal,
     tunggakan,
     gagal,
   };

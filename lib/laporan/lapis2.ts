@@ -95,6 +95,32 @@ export interface IsiLapis2 {
   nganggurBatas?: string | null;
   /** false = pemeriksaan "tanpa pemilik" TIDAK jalan. Nol baris bukan "bersih". */
   nganggurDiperiksa?: boolean;
+
+  /** ── SANDINGAN LAPIS 1 ↔ LAPIS 2, dihitung MESIN ──
+   *  Angkanya datang langsung dari Aceh Gadai (endpoint /transfer-klaim/sandingan),
+   *  bukan dihitung ulang di sini — dua sisi yang menghitung sendiri-sendiri
+   *  akan menyimpang, dan menyimpangnya justru terlihat seperti kebocoran.
+   *  null = tidak bisa diambil; itu HARUS dikatakan, bukan didiamkan. */
+  sandingan?: {
+    total: {
+      lahir: { n: number; rp: number };
+      tertahan: { n: number; rp: number };
+      dilepas: { n: number; rp: number };
+      divonis: { n: number; rp: number };
+      menggantung: { n: number; rp: number };
+    };
+    tanggal: { tgl: string; arah: string;
+               dilepas: { n: number; rp: number };
+               divonis: { n: number; rp: number };
+               menggantung: { n: number; rp: number };
+               tertahan: { n: number; rp: number } }[];
+    ketinggalan: { no_faktur: string; outlet: string; arah: string; tgl: string; nominal: number }[];
+    sisaKetinggalan?: number;
+    tertahanPerSebab?: { sebab: string; teks: string; n: number; rp: number }[];
+    gerbangError?: string | null;
+  } | null;
+  /** Sebab kenapa sandingan tidak bisa diambil. */
+  sandinganGagal?: string | null;
   /** Resi yang sudah lama tidak ketemu dan belum dibereskan (dari sisi gadai). */
   tunggakan: {
     no_faktur: string; outlet: string; tgl: string; nominal: number; umur: number;
@@ -217,6 +243,68 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     L.push(`      bukan nilai resi; keduanya memang berbeda.)`);
   }
   L.push("");
+
+  // ── SANDINGAN LAPIS 1 ↔ LAPIS 2, dikerjakan MESIN ──
+  //
+  // Sampai 1 Agustus 2026 ini pekerjaan MATA: buka laporan Lapis 1, buka
+  // laporan Lapis 2, bandingkan dua angka dari dua pesan. Gagal dua kali
+  // (27 dan 31 Juli), dua-duanya dengan cara yang sama — yang dibandingkan
+  // baris "Cocok dgn slip" (nilai KONTRAK, cacah KONTRAK) melawan "resi yang
+  // diuji" (nilai RESI, cacah RESI). Dua besaran yang memang tidak akan pernah
+  // sama, dan pada 30 Juli rupiahnya KEBETULAN sama persis (Rp 36.226.000)
+  // sehingga jebakannya makin meyakinkan.
+  //
+  // Peringatan tertulis sudah ada sejak 28 Juli dan tidak menolong. Pemeriksaan
+  // yang hanya benar kalau pembacanya ingat sebuah kalimat bukan pemeriksaan —
+  // ia ujian ingatan. Jadi mesin yang membandingkan, dan yang KETINGGALAN
+  // disebut namanya.
+  {
+    const s = isi.sandingan;
+    L.push(`🔗 SANDINGAN LAPIS 1 ↔ LAPIS 2`);
+    if (!s) {
+      L.push(`   🚨 TIDAK BISA DIAMBIL dari Aceh Gadai${isi.sandinganGagal ? ` — ${isi.sandinganGagal}` : ""}.`);
+      L.push(`   Tidak ada yang menjamin seluruh resi yang dilepas sampai ke sini.`);
+    } else if (s.gerbangError) {
+      L.push(`   🚨 Gerbang Lapis 1 tidak bisa menilai — angka "dilepas" tidak dapat dipercaya.`);
+    } else {
+      const t = s.total;
+      L.push(`   dilepas Lapis 1   ${String(t.dilepas.n).padStart(3)} · ${rp(t.dilepas.rp)}`);
+      L.push(`   sudah divonis     ${String(t.divonis.n).padStart(3)} · ${rp(t.divonis.rp)}`);
+      if (t.menggantung.n === 0) {
+        L.push(`   ✅ COCOK — tidak ada resi yang ketinggalan.`);
+      } else {
+        L.push(`   ⛔ KETINGGALAN    ${String(t.menggantung.n).padStart(3)} · ${rp(t.menggantung.rp)}`);
+        L.push(`      dilepas ke sini tapi belum pernah divonis:`);
+        s.ketinggalan.slice(0, 12).forEach((x) => {
+          L.push(`      • ${tgl(x.tgl)} ${x.arah} · ${x.no_faktur} · ${x.outlet} · ${rp(x.nominal)}`);
+        });
+        if (Number(s.sisaKetinggalan ?? 0) > 0) {
+          L.push(`      …dan ${s.sisaKetinggalan} lagi`);
+        }
+        // Per tanggal, HANYA yang berselisih. Tanggal yang cocok tidak perlu
+        // dicetak — ia cuma memanjangkan pesan dan menenggelamkan yang penting.
+        const bocor = s.tanggal.filter((d) => d.menggantung.n > 0);
+        if (bocor.length) {
+          L.push(`      per tanggal:`);
+          bocor.slice(0, 10).forEach((d) => {
+            L.push(`      ${tgl(d.tgl)} ${d.arah}: dilepas ${d.dilepas.n} · divonis ${d.divonis.n}` +
+                   ` · ⛔ ${d.menggantung.n}`);
+          });
+        }
+      }
+      if (t.tertahan.n > 0) {
+        L.push(`   🚧 tertahan Lapis 1 ${String(t.tertahan.n).padStart(3)} · ${rp(t.tertahan.rp)}` +
+               `  (sengaja — BUKAN ketinggalan)`);
+        (s.tertahanPerSebab ?? []).slice(0, 4).forEach((x) =>
+          L.push(`      • ${x.teks} — ${x.n} · ${rp(x.rp)}`));
+      }
+      L.push(`   ↳ angka "dilepas" datang langsung dari Aceh Gadai, bukan dihitung`);
+      L.push(`     di sini. Tidak perlu lagi menyandingkan sendiri dengan LAPIS 1 —`);
+      L.push(`     dan JANGAN memakai baris "Cocok dgn slip" untuk itu; yang itu`);
+      L.push(`     nilai KONTRAK, bukan nilai resi.`);
+    }
+    L.push("");
+  }
 
   // ── Yang tidak ketemu: nomor kontrak + outlet, bukan cacah ──
   if (nGagal > 0) {
