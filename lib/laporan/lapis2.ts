@@ -153,20 +153,61 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   }
   L.push("");
 
+  // ── VONIS, DIPERKETAT 1 Agustus 2026 ──
+  //
+  // Sampai hari ini "BERSIH" dihitung HANYA dari (tidakKetemu==0 && tunggakan==0).
+  // Akibatnya laporan 31 Juli mencetak "✅ BERSIH — semua resi ditemukan di
+  // rekening" pada saat yang sama dengan "🚧 5 resi DITAHAN Lapis 1" dan
+  // "⚠️ 1 resi berebut baris mutasi yang sama". Itu bukan salah tulis — vonisnya
+  // memang tidak pernah melihat kedua hal itu.
+  //
+  // Sebuah laporan yang berkata BERSIH sementara ada yang menggantung merusak
+  // arti kata BERSIH untuk seterusnya: sekali pembacanya tahu kata itu tidak
+  // bisa dipercaya, ia berhenti dibaca. Berlaku juga sebaliknya — kalau BERSIH
+  // jadi mustahil muncul, ia sama tidak bergunanya. Jadi yang dipakai:
+  //
+  //   BERSIH  = tidak ada satu pun resi yang menggantung DI SINI
+  //   TERTAHAN Lapis 1 TIDAK membatalkan BERSIH — itu keputusan sadar gerbang,
+  //   bukan kegagalan Lapis 2 — tapi ia WAJIB disebut di baris yang sama,
+  //   supaya "bersih" tidak pernah terbaca sebagai "semuanya sudah diuji".
+  const nKonflik = Number(isi.ditahanKonflik ?? 0);
+  const nGantung = Number(isi.sandingan?.total?.menggantung?.n ?? 0);
+  const nTahan = Number(isi.sandingan?.total?.tertahan?.n ?? isi.tertahanGerbang?.jml ?? 0);
+  // Keadaan yang membuat vonis apa pun tidak sah untuk diucapkan.
+  const takPasti: string[] = [];
+  if (isi.nganggurDiperiksa === false) takPasti.push("pemeriksaan uang tanpa pemilik tidak jalan");
+  if (isi.sandingan === null) takPasti.push("sandingan dengan Lapis 1 tidak bisa diambil");
+  if (isi.sandingan?.gerbangError) takPasti.push("gerbang Lapis 1 tidak bisa menilai");
+
+  const ekorTahan = nTahan > 0
+    ? ` (${nTahan} resi ditahan Lapis 1 — sengaja belum diuji di sini)`
+    : "";
+
   if (isi.gagal.length) {
     L.push(`🚨 VONIS: PEMERIKSAAN TIDAK TUNTAS`);
     isi.gagal.forEach((g) => L.push(`• ${g}`));
     L.push(`Jangan anggap periode ini bersih.`);
     L.push("");
-  } else if (nGagal === 0 && nTunggak === 0) {
-    L.push(`✅ VONIS: BERSIH — semua resi ditemukan di rekening.`);
+  } else if (takPasti.length) {
+    // Nol temuan pada pemeriksaan yang tidak jalan bukan "bersih" — itu
+    // "tidak diketahui", dan keduanya tidak boleh berbunyi sama.
+    L.push(`🚨 VONIS: TIDAK BISA DIPASTIKAN`);
+    takPasti.forEach((t) => L.push(`• ${t}`));
+    L.push(`Angka di bawah mungkin lengkap, mungkin tidak. Jangan dipakai menutup hari ini.`);
+    L.push("");
+  } else if (nGagal === 0 && nTunggak === 0 && nKonflik === 0 && nGantung === 0) {
+    L.push(`✅ VONIS: BERSIH — semua resi ditemukan di rekening.${ekorTahan}`);
     L.push("");
   } else {
     const bagian = [
       nGagal > 0 ? `${nGagal} resi tidak ditemukan` : "",
       nTunggak > 0 ? `${nTunggak} tunggakan lama` : "",
+      // Dua sebab yang DULU tidak pernah ikut menentukan vonis, padahal
+      // dua-duanya berarti ada resi yang tidak dijawab siapa pun.
+      nKonflik > 0 ? `${nKonflik} resi berebut baris mutasi` : "",
+      nGantung > 0 ? `${nGantung} resi belum divonis` : "",
     ].filter(Boolean).join(" + ");
-    L.push(`⚠️ VONIS: ${bagian}`);
+    L.push(`⚠️ VONIS: ${bagian}${ekorTahan}`);
     L.push("");
   }
 
