@@ -147,11 +147,15 @@ export function BelumCocokClient() {
                     {it.status && it.status !== "UNMATCHED" && (
                       <span className={
                         "rounded px-1.5 py-0.5 text-[11px] font-medium " +
-                        (it.status === "DUPLIKAT"
-                          ? "bg-amber-100 text-amber-800"
-                          : "bg-violet-100 text-violet-700")
+                        (it.status === "BUKTI_BEDA"
+                          ? "bg-red-600 text-white"
+                          : it.status === "DUPLIKAT"
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-violet-100 text-violet-700")
                       }>
-                        {it.status === "DUPLIKAT" ? "resi dobel" : "belum divonis"}
+                        {it.status === "BUKTI_BEDA"
+                          ? "⛔ bukti foto beda"
+                          : it.status === "DUPLIKAT" ? "resi dobel" : "belum divonis"}
                       </span>
                     )}
                   </div>
