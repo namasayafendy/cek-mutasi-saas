@@ -138,10 +138,29 @@ export function BelumCocokClient() {
                       {(it.arah ?? "KREDIT") === "DEBET" ? "uang KELUAR" : "uang MASUK"}
                     </span>
                     <span className="truncate font-medium text-slate-900">{it.no_faktur}</span>
+                    {/* SEBAB, bukan cuma "belum cocok".
+                        Daftar ini sekarang memuat TIGA keadaan yang menuntut
+                        tindakan berbeda: uangnya belum ketemu, resinya dipakai
+                        kontrak lain, atau ia kalah berebut baris dan tidak
+                        pernah divonis. Tanpa penanda ini ketiganya terlihat
+                        sama dan yang paling gawat tenggelam. */}
+                    {it.status && it.status !== "UNMATCHED" && (
+                      <span className={
+                        "rounded px-1.5 py-0.5 text-[11px] font-medium " +
+                        (it.status === "DUPLIKAT"
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-violet-100 text-violet-700")
+                      }>
+                        {it.status === "DUPLIKAT" ? "resi dobel" : "belum divonis"}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
                     {it.outlet} · {tglID(it.tgl)} · {it.umur} hari menggantung
                   </div>
+                  {it.sebab && (
+                    <div className="mt-0.5 text-xs text-slate-400">{it.sebab}</div>
+                  )}
                 </div>
                 <div className="shrink-0 text-right font-semibold text-slate-900">{rp(it.nominal)}</div>
               </div>

@@ -57,6 +57,13 @@ export interface BarisBelumCocok {
   umur: number;
   arah?: string;
   jenis?: string;
+  /** Status mentah klaim di gadai: UNMATCHED | DUPLIKAT | PENDING. */
+  status?: string;
+  /** Sebab dalam bahasa pemilik — tiap sebab menuntut tindakan berbeda:
+   *  "tidak ada di rekening"            -> uangnya belum ketemu
+   *  "resi dipakai kontrak lain (dobel)" -> satu resi diklaim dua kontrak
+   *  "belum pernah divonis…"             -> kalah berebut baris / di luar periode */
+  sebab?: string;
 }
 
 export interface KandidatMutasi {
@@ -86,7 +93,41 @@ export async function ambilBelumCocok(): Promise<
   const k = await konfigGadai();
   if (!k) return { ok: false, msg: "Sinkronisasi Aceh Gadai belum dikonfigurasi." };
   try {
-    const res = await fetch(`${k.base}/api/transfer-klaim/tunggakan?sejak=${LANTAI}`, {
+    // ── SAMPAI TANGGAL BERAPA MUTASI SUDAH ADA DI SINI ──
+    //
+    // Gadai tidak tahu ini, dan tanpa memberitahunya ia tidak bisa membedakan
+    // resi yang MENGGANTUNG dari resi yang sekadar sedang MENUNGGU giliran.
+    // Menagih yang sedang menunggu = alarm palsu tiap hari, dan alarm palsu
+    // adalah cara paling pasti membuat layar ini berhenti dibuka.
+    //
+    // Diambil MAX(tgl_akhir) seluruh rekening. Dengan satu rekening ini tepat;
+    // kalau nanti ada rekening kedua yang tertinggal jauh, batas ini terlalu
+    // maju untuk rekening itu — saat itu ia perlu dipisah per bank.
+    let tercakup: string | null = null;
+    try {
+      const ctx = await getAccountContext();
+      if (ctx) {
+        const db = await createClient();
+        const { data } = await db
+          .from("mutasi_coverage")
+          .select("tgl_akhir")
+          .eq("account_id", ctx.account.id)
+          .order("tgl_akhir", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const t = (data as any)?.tgl_akhir;
+        if (t) tercakup = String(t).slice(0, 10);
+      }
+    } catch (e) {
+      // Gagal membaca cakupan bukan alasan menggagalkan daftarnya. Tanpa
+      // `tercakup`, gadai hanya mengirim UNMATCHED + DUPLIKAT — perilaku lama
+      // yang aman, bukan diam.
+      console.error("[belum-cocok] gagal baca cakupan mutasi:", e);
+    }
+
+    const res = await fetch(
+      `${k.base}/api/transfer-klaim/tunggakan?sejak=${LANTAI}` +
+      (tercakup ? `&tercakup=${tercakup}` : ""), {
       headers: { Authorization: `Bearer ${k.key}` },
       cache: "no-store",
       signal: AbortSignal.timeout(15000),

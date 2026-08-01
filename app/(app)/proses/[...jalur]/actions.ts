@@ -317,7 +317,13 @@ async function susunLaporanLapis2(
         sandinganGagal = "periode berkas tidak terbaca";
       }
 
-      const res = await fetch(`${base}/api/transfer-klaim/tunggakan?sejak=${LANTAI_LAPIS2}`, {
+      // `tercakup` = tanggal terakhir yang mutasinya ADA di berkas ini. Dengan
+      // itu gadai bisa ikut menyertakan resi yang MENGGANTUNG (kalah berebut
+      // baris, di luar periode) dan resi DOBEL — bukan cuma yang sudah divonis
+      // "tidak ada di rekening". Tanpanya ia mengirim daftar lama yang aman.
+      const res = await fetch(
+        `${base}/api/transfer-klaim/tunggakan?sejak=${LANTAI_LAPIS2}` +
+        (sSampai ? `&tercakup=${sSampai}` : ""), {
         headers: { Authorization: `Bearer ${c.gadai_api_key}` },
         cache: "no-store",
         signal: AbortSignal.timeout(8000),
