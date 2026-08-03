@@ -321,6 +321,7 @@ export async function terimaBuktiBeda(klaimId: string, alasan: string) {
 export async function cocokkanManual(
   klaimId: string,
   catatan: string,
+  /** WAJIB. Baris mutasi yang dipilih pemilik — tanpa ini penutupan ditolak. */
   barisId?: string,
   /** Nama outlet milik klaim ini, untuk mengisi kolom OUTLET di /history. */
   outletKlaim?: string,
@@ -347,8 +348,26 @@ export async function cocokkanManual(
   // Urutannya: KLAIM DULU di sini (compare-and-set, jadi rebutan kalah dengan
   // bersih), baru kabari gadai. Kalau gadai menolak, klaimnya DIBATALKAN lagi
   // supaya bisa diulang — lebih baik gagal utuh daripada setengah jadi.
+  // BARIS WAJIB ADA. Dulu parameter ini opsional, dan itu melahirkan kegagalan
+  // senyap yang justru ingin ditutup: halaman yang sudah terbuka SEBELUM deploy
+  // masih memanggil dengan dua argumen saja, `barisId` kosong, penguncian
+  // dilewati diam-diam, dan gadai tetap dikabari "cocok". Hasilnya klaim
+  // MATCHED dengan baris mutasi yang masih bebas — SJB-1-0112, 3 Agu 2026.
+  //
+  // Menutup TANPA baris bukan makna tombol ini: tombolnya sendiri mati kalau
+  // belum ada yang dipilih. Jadi ketiadaan baris di sini SELALU berarti ada
+  // yang salah, bukan pilihan pemilik. Menolak dengan berisik jauh lebih baik
+  // daripada menerima setengah.
+  if (!barisId) {
+    return {
+      ok: false,
+      msg: "Baris mutasinya tidak ikut terkirim — halaman ini kemungkinan versi lama. " +
+           "Muat ulang halaman (Ctrl+R), pilih lagi barisnya, baru tutup.",
+    };
+  }
+
   let inputId: string | null = null;
-  if (barisId) {
+  {
     const now = new Date().toISOString();
     const { data: tx } = await k.db
       .from("parsed_transactions")
@@ -428,7 +447,7 @@ export async function cocokkanManual(
     return {
       ok: true,
       msg: (j.msg ?? "Ditandai cocok di Aceh Gadai.") +
-           (barisId ? " Baris mutasinya ikut ditandai di Riwayat." : ""),
+           " Baris mutasinya ikut ditandai di Riwayat.",
     };
   } catch (e) {
     await batalkanKlaimLokal(k, inputId, barisId);
