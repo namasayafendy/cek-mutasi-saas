@@ -318,12 +318,97 @@ export async function terimaBuktiBeda(klaimId: string, alasan: string) {
  * dipegang input ketikan tangan). Karena itu ia menandai klaimnya cocok di
  * sisi gadai.
  */
-export async function cocokkanManual(klaimId: string, catatan: string) {
+export async function cocokkanManual(
+  klaimId: string,
+  catatan: string,
+  barisId?: string,
+  /** Nama outlet milik klaim ini, untuk mengisi kolom OUTLET di /history. */
+  outletKlaim?: string,
+) {
   const k = await konfigGadai();
   if (!k) return { ok: false, msg: "Sinkronisasi belum dikonfigurasi." };
   if (catatan.trim().length < 10) {
     return { ok: false, msg: "Catatan wajib diisi minimal 10 huruf — sebutkan baris mutasi mana yang cocok." };
   }
+
+  // ── BARIS YANG DIPILIH IKUT DIKLAIM DI SINI, BUKAN CUMA DI GADAI ──
+  //
+  // Versi lama hanya mengabari gadai "klaim ini cocok" dan MEMBUANG baris mutasi
+  // yang dipilih pemilik — parameternya bahkan tidak pernah dikirim. Dua akibat,
+  // dan yang kedua jauh lebih berbahaya daripada yang dikeluhkan:
+  //
+  //   1. Di /history barisnya tetap tertulis "belum match", padahal pemilik baru
+  //      saja menutupnya. Itu yang terlihat.
+  //   2. Barisnya tetap BEBAS, jadi klaim lain masih bisa mengambilnya —
+  //      satu uang dipakai membuktikan dua transaksi. Itulah bentuk penipuan
+  //      resi-kembar yang seluruh sistem ini dibangun untuk menangkapnya, dan
+  //      jalur manual melewatinya diam-diam.
+  //
+  // Urutannya: KLAIM DULU di sini (compare-and-set, jadi rebutan kalah dengan
+  // bersih), baru kabari gadai. Kalau gadai menolak, klaimnya DIBATALKAN lagi
+  // supaya bisa diulang — lebih baik gagal utuh daripada setengah jadi.
+  let inputId: string | null = null;
+  if (barisId) {
+    const now = new Date().toISOString();
+    const { data: tx } = await k.db
+      .from("parsed_transactions")
+      .select("id, bank_id, tanggal, nominal_kredit, nominal_debet, claimed_by_input_id")
+      .eq("id", barisId).eq("account_id", k.ctx.account.id).maybeSingle();
+    if (!tx) return { ok: false, msg: "Baris mutasi tidak ditemukan." };
+    if ((tx as any).claimed_by_input_id) {
+      return { ok: false, msg: "Baris mutasi itu sudah dipegang klaim lain. Muat ulang dan pilih baris lain." };
+    }
+
+    const kredit = Number((tx as any).nominal_kredit || 0);
+    const jenis = kredit > 0 ? "kredit" : "debet";
+
+    // Outlet dicocokkan lewat NAMA, sama seperti penarik klaim. Tanpa ini kolom
+    // OUTLET di /history tampil "—" untuk baris yang jelas punya pemilik.
+    let outletId: string | null = null;
+    try {
+      const nm = (x: string) => String(x ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+      const { data: outs } = await k.db.from("outlets").select("id, nama").eq("account_id", k.ctx.account.id);
+      const cari = nm(outletKlaim ?? "");
+      const ket = (outs ?? []).find((o: any) => nm(o.nama) === cari);
+      if (ket) outletId = String((ket as any).id);
+    } catch { /* outlet tak ketemu bukan alasan menggagalkan penutupan */ }
+
+    const { data: ins, error: insErr } = await k.db
+      .from("cek_inputs")
+      .insert({
+        session_id: null,
+        account_id: k.ctx.account.id,
+        tanggal_input: String((tx as any).tanggal ?? "").slice(0, 10),
+        outlet_id: outletId,
+        bank_id: (tx as any).bank_id ?? null,
+        nominal: kredit > 0 ? kredit : Number((tx as any).nominal_debet || 0),
+        jenis,
+        match_status: "manual_claimed",
+        matched_tx_id: barisId,
+        matched_by: "COCOK_MANUAL",
+        manual_claim_reason: catatan.trim(),
+        manual_claimed_at: now,
+        // Supaya pencari kandidat bisa menyebut SIAPA pemegangnya, bukan cuma
+        // "sudah dipakai" — pelajaran dari TFKD-367 yang menyambar baris milik
+        // outlet lain dan baru bisa dilihat setelah namanya disebut.
+        gadai_klaim_id: klaimId,
+      })
+      .select("id").single();
+    if (insErr || !ins) return { ok: false, msg: `Gagal mencatat penutupan: ${insErr?.message ?? "unknown"}` };
+    inputId = String((ins as any).id);
+
+    const { data: upd, error: updErr } = await k.db
+      .from("parsed_transactions")
+      .update({ claimed_by_input_id: inputId, claimed_at: now, manual_claim_reason: catatan.trim() })
+      .eq("id", barisId)
+      .is("claimed_by_input_id", null)   // ada yang menyambar duluan -> kalah bersih
+      .select("id");
+    if (updErr || !upd || upd.length === 0) {
+      await k.db.from("cek_inputs").delete().eq("id", inputId);
+      return { ok: false, msg: "Baris mutasi itu baru saja dipegang klaim lain. Muat ulang dan pilih baris lain." };
+    }
+  }
+
   try {
     const res = await fetch(`${k.base}/api/transfer-klaim/manual`, {
       method: "POST",
@@ -332,10 +417,31 @@ export async function cocokkanManual(klaimId: string, catatan: string) {
       signal: AbortSignal.timeout(15000),
     });
     const j = await res.json().catch(() => ({}));
-    if (!res.ok || !j?.ok) return { ok: false, msg: j?.msg ?? `Gagal (HTTP ${res.status}).` };
-    return { ok: true, msg: j.msg ?? "Ditandai cocok di Aceh Gadai." };
+    if (!res.ok || !j?.ok) {
+      await batalkanKlaimLokal(k, inputId, barisId);
+      return { ok: false, msg: j?.msg ?? `Gagal (HTTP ${res.status}).` };
+    }
+    return {
+      ok: true,
+      msg: (j.msg ?? "Ditandai cocok di Aceh Gadai.") +
+           (barisId ? " Baris mutasinya ikut ditandai di Riwayat." : ""),
+    };
   } catch (e) {
+    await batalkanKlaimLokal(k, inputId, barisId);
     return { ok: false, msg: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Lepas kembali baris mutasi kalau gadai menolak — supaya bisa diulang. */
+async function batalkanKlaimLokal(k: any, inputId: string | null, barisId?: string) {
+  if (!inputId || !barisId) return;
+  try {
+    await k.db.from("parsed_transactions")
+      .update({ claimed_by_input_id: null, claimed_at: null, manual_claim_reason: null })
+      .eq("id", barisId).eq("claimed_by_input_id", inputId);
+    await k.db.from("cek_inputs").delete().eq("id", inputId);
+  } catch (e) {
+    console.error("[belum-cocok] gagal melepas klaim lokal:", e);
   }
 }
 

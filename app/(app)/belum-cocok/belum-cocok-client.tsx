@@ -94,7 +94,11 @@ export function BelumCocokClient() {
         ? await batalkanKlaim(buka.klaim_id, catatan)
         : aksi === "TERIMA"
           ? await terimaBuktiBeda(buka.klaim_id, catatan)
-          : await cocokkanManual(buka.klaim_id, catatan);
+          // Baris yang dipilih IKUT dikirim. Tanpa ini penutupan hanya
+          // menandai klaim di gadai sementara baris mutasinya tetap bebas —
+          // di /history tertulis "belum match", dan yang lebih berbahaya:
+          // baris itu masih bisa direbut klaim lain.
+          : await cocokkanManual(buka.klaim_id, catatan, pilih?.id, buka.outlet);
       if (!r.ok) setError(r.msg);
       else { setOkMsg(r.msg); tutup(); await segarkan(); }
     });
