@@ -180,13 +180,29 @@ export async function cariKandidat(
    * dan satu-satunya pilihan tersisa adalah menuliskan sesuatu yang salah.
    */
   nominalCari?: number,
+  /**
+   * Tanggal yang DICARI, kalau berbeda dari tanggal klaim.
+   *
+   * Dibutuhkan karena tanggal klaim adalah tanggal KONTRAK, sedangkan uangnya
+   * mendarat pada tanggal SLIP — dan keduanya bisa berjauhan. Kejadian nyata:
+   * SBR-1-0314 Rp 800.000, kontrak ditutup 1 Agustus tapi konsumen mentransfer
+   * 26 Juli. Jendela bawaan ±4 hari berjangkar di 1 Agustus, jadi baris 26 Juli
+   * MUSTAHIL muncul — pemilik melihat "tidak ada kandidat" untuk uang yang
+   * jelas-jelas ada di rekening, dan tidak punya satu pun cara menutupnya.
+   *
+   * (Sejak 3 Agustus klaim BARU sudah memakai tanggal slip, jadi ini terutama
+   * untuk klaim lama dan untuk slip yang tanggalnya gagal terbaca AI.)
+   */
+  tglCari?: string,
 ): Promise<{ ok: true; items: KandidatMutasi[] } | { ok: false; msg: string }> {
   const k = await konfigGadai();
   if (!k) return { ok: false, msg: "Sinkronisasi belum dikonfigurasi." };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return { ok: false, msg: "Tanggal tidak dikenali." };
+  const pakaiTgl = typeof tglCari === "string" && /^\d{4}-\d{2}-\d{2}$/.test(tglCari);
+  const jangkar = pakaiTgl ? (tglCari as string) : tgl;
 
   const geser = (n: number) => {
-    const d = new Date(`${tgl}T00:00:00Z`);
+    const d = new Date(`${jangkar}T00:00:00Z`);
     d.setUTCDate(d.getUTCDate() + n);
     return d.toISOString().slice(0, 10);
   };
@@ -204,8 +220,11 @@ export async function cariKandidat(
       .from("parsed_transactions")
       .select(`id, tanggal, jam, ${kolom}, nama_pengirim, nama_penerima, no_ref, claimed_by_input_id`)
       .eq("account_id", k.ctx.account.id)
-      .gte("tanggal", geser(-JENDELA_HARI))
-      .lte("tanggal", geser(JENDELA_HARI))
+      // Kalau pemilik menyebut tanggal sendiri, jendelanya dipersempit jadi
+      // ±1 hari: ia sedang MENUNJUK hari tertentu, bukan menebak-nebak, dan
+      // jendela lebar hanya akan mengubur barisnya di antara baris lain.
+      .gte("tanggal", geser(pakaiTgl ? -1 : -JENDELA_HARI))
+      .lte("tanggal", geser(pakaiTgl ? 1 : JENDELA_HARI))
       .gte(kolom, Math.max(1, target - TOLERANSI))
       .lte(kolom, target + TOLERANSI)
       .order("tanggal", { ascending: true })

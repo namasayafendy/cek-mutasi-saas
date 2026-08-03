@@ -40,6 +40,7 @@ export function BelumCocokClient() {
   const [pilih, setPilih] = useState<KandidatMutasi | null>(null);
   const [aksi, setAksi] = useState<"" | "COCOK" | "BATAL" | "TERIMA">("");
   const [cariLain, setCariLain] = useState("");
+  const [cariTgl, setCariTgl] = useState("");
   const [catatan, setCatatan] = useState("");
   const [sibuk, mulai] = useTransition();
 
@@ -58,7 +59,7 @@ export function BelumCocokClient() {
   }
 
   async function bukaBaris(it: BarisBelumCocok) {
-    setBuka(it); setKandidat(null); setPilih(null); setAksi(""); setCatatan(""); setError(""); setCariLain("");
+    setBuka(it); setKandidat(null); setPilih(null); setAksi(""); setCatatan(""); setError(""); setCariLain(""); setCariTgl("");
     const r = await cariKandidat(it.tgl, it.nominal, it.arah ?? "KREDIT");
     if (r.ok) setKandidat(r.items);
     else { setKandidat([]); setError(r.msg); }
@@ -67,12 +68,20 @@ export function BelumCocokClient() {
   /** Cari ulang dengan nominal yang disebut sendiri — untuk satu transfer yang
    *  menutup beberapa permintaan sekaligus (mis. permintaan 4jt + 1jt yang
    *  ditransfer sekali 5jt). */
-  async function cariNominalLain() {
+  /** Cari ulang dengan nominal DAN/ATAU tanggal yang disebut sendiri.
+   *
+   *  Tanggalnya perlu karena tanggal klaim adalah tanggal KONTRAK, sedangkan
+   *  uangnya mendarat pada tanggal SLIP. SBR-1-0314: kontrak 1 Agustus, transfer
+   *  26 Juli — jendela bawaan ±4 hari tidak akan pernah menjangkaunya, jadi
+   *  pemilik melihat "tidak ada kandidat" untuk uang yang jelas ada. */
+  async function cariUlang() {
     if (!buka) return;
     const n = Math.round(Number(cariLain.replace(/[^\d]/g, "") || 0));
-    if (!(n > 0)) return;
+    const t = /^\d{4}-\d{2}-\d{2}$/.test(cariTgl) ? cariTgl : undefined;
+    if (!(n > 0) && !t) return;
     setKandidat(null); setPilih(null); setError("");
-    const r = await cariKandidat(buka.tgl, buka.nominal, buka.arah ?? "KREDIT", n);
+    const r = await cariKandidat(buka.tgl, buka.nominal, buka.arah ?? "KREDIT",
+                                 n > 0 ? n : undefined, t);
     if (r.ok) setKandidat(r.items);
     else { setKandidat([]); setError(r.msg); }
   }
@@ -217,24 +226,44 @@ export function BelumCocokClient() {
                 4jt tidak akan pernah menemukan baris 5jt lewat pencarian
                 bawaan, dan tanpa jalan ini penutupan yang benar mustahil —
                 yang tersisa cuma menuliskan sesuatu yang salah. */}
-            <div className="mb-3 flex items-center gap-2 rounded-lg bg-slate-50 p-2">
-              <span className="text-xs text-slate-600">Cari nominal lain:</span>
-              <input
-                value={cariLain}
-                onChange={(e) => setCariLain(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") void cariNominalLain(); }}
-                placeholder="mis. 5000000"
-                inputMode="numeric"
-                className="w-36 rounded border border-slate-300 px-2 py-1 text-sm"
-              />
-              <button onClick={() => void cariNominalLain()} className="btn-secondary text-xs">Cari</button>
-              {cariLain && (
-                <button
-                  onClick={() => { setCariLain(""); void bukaBaris(buka); }}
-                  className="text-xs text-slate-500 underline"
-                >
-                  kembali ke nominal resi
-                </button>
+            <div className="mb-3 space-y-2 rounded-lg bg-slate-50 p-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-slate-600">Cari nominal lain:</span>
+                <input
+                  value={cariLain}
+                  onChange={(e) => setCariLain(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") void cariUlang(); }}
+                  placeholder="mis. 5000000"
+                  inputMode="numeric"
+                  className="w-36 rounded border border-slate-300 px-2 py-1 text-sm"
+                />
+              </div>
+              {/* TANGGAL SLIP, bukan tanggal kontrak. Keduanya bisa berjauhan:
+                  SBR-1-0314 ditutup 1 Agustus tapi konsumennya transfer 26 Juli,
+                  dan jendela bawaan ±4 hari tidak akan pernah menjangkaunya. */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-slate-600">Cari tanggal lain:</span>
+                <input
+                  type="date"
+                  value={cariTgl}
+                  onChange={(e) => setCariTgl(e.target.value)}
+                  className="rounded border border-slate-300 px-2 py-1 text-sm"
+                />
+                <button onClick={() => void cariUlang()} className="btn-secondary text-xs">Cari</button>
+                {(cariLain || cariTgl) && (
+                  <button
+                    onClick={() => { setCariLain(""); setCariTgl(""); void bukaBaris(buka); }}
+                    className="text-xs text-slate-500 underline"
+                  >
+                    kembali ke bawaan
+                  </button>
+                )}
+              </div>
+              {cariTgl && (
+                <div className="text-[11px] text-slate-500">
+                  Dicari di {tglID(cariTgl)} ±1 hari — pakai tanggal yang tertulis di SLIP,
+                  bukan tanggal kontraknya.
+                </div>
               )}
             </div>
             <p className="mb-3 text-xs text-slate-500">
