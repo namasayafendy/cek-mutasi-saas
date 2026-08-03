@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 import {
-  ambilBelumCocok, cariKandidat, cocokkanManual, batalkanKlaim,
+  ambilBelumCocok, cariKandidat, cocokkanManual, batalkanKlaim, terimaBuktiBeda,
   type BarisBelumCocok, type KandidatMutasi,
 } from "./actions";
 
@@ -38,7 +38,7 @@ export function BelumCocokClient() {
   const [buka, setBuka] = useState<BarisBelumCocok | null>(null);
   const [kandidat, setKandidat] = useState<KandidatMutasi[] | null>(null);
   const [pilih, setPilih] = useState<KandidatMutasi | null>(null);
-  const [aksi, setAksi] = useState<"" | "COCOK" | "BATAL">("");
+  const [aksi, setAksi] = useState<"" | "COCOK" | "BATAL" | "TERIMA">("");
   const [cariLain, setCariLain] = useState("");
   const [catatan, setCatatan] = useState("");
   const [sibuk, mulai] = useTransition();
@@ -83,7 +83,9 @@ export function BelumCocokClient() {
       setError(""); setOkMsg("");
       const r = aksi === "BATAL"
         ? await batalkanKlaim(buka.klaim_id, catatan)
-        : await cocokkanManual(buka.klaim_id, catatan);
+        : aksi === "TERIMA"
+          ? await terimaBuktiBeda(buka.klaim_id, catatan)
+          : await cocokkanManual(buka.klaim_id, catatan);
       if (!r.ok) setError(r.msg);
       else { setOkMsg(r.msg); tutup(); await segarkan(); }
     });
@@ -287,33 +289,64 @@ export function BelumCocokClient() {
           </div>
 
           {aksi === "" ? (
-            <div className="flex gap-2">
-              <button
-                onClick={() => setAksi("COCOK")}
-                disabled={!pilih}
-                className="btn-primary flex-1 text-sm disabled:opacity-40"
-              >
-                ✓ Cocokkan ke baris terpilih
-              </button>
-              <button onClick={() => { setAksi("BATAL"); setCatatan(""); }} className="btn-secondary flex-1 text-sm">
-                Batalkan (salah catat)
-              </button>
+            <div className="space-y-2">
+              {/* BUKTI FOTO BEDA punya pertanyaan yang BERBEDA, jadi tombolnya
+                  juga berbeda. Untuk baris ini uangnya BIASANYA sudah ketemu di
+                  rekening — yang dipertanyakan cuma fotonya. Tanpa tombol ini
+                  baris seperti SJB-2-0085 muncul selamanya tanpa satu pun cara
+                  menutupnya, dan daftar yang tak bisa dituntaskan berhenti dibaca. */}
+              {buka.status === "BUKTI_BEDA" && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <div className="text-xs text-amber-900">
+                    {buka.status_asli === "MATCHED"
+                      ? "Uangnya SUDAH ketemu di rekening. Yang dipertanyakan hanya fotonya:"
+                      : "Yang dipertanyakan di sini adalah fotonya:"}{" "}
+                    <span className="font-medium">{buka.sebab}</span>
+                  </div>
+                  <button
+                    onClick={() => { setAksi("TERIMA"); setCatatan(""); }}
+                    className="btn-secondary mt-2 w-full text-sm"
+                  >
+                    ✓ Sudah saya periksa — anggap beres
+                  </button>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setAksi("COCOK")}
+                  disabled={!pilih}
+                  className="btn-primary flex-1 text-sm disabled:opacity-40"
+                >
+                  ✓ Cocokkan ke baris terpilih
+                </button>
+                <button onClick={() => { setAksi("BATAL"); setCatatan(""); }} className="btn-secondary flex-1 text-sm">
+                  Batalkan (salah catat)
+                </button>
+              </div>
             </div>
           ) : (
             <div className="card p-4">
               <div className="mb-2 font-medium text-slate-900">
-                {aksi === "BATAL" ? "Batalkan — resi ini tidak pernah ada" : "Cocokkan manual"}
+                {aksi === "BATAL" ? "Batalkan — resi ini tidak pernah ada"
+                 : aksi === "TERIMA" ? "Sudah saya periksa — bukti fotonya wajar"
+                 : "Cocokkan manual"}
               </div>
               <p className="mb-3 text-xs text-slate-600">
                 {aksi === "BATAL"
                   ? "Pakai ini HANYA kalau resinya memang salah catat: salah ketik, AI membaca slip hantu, atau tercatat dua kali. JANGAN dipakai untuk resi yang benar ada tapi tidak ketemu — itu tuduhan uang hilang, dan membatalkannya menghapus pertanyaannya, bukan menjawabnya. Klaimnya tidak dihapus, hanya dicabut daya buktinya, dan transaksinya bisa kembali terbuka di Lapis 1."
+                  : aksi === "TERIMA"
+                  ? "Ini TIDAK mengubah apa pun tentang uangnya — vonis fotonya tetap tercatat apa adanya selamanya. Yang Bapak nyatakan hanya: sudah diperiksa dan wajar, jadi berhenti ditagihkan. Alasannya disimpan bersama nama dan waktunya. Kalau uangnya sendiri BELUM ketemu di rekening, Aceh Gadai akan menolak — untuk itu pakai 'Cocokkan'."
                   : "Bapak menyatakan baris mutasi di atas memang milik resi ini. Klaimnya akan ditandai cocok di Aceh Gadai."}
               </p>
               <textarea
                 value={catatan}
                 onChange={(e) => setCatatan(e.target.value)}
                 rows={3}
-                placeholder={aksi === "BATAL" ? "Kenapa resi ini dianggap tidak pernah ada?" : "Baris mutasi mana yang cocok?"}
+                placeholder={
+                  aksi === "BATAL" ? "Kenapa resi ini dianggap tidak pernah ada?"
+                  : aksi === "TERIMA" ? "Apa yang Bapak periksa? (mis. rekening di foto memang milik penerima yang benar)"
+                  : "Baris mutasi mana yang cocok?"
+                }
                 className="w-full rounded-lg border border-slate-300 p-2 text-sm"
               />
               <div className="mt-1 text-xs text-slate-400">
@@ -326,7 +359,7 @@ export function BelumCocokClient() {
                   disabled={sibuk || !catatanCukup}
                   className={
                     "flex-1 text-sm disabled:opacity-40 " +
-                    (aksi === "BATAL" ? "btn-secondary" : "btn-primary")
+                    (aksi === "COCOK" ? "btn-primary" : "btn-secondary")
                   }
                 >
                   {sibuk ? "Menyimpan…" : "Simpan"}

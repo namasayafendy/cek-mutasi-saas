@@ -57,8 +57,11 @@ export interface BarisBelumCocok {
   umur: number;
   arah?: string;
   jenis?: string;
-  /** Status mentah klaim di gadai: UNMATCHED | DUPLIKAT | PENDING. */
+  /** Status mentah klaim di gadai: UNMATCHED | DUPLIKAT | PENDING | BUKTI_BEDA. */
   status?: string;
+  /** Status SEBENARNYA klaim itu. Untuk BUKTI_BEDA biasanya MATCHED — uangnya
+   *  sudah ketemu, yang dipertanyakan cuma fotonya. */
+  status_asli?: string;
   /** Sebab dalam bahasa pemilik — tiap sebab menuntut tindakan berbeda:
    *  "tidak ada di rekening"            -> uangnya belum ketemu
    *  "resi dipakai kontrak lain (dobel)" -> satu resi diklaim dua kontrak
@@ -243,6 +246,46 @@ export async function cariKandidat(
         };
       }),
     };
+  } catch (e) {
+    return { ok: false, msg: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Nyatakan bukti foto yang MEMBANTAH permintaannya sudah diperiksa.
+ *
+ * BUKAN penutupan "uangnya ketemu" — untuk itu ada cocokkanManual. Ini menutup
+ * pertanyaan yang BERBEDA: uangnya sudah ketemu di rekening, tapi FOTO buktinya
+ * menunjuk nominal atau rekening lain. Hanya manusia yang bisa memutuskan
+ * apakah itu wajar.
+ *
+ * Kejadian yang melahirkannya: SJB-2-0085 — rekening di foto 7182468201, yang
+ * diminta 901002299804, sementara Rp 1 juta-nya sudah jelas diklaim Langsa dan
+ * benar. Tidak ada aturan yang bisa menyimpulkan itu, dan sebelum ini tidak ada
+ * tombolnya — jadi ia muncul terus dan pemiliknya tidak bisa berbuat apa-apa.
+ *
+ * Sisi gadai menolak kalau klaimnya masih UNMATCHED: kalau uangnya sendiri
+ * belum ketemu, yang belum terjawab bukan fotonya.
+ */
+export async function terimaBuktiBeda(klaimId: string, alasan: string) {
+  const k = await konfigGadai();
+  if (!k) return { ok: false, msg: "Sinkronisasi belum dikonfigurasi." };
+  if (alasan.trim().length < 10) {
+    return { ok: false, msg: "Alasan wajib diisi minimal 10 huruf — sebutkan apa yang Bapak periksa." };
+  }
+  try {
+    const res = await fetch(`${k.base}/api/transfer-klaim/terima-bukti`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${k.key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ klaimId, alasan: alasan.trim() }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(15000),
+    });
+    const j = await res.json().catch(() => null);
+    if (!res.ok || !j?.ok) {
+      return { ok: false, msg: j?.msg ?? `Gagal (HTTP ${res.status}).` };
+    }
+    return { ok: true, msg: j.msg ?? "Ditandai sudah diperiksa." };
   } catch (e) {
     return { ok: false, msg: e instanceof Error ? e.message : String(e) };
   }
