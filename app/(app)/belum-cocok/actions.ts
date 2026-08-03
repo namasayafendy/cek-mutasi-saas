@@ -385,7 +385,11 @@ export async function cocokkanManual(
         jenis,
         match_status: "manual_claimed",
         matched_tx_id: barisId,
-        matched_by: "COCOK_MANUAL",
+        // matched_by SENGAJA dibiarkan kosong. Kolom itu berarti CARA MESIN
+        // mencocokkan (REF / NAMA_JAM / NOMINAL); penutupan tangan bukan salah
+        // satunya, dan layar sudah menampilkan "COCOK MANUAL" dari
+        // manual_claim_reason. Mengisinya cuma melahirkan bentuk kedua yang
+        // mirip tapi beda dengan baris yang sudah ada dari modal /history.
         manual_claim_reason: catatan.trim(),
         manual_claimed_at: now,
         // Supaya pencari kandidat bisa menyebut SIAPA pemegangnya, bukan cuma
