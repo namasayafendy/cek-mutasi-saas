@@ -136,6 +136,13 @@ export interface IsiLapis2 {
       divonisTgl: { n: number; rp: number };
       /** true = tanggal ini baru pertama kali dinilai (aliran hari ini). */
       pertamaKali?: boolean;
+      /** Diputus MANUSIA di /belum-cocok, bukan mesin. Inilah yang menjelaskan
+       *  kenapa cacah di sini bisa LEBIH BESAR daripada "SUSULAN" di LAPIS 1:
+       *  yang ditutup tangan pada sela dua laporan tidak pernah terlihat di
+       *  potret pagi Lapis 1. Tanpa angka ini, selisihnya terbaca kebocoran. */
+      ditutupTangan?: { n: number; rp: number };
+      /** Resinya diketik sendiri di Lapis 1, bukan dibaca dari foto. */
+      diketikTangan?: { n: number; rp: number };
       rinci?: { MATCHED?: { n: number; rp: number };
                 UNMATCHED?: { n: number; rp: number };
                 DUPLIKAT?: { n: number; rp: number };
@@ -355,6 +362,7 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
                     *  vonis semacam itu akan mencetak "35 resi" lalu memerinci
                     *  34 — jumlah yang tidak tutup, persis yang dilarang. */
                    lain: { n: number; rp: number };
+                   tangan: { n: number; rp: number }; ketik: { n: number; rp: number };
                    dariN: number; dariRp: number; pertamaKali: boolean };
     const gab = (a?: { n: number; rp: number }, b?: { n: number; rp: number }) => ({
       n: Number(a?.n ?? 0) + Number(b?.n ?? 0), rp: Number(a?.rp ?? 0) + Number(b?.rp ?? 0) });
@@ -376,6 +384,8 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
           ada: d.rinci?.MATCHED ?? { n: 0, rp: 0 },
           tak: d.rinci?.UNMATCHED ?? { n: 0, rp: 0 },
           lain: gab(d.rinci?.DUPLIKAT, d.rinci?.DIBATALKAN),
+          tangan: d.ditutupTangan ?? { n: 0, rp: 0 },
+          ketik: d.diketikTangan ?? { n: 0, rp: 0 },
           dariN: Number(d.divonisTgl?.n ?? 0), dariRp: Number(d.divonisTgl?.rp ?? 0),
           pertamaKali: d.pertamaKali !== false,
         }))
@@ -385,6 +395,7 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
           ada: d.rinci?.MATCHED ?? { n: 0, rp: 0 },
           tak: d.rinci?.UNMATCHED ?? { n: 0, rp: 0 },
           lain: gab(d.rinci?.DUPLIKAT, d.rinci?.DIBATALKAN),
+          tangan: { n: 0, rp: 0 }, ketik: { n: 0, rp: 0 },
           dariN: Number(d.divonis?.n ?? 0), dariRp: Number(d.divonis?.rp ?? 0),
           pertamaKali: true,
         }));
@@ -441,6 +452,12 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
             L.push(`      🚨 pecahan tidak menutup: ${d.ada.n} + ${d.tak.n} + ${d.lain.n}` +
                    ` ≠ ${d.n}. Jangan pakai baris ini menutup hari.`);
           }
+          // Siapa yang memutuskan, dan resi mana yang tak punya foto sebagai
+          // lawan. Dua-duanya baris "dari jumlah di atas", bukan tambahan.
+          const cap: string[] = [];
+          if (d.tangan.n > 0) cap.push(`🖐 ${d.tangan.n} ditutup tangan · ${rp(d.tangan.rp)}`);
+          if (d.ketik.n > 0) cap.push(`✍️ ${d.ketik.n} resi diketik tangan · ${rp(d.ketik.rp)}`);
+          if (cap.length) L.push(`      ${cap.join("   ")}`);
         };
 
         if (!punyaSaringan) {
@@ -479,10 +496,18 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       L.push("");
       L.push(`   ↳ tanggal di atas TANGGAL KONTRAK, sumbu yang sama dengan LAPIS 1.`);
       if (punyaSaringan) {
-        L.push(`     Baris ALIRAN HARI INI harus sama dengan "dilepas ke Lapis 2" di`);
-        L.push(`     laporan LAPIS 1 tanggal itu; kalau beda, ada resi yang lolos di`);
-        L.push(`     antara dua lapisan. Baris TINDAK LANJUT sengaja lebih kecil —`);
-        L.push(`     ia hanya menyebut yang BARU tuntas, bukan seluruh hari itu.`);
+        // Cara membacanya ditulis sebagai LANGKAH, bukan penjelasan. Yang
+        // memeriksa manusia, dan manusia butuh tahu baris mana ditempel ke
+        // baris mana — bukan diberi tahu bahwa keduanya "sebanding".
+        L.push(`     Cara memeriksanya — buka laporan LAPIS 1, tempel bersisian:`);
+        L.push(`       ALIRAN HARI INI  ↔  ALIRAN HARI INI di LAPIS 1 (tgl sama)`);
+        L.push(`       TINDAK LANJUT    ↔  SUSULAN di LAPIS 1 (tgl sama)`);
+        L.push(`     Kalau ada baris yang tidak punya pasangan, ada resi NYASAR`);
+        L.push(`     di antara dua lapisan — itu yang harus dikejar.`);
+        L.push(`     Baris 🖐 ditutup tangan BOLEH membuat angka di sini lebih besar`);
+        L.push(`     daripada SUSULAN di LAPIS 1: kasus itu ditutup sendiri di`);
+        L.push(`     /belum-cocok pada sela dua laporan, jadi belum terlihat waktu`);
+        L.push(`     laporan LAPIS 1 pagi disusun. SUSULAN + 🖐 = angka di sini.`);
       } else {
         L.push(`     Tiap baris HARUS sama dengan "dilepas ke Lapis 2" di laporan`);
         L.push(`     LAPIS 1 tanggal itu. Kalau beda, ada resi yang lolos di antara`);

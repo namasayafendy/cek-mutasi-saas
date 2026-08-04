@@ -308,21 +308,29 @@ async function susunLaporanLapis2(
       // /belum-cocok terjadi di antara dua unggahan — dan patokan "sejak sapuan
       // ini dimulai" akan membuat vonis itu tidak pernah muncul di laporan mana
       // pun. Kategori tanpa pintu keluar persis yang harus dihindari di sini.
+      // Patokannya laporan yang BENAR-BENAR TERKIRIM, bukan job yang selesai.
+      // Bedanya menutup lubang yang mahal: job yang gagal di tengah SESUDAH
+      // hasilnya terkirim ke gadai ditandai SELESAI_RAGU + selesai_at, tapi
+      // laporan LAPIS 2-nya tidak pernah terbit. Kalau patokannya "job selesai
+      // terakhir", vonis satu hari penuh itu terlewat di laporan berikutnya
+      // dan tidak akan muncul di laporan mana pun, selamanya.
+      //
+      // Antrean laporan adalah catatan yang paling jujur soal ini: TERKIRIM
+      // berarti pemilik benar-benar sudah membacanya.
       let sejak: string | null = null;
       {
         const { data: sblm } = await r.db
-          .from("mutasi_jobs")
-          .select("selesai_at")
+          .from("mutasi_laporan_outbox")
+          .select("created_at")
           .eq("account_id", r.ctx.account.id)
-          .in("status", ["SELESAI", "SELESAI_RAGU"])
-          .neq("id", r.job.id)
-          .not("selesai_at", "is", null)
-          .order("selesai_at", { ascending: false })
+          .eq("status", "TERKIRIM")
+          .like("teks", "🟢 LAPIS 2%")
+          .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
         // null = memang belum pernah ada laporan. Itu BUKAN "tidak ada yang
         // baru" — laporannya nanti menjabarkan semuanya dan berkata kenapa.
-        sejak = (sblm as any)?.selesai_at ? new Date((sblm as any).selesai_at).toISOString() : null;
+        sejak = (sblm as any)?.created_at ? new Date((sblm as any).created_at).toISOString() : null;
       }
 
       if (sDari && sSampai) {
