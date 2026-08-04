@@ -38,6 +38,8 @@ export function BelumCocokClient() {
   const [buka, setBuka] = useState<BarisBelumCocok | null>(null);
   const [kandidat, setKandidat] = useState<KandidatMutasi[] | null>(null);
   const [pilih, setPilih] = useState<KandidatMutasi | null>(null);
+  /** Jadi true sesudah gadai memperingatkan "ini bukti terakhir". */
+  const [sadarTerakhir, setSadarTerakhir] = useState(false);
   const [aksi, setAksi] = useState<"" | "COCOK" | "BATAL" | "TERIMA">("");
   const [cariLain, setCariLain] = useState("");
   const [cariTgl, setCariTgl] = useState("");
@@ -55,11 +57,11 @@ export function BelumCocokClient() {
   useEffect(() => { void segarkan(); }, [segarkan]);
 
   function tutup() {
-    setBuka(null); setKandidat(null); setPilih(null); setAksi(""); setCatatan("");
+    setBuka(null); setKandidat(null); setPilih(null); setAksi(""); setCatatan(""); setSadarTerakhir(false);
   }
 
   async function bukaBaris(it: BarisBelumCocok) {
-    setBuka(it); setKandidat(null); setPilih(null); setAksi(""); setCatatan(""); setError(""); setCariLain(""); setCariTgl("");
+    setBuka(it); setKandidat(null); setPilih(null); setAksi(""); setCatatan(""); setError(""); setCariLain(""); setCariTgl(""); setSadarTerakhir(false);
     const r = await cariKandidat(it.tgl, it.nominal, it.arah ?? "KREDIT");
     if (r.ok) setKandidat(r.items);
     else { setKandidat([]); setError(r.msg); }
@@ -91,7 +93,10 @@ export function BelumCocokClient() {
     mulai(async () => {
       setError(""); setOkMsg("");
       const r = aksi === "BATAL"
-        ? await batalkanKlaim(buka.klaim_id, catatan)
+        // sadarBuktiTerakhir dikirim hanya pada tekanan KEDUA. Gadai menolak
+        // sekali dulu kalau ini resi terakhir kontraknya, supaya "buang resi
+        // dobel" tidak diam-diam berubah jadi "cabut satu-satunya bukti".
+        ? await batalkanKlaim(buka.klaim_id, catatan, sadarTerakhir)
         : aksi === "TERIMA"
           ? await terimaBuktiBeda(buka.klaim_id, catatan)
           // Baris yang dipilih IKUT dikirim. Tanpa ini penutupan hanya
@@ -99,7 +104,11 @@ export function BelumCocokClient() {
           // di /history tertulis "belum match", dan yang lebih berbahaya:
           // baris itu masih bisa direbut klaim lain.
           : await cocokkanManual(buka.klaim_id, catatan, pilih?.id, buka.outlet);
-      if (!r.ok) setError(r.msg);
+      if (!r.ok) {
+        setError(r.msg);
+        // Peringatan bukti-terakhir: tekanan berikutnya berarti menegaskan.
+        if ((r as any).buktiTerakhir === true) setSadarTerakhir(true);
+      }
       else { setOkMsg(r.msg); tutup(); await segarkan(); }
     });
   }

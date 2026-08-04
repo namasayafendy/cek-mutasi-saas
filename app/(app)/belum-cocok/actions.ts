@@ -475,7 +475,12 @@ async function batalkanKlaimLokal(k: any, inputId: string | null, barisId?: stri
  * hilang, dan membatalkannya berarti menghapus pertanyaannya, bukan
  * menjawabnya. Sisi gadai menolak membatalkan klaim yang sudah MATCHED.
  */
-export async function batalkanKlaim(klaimId: string, alasan: string) {
+export async function batalkanKlaim(
+  klaimId: string,
+  alasan: string,
+  /** Penegasan saat ini resi TERAKHIR kontraknya — gadai menolak sekali dulu. */
+  sadarBuktiTerakhir = false,
+) {
   const k = await konfigGadai();
   if (!k) return { ok: false, msg: "Sinkronisasi belum dikonfigurasi." };
   if (alasan.trim().length < 10) {
@@ -485,11 +490,15 @@ export async function batalkanKlaim(klaimId: string, alasan: string) {
     const res = await fetch(`${k.base}/api/transfer-klaim/batal`, {
       method: "POST",
       headers: { Authorization: `Bearer ${k.key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ klaimId, alasan: alasan.trim() }),
+      body: JSON.stringify({ klaimId, alasan: alasan.trim(), sadarBuktiTerakhir }),
       signal: AbortSignal.timeout(15000),
     });
     const j = await res.json().catch(() => ({}));
-    if (!res.ok || !j?.ok) return { ok: false, msg: j?.msg ?? `Gagal (HTTP ${res.status}).` };
+    if (!res.ok || !j?.ok) {
+      // buktiTerakhir bukan kegagalan — itu pertanyaan. Diteruskan apa adanya
+      // supaya layar bisa meminta penegasan, bukan sekadar menampilkan merah.
+      return { ok: false, msg: j?.msg ?? `Gagal (HTTP ${res.status}).`, buktiTerakhir: j?.buktiTerakhir === true };
+    }
     return { ok: true, msg: j.msg ?? "Klaim dibatalkan di Aceh Gadai." };
   } catch (e) {
     return { ok: false, msg: e instanceof Error ? e.message : String(e) };
