@@ -222,8 +222,20 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   // dari TIDAK ADANYA blok "tidak ditemukan" — pembaca harus menebak dari
   // sesuatu yang tidak tertulis. Sekarang keduanya selalu disebut, termasuk
   // saat nol, supaya "lengkap" jadi pernyataan dan bukan dugaan.
-  L.push(`   ✅ ketemu di rekening  ${isi.nDiuji - nGagal}`);
-  L.push(`   ${nGagal > 0 ? '⛔' : '✅'} tidak ketemu          ${nGagal}`);
+  // ── RUPIAH DI KEDUA SISI, DAN JUMLAHNYA DITUTUP ──
+  //
+  // Pemilik, 4 Agustus 2026: "total xxx yang dicocokkan dan berapa yang ada dan
+  // berapa yang tidak ada". Sebelum ini kedua baris hanya membawa CACAH, jadi
+  // pertanyaan yang sebenarnya ditanyakan — berapa RUPIAH yang belum terbukti
+  // masuk rekening — tidak terjawab tanpa membuka blok lain dan menjumlah sendiri.
+  // Yang dijaga sistem ini uang, jadi uangnya yang harus tertulis.
+  const rpGagal = isi.tidakKetemu.reduce((t, x) => t + (Number(x.nominal) || 0), 0);
+  const rpKetemu = Number(isi.rpDiuji || 0) - rpGagal;
+  L.push(`   ✅ ketemu di rekening  ${String(isi.nDiuji - nGagal).padStart(3)} · ${rp(rpKetemu)}`);
+  L.push(`   ${nGagal > 0 ? '⛔' : '✅'} tidak ketemu          ${String(nGagal).padStart(3)} · ${rp(rpGagal)}`);
+  // Penutupan disebut di depan mata supaya double-checking tidak perlu kalkulator,
+  // dan supaya laporan yang angkanya sendiri tidak tutup BERTERIAK, bukan diam.
+  L.push(`   ↳ ${isi.nDiuji - nGagal} + ${nGagal} = ${isi.nDiuji} resi · ${rp(rpKetemu)} + ${rp(rpGagal)} = ${rp(Number(isi.rpDiuji || 0))}`);
   L.push(`   MASUK  ${String(nMasuk).padStart(3)} resi · ${rp(totMasuk)}`);
   L.push(`   KELUAR ${String(nKeluar).padStart(3)} resi · ${rp(totKeluar)}`);
 
