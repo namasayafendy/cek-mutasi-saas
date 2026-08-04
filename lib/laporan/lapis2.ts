@@ -113,7 +113,14 @@ export interface IsiLapis2 {
                dilepas: { n: number; rp: number };
                divonis: { n: number; rp: number };
                menggantung: { n: number; rp: number };
-               tertahan: { n: number; rp: number } }[];
+               tertahan: { n: number; rp: number };
+               /** Pecahan vonis per tanggal — sudah lama dikirim gadai, baru
+                *  sekarang dipakai. Inilah yang membuat "berapa yang ada dan
+                *  berapa yang tidak" bisa dijabarkan per asal. */
+               rinci?: { MATCHED?: { n: number; rp: number };
+                         UNMATCHED?: { n: number; rp: number };
+                         DUPLIKAT?: { n: number; rp: number };
+                         DIBATALKAN?: { n: number; rp: number } } }[];
     ketinggalan: { no_faktur: string; outlet: string; arah: string; tgl: string; nominal: number }[];
     sisaKetinggalan?: number;
     tertahanPerSebab?: { sebab: string; teks: string; n: number; rp: number }[];
@@ -276,24 +283,60 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     L.push(`   ➖ jumlah yang ditahan Lapis 1 tidak dikabarkan — tidak bisa dipastikan`);
     L.push(`      bahwa seluruh resi hari itu sudah sampai ke sini.`);
   }
-  if (isi.perTanggal.length) {
-    L.push("");
-    isi.perTanggal.slice(0, 40).forEach((x) => {
-      // Satu tanggal = dua baris, bukan satu angka gabungan. Pemilik memeriksa
-      // Lapis 1 masuk dan keluar SECARA TERPISAH, jadi rekap ini harus bisa
-      // dibaca dengan cara yang sama tanpa hitung-hitungan di kepala.
-      L.push(`   ${tgl(x.tgl)}`);
-      L.push(`      masuk  ${String(x.masukJml ?? 0).padStart(3)} resi · ${rp(Number(x.masukRp ?? 0))}`);
-      L.push(`      keluar ${String(x.keluarJml ?? 0).padStart(3)} resi · ${rp(Number(x.keluarRp ?? 0))}`);
-    });
-    L.push("");
-    L.push(`   ↳ sandingkan dengan baris "dilepas ke Lapis 2" pada blok TOTAL RESI`);
-    L.push(`     HARI INI di LAPIS 1 tanggal itu — BUKAN dengan totalnya, karena`);
-    L.push(`     yang tertahan gerbang memang tidak pernah sampai kemari.`);
-    L.push(`     Angkanya harus SAMA PERSIS. Kalau beda, ada resi yang lolos`);
-    L.push(`     di antara dua lapisan.`);
-    L.push(`     (JANGAN disandingkan dengan "Cocok dgn slip" — itu nilai KONTRAK,`);
-    L.push(`      bukan nilai resi; keduanya memang berbeda.)`);
+  // ── DIJABARKAN PER ASAL, BUKAN PER TANGGAL TRANSFER ──
+  //
+  // Pemilik, 4 Agustus 2026: "di Lapis 1 ditulis dilepas ke Lapis 2 35 resi
+  // Rp 40.935.000, tapi laporan Lapis 2 dibagi per hari: 3 Agu 33 resi
+  // Rp 40.630.000, sehingga saya bingung bacanya."
+  //
+  // Kebingungannya beralasan, dan sebabnya bukan salah hitung: LAPIS 1
+  // mengelompokkan per TANGGAL KONTRAK, sedangkan blok lama ini per TANGGAL
+  // TRANSFER. Dua sumbu yang berbeda, jadi keduanya benar dan TIDAK AKAN PERNAH
+  // sama. Untuk 3 Agustus 2026 selisihnya persis dua resi yang uangnya ditransfer
+  // lebih dulu: Rp 190.000 (1 Agu) dan Rp 115.000 (2 Agu).
+  //   33 + 1 + 1 = 35   ·   40.630.000 + 115.000 + 190.000 = 40.935.000
+  //
+  // Sekarang dijabarkan memakai sumbu yang SAMA dengan Lapis 1 (tgl_transaksi,
+  // ditegaskan sendiri oleh gadai lewat `dasarTanggal`), jadi tiap baris di sini
+  // punya kembaran yang angkanya sama persis di laporan Lapis 1 hari itu.
+  // Mencocokkan dua laporan tinggal menempelkan baris bernomor tanggal sama —
+  // tanpa hitungan di kepala, yang selama ini jadi sumber salah baca.
+  //
+  // Baris bertanggal LAMA sekaligus menjawab "yang perlu ditangani kemarin
+  // bagaimana": susulan jatuh di barisnya sendiri, jadi satu pengelompokan
+  // mengerjakan dua pertanyaan.
+  {
+    const sd = isi.sandingan;
+    const baris = (sd?.tanggal ?? []).filter((d) => Number(d.divonis?.n ?? 0) > 0);
+    if (baris.length) {
+      const label = (a: string) => (String(a).toUpperCase() === 'DEBET' ? 'KELUAR' : 'MASUK');
+      for (const arah of ['KREDIT', 'DEBET']) {
+        const grup = baris.filter((d) => String(d.arah).toUpperCase() === arah)
+                          .sort((a, b) => (a.tgl < b.tgl ? 1 : -1));
+        if (!grup.length) continue;
+        const tot = grup.reduce((s2, d) => ({
+          n: s2.n + Number(d.divonis?.n ?? 0), rp: s2.rp + Number(d.divonis?.rp ?? 0),
+        }), { n: 0, rp: 0 });
+        L.push("");
+        L.push(`RESI YANG DIUJI — ${label(arah)}  ${tot.n} resi · ${rp(tot.rp)}`);
+        L.push(`   dibawa dari LAPIS 1, per tanggalnya:`);
+        for (const d of grup.slice(0, 14)) {
+          const ada = d.rinci?.MATCHED ?? { n: 0, rp: 0 };
+          const tak = d.rinci?.UNMATCHED ?? { n: 0, rp: 0 };
+          L.push(`   ${tgl(d.tgl)}  ${String(d.divonis?.n ?? 0).padStart(3)} resi · ${rp(Number(d.divonis?.rp ?? 0))}`);
+          L.push(`      ✅ ketemu ${String(ada.n).padStart(3)} · ${rp(ada.rp)}` +
+                 (tak.n > 0 ? `   ⛔ TIDAK ${tak.n} · ${rp(tak.rp)}` : `   ⛔ tidak ada 0`));
+        }
+        if (grup.length > 14) L.push(`   …dan ${grup.length - 14} tanggal lagi`);
+      }
+      L.push("");
+      L.push(`   ↳ angka per tanggal di atas memakai TANGGAL KONTRAK, sumbu yang`);
+      L.push(`     sama dengan LAPIS 1 — jadi tiap baris HARUS sama persis dengan`);
+      L.push(`     "dilepas ke Lapis 2" di laporan LAPIS 1 tanggal itu. Kalau beda,`);
+      L.push(`     ada resi yang lolos di antara dua lapisan.`);
+      L.push(`     Yang ⛔ TIDAK ketemu masuk /belum-cocok dan akan muncul lagi`);
+      L.push(`     setiap hari sampai diselesaikan.`);
+    }
   }
   L.push("");
 
