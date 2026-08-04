@@ -295,10 +295,41 @@ async function susunLaporanLapis2(
       // apa adanya, karena "tidak ada blok" dan "semua cocok" terlihat sama.
       const sDari = kredit?.periodStart ?? debet?.periodStart ?? null;
       const sSampai = kredit?.periodEnd ?? debet?.periodEnd ?? null;
+
+      // ── PATOKAN "BARU": WAKTU LAPORAN LAPIS 2 SEBELUMNYA ──
+      //
+      // Tanpa patokan ini blok "resi yang diuji" menjabarkan SELURUH tanggal
+      // dalam periode berkas, termasuk yang sudah tuntas dan sudah dilaporkan
+      // berhari-hari lalu. Pemilik menyebutnya sendiri: "sudah saya selesaikan,
+      // kenapa muncul lagi".
+      //
+      // Yang dipakai waktu SELESAINYA job sebelumnya, bukan waktu job ini
+      // dimulai. Vonis bisa lahir di luar sapuan — penutupan tangan lewat
+      // /belum-cocok terjadi di antara dua unggahan — dan patokan "sejak sapuan
+      // ini dimulai" akan membuat vonis itu tidak pernah muncul di laporan mana
+      // pun. Kategori tanpa pintu keluar persis yang harus dihindari di sini.
+      let sejak: string | null = null;
+      {
+        const { data: sblm } = await r.db
+          .from("mutasi_jobs")
+          .select("selesai_at")
+          .eq("account_id", r.ctx.account.id)
+          .in("status", ["SELESAI", "SELESAI_RAGU"])
+          .neq("id", r.job.id)
+          .not("selesai_at", "is", null)
+          .order("selesai_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        // null = memang belum pernah ada laporan. Itu BUKAN "tidak ada yang
+        // baru" — laporannya nanti menjabarkan semuanya dan berkata kenapa.
+        sejak = (sblm as any)?.selesai_at ? new Date((sblm as any).selesai_at).toISOString() : null;
+      }
+
       if (sDari && sSampai) {
         try {
           const resS = await fetch(
-            `${base}/api/transfer-klaim/sandingan?dari=${sDari}&sampai=${sSampai}`,
+            `${base}/api/transfer-klaim/sandingan?dari=${sDari}&sampai=${sSampai}` +
+            (sejak ? `&sejak=${encodeURIComponent(sejak)}` : ""),
             { headers: { Authorization: `Bearer ${c.gadai_api_key}` },
               cache: "no-store", signal: AbortSignal.timeout(8000) });
           if (resS.ok) {
