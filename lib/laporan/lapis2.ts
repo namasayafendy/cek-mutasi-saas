@@ -166,6 +166,15 @@ export interface IsiLapis2 {
   /** Resi yang sudah lama tidak ketemu dan belum dibereskan (dari sisi gadai). */
   tunggakan: {
     no_faktur: string; outlet: string; tgl: string; nominal: number; umur: number;
+    /** Kenapa ia masih di daftar. Gadai SUDAH lama mengirimnya; laporan yang
+     *  membuangnya, lalu mencetak "masih TIDAK ADA di mutasi" untuk semua —
+     *  termasuk untuk resi yang uangnya SUDAH terbukti masuk rekening dan yang
+     *  bermasalah cuma fotonya. Kabar palsu tentang uang hilang. */
+    sebab?: string;
+    /** `BUKTI_BEDA` = fotonya yang membantah, bukan uangnya yang tidak ada. */
+    status?: string;
+    /** Vonis Lapis 2 yang sesungguhnya. MATCHED = uangnya ADA di rekening. */
+    status_asli?: string;
     /** Hasil penelusuran ulang ke mutasi yang BARU diunggah:
      *  jumlah baris bernominal sama yang masih BEBAS. null = tidak ditelusuri. */
     calonBebas?: number | null;
@@ -314,14 +323,35 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     L.push(`      buka /belum-cocok untuk melihatnya.`);
   }
 
-  // Tunggakan lama disebut SATU BARIS. Daftar lengkapnya sudah ada di
-  // /belum-cocok; mengulangnya penuh tiap hari persis yang membuat laporan ini
-  // berhenti dibaca. Tapi menghapusnya sama sekali membuat yang lama terlupakan.
+  // ── BELUM BERES DARI SEBELUMNYA ──
+  //
+  // Disebut satu per satu BESERTA SEBABNYA. Versi pertama blok pendek ini cuma
+  // mencetak satu baris jumlah, dan pemilik langsung menemukan lubangnya:
+  // layar /belum-cocok menampilkan 3 perkara, laporan hanya menamai 1, jadi
+  // dua sisanya "tidak ada notifikasinya".
+  //
+  // Dan sebabnya WAJIB ikut. Laporan lama mencetak "masih TIDAK ADA di mutasi"
+  // untuk semua isi daftar ini — termasuk untuk SBR-4-0335, yang kedua resinya
+  // sudah TERBUKTI masuk rekening dan yang bermasalah cuma fotonya (foto
+  // terbaca Rp 1.000.000, permintaannya Rp 5.000.000 karena dibayar dua kali).
+  // Mengabarkan "uangnya tidak ada" atas uang yang jelas-jelas ada bukan
+  // sekadar tidak rapi — ia mengirim orang mencari sesuatu yang tidak hilang.
   if (isi.tunggakan.length) {
     const r = isi.tunggakan.reduce((s, x) => s + (Number(x.nominal) || 0), 0);
-    const bisa = isi.tunggakan.filter((x) => Number(x.calonBebas ?? 0) > 0).length;
-    L.push(`   🔁 belum beres dari hari sebelumnya: ${isi.tunggakan.length} resi · ${rp(r)}` +
-           (bisa > 0 ? ` — ${bisa} punya calon baris di mutasi ini` : ""));
+    L.push("");
+    L.push(`🔁 BELUM BERES DARI SEBELUMNYA (${isi.tunggakan.length}) · ${rp(r)}`);
+    isi.tunggakan.slice(0, 10).forEach((x) => {
+      const uangAda = String(x.status_asli ?? "").toUpperCase() === "MATCHED";
+      L.push(`   • ${x.no_faktur} · ${x.outlet} · ${tgl(x.tgl)} · ${rp(x.nominal)} · ${x.umur} hari`);
+      L.push(`     ${x.sebab ?? "belum diselesaikan"}`);
+      if (uangAda) {
+        L.push(`     ↳ uangnya SUDAH terbukti di rekening — yang perlu diperiksa fotonya.`);
+      } else if (Number(x.calonBebas ?? 0) > 0) {
+        L.push(`     ↳ ADA ${x.calonBebas} baris mutasi bernominal sama yang masih bebas.`);
+      }
+    });
+    if (isi.tunggakan.length > 10) L.push(`   …dan ${isi.tunggakan.length - 10} lagi`);
+    L.push(`   ↳ semuanya menunggu di /belum-cocok.`);
   }
 
   // ── 3. UANG DI MUTASI YANG TIDAK DIKLAIM SIAPA PUN ──
