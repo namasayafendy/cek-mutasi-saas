@@ -153,13 +153,34 @@ export function runMatching(
   }
 
   // ── PASS 1: REF (global, sebelum semua yang lain) ──
+  //
+  // Dibandingkan dalam bentuk KANONIK, bukan apa adanya. Nomor referensi di
+  // sisi klaim dibaca AI dari foto resi, sementara di sisi mutasi ia diambil
+  // dari PDF bank — dan pasangan huruf/angka yang bentuknya kembar adalah
+  // salah baca yang paling sering terjadi. SBR-1-0127 (5 Agustus 2026):
+  //
+  //   bank menulis : FT26212Z0R4C\Q53/213   ← angka NOL
+  //   AI membaca   : FT26212ZOR4C           ← huruf O
+  //
+  // Beda satu karakter, dan pencocokan lewat jalur TERKUAT gagal total; ia
+  // jatuh ke tebakan nominal, lalu ke vonis "tidak ada di rekening".
+  //
+  // Yang disamakan hanya pasangan yang memang kembar bentuknya (O/0, I/1, S/5,
+  // B/8, Z/2) dan tanda baca dibuang — bank menulis ref yang sama dengan
+  // pemisah yang tidak konsisten. Tabrakan palsu praktis mustahil: ref bank
+  // 12 karakter atau lebih, dan nominalnya tetap wajib sama persis di bawah.
+  const kanonRef = (s: unknown) =>
+    String(s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "")
+      .replace(/O/g, "0").replace(/I/g, "1").replace(/S/g, "5")
+      .replace(/B/g, "8").replace(/Z/g, "2");
+
   inputs.forEach((input, idx) => {
     if (!shouldProcess(input)) return;
-    const refUp = String(input.refFt ?? "").trim().toUpperCase();
+    const refUp = kanonRef(input.refFt);
     if (!refUp) return;
 
     const hits = transactions.filter((tx) =>
-      String(tx.noRef ?? "").toUpperCase().startsWith(refUp),
+      kanonRef(tx.noRef).startsWith(refUp),
     );
     if (hits.length === 0) return; // ref tak ketemu BUKAN alarm — lanjut pass 2/3
 

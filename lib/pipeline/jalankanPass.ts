@@ -496,12 +496,38 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     const dariTgl = new Date(awalBerkas);
     dariTgl.setUTCDate(dariTgl.getUTCDate() - maxLookback * 3);
     try {
+      // Batas atas MELEWATI periodEnd, bukan berhenti di periodStart.
+      //
+      // Aturan lama menganggap berkas selalu memuat lengkap seluruh periodenya
+      // sendiri. SBR-1-0127 membuktikan sebaliknya: baris Rp 1.032.000 tanggal
+      // 31 Juli 14.55 ada di database sejak 1 Agustus, tapi tidak ikut di
+      // berkas 5 Agustus yang periodenya JUGA mulai 31 Juli. Ia bukan
+      // carry-over (tanggalnya bukan sebelum periodStart) dan bukan isi berkas
+      // — jadi tidak ada satu jalan pun untuk sampai ke kolam, dan vonisnya
+      // jadi "tidak ada di rekening" atas uang yang sebenarnya masuk.
+      const akhirBerkas = periodEnd ?? toDateISO(awalBerkas);
       const carry = await loadCarryoverPdfTxs(supabase, {
         accountId, bankId, jenis,
         fromDate: toDateISO(dariTgl),
-        beforeDate: toDateISO(awalBerkas),
+        beforeDate: geserHari(akhirBerkas, 1),
       });
-      for (const t of carry) pool.push({ ...t, bankId });
+      // Saringan ganda. Kunci memakai tanggal+jam+nominal+ref, BUKAN nomor
+      // baris — nomor baris hanya berarti di dalam satu berkas, jadi transaksi
+      // yang sama bisa bernomor lain di unduhan berbeda dan lolos jadi kembar.
+      // Kembar di kolam = satu uang bisa diklaim dua kali.
+      const kunciTx = (t: any) =>
+        `${toDateISO(t.tanggalDate)}|${String(t.jam ?? "")}|` +
+        `${jenis === "debet" ? t.debet : t.kredit}|${String(t.noRef ?? "").toUpperCase()}`;
+      const sudahDiKolam = new Set(pool.map(kunciTx));
+      let ditambah = 0;
+      for (const t of carry) {
+        const k = kunciTx(t);
+        if (sudahDiKolam.has(k)) continue;
+        sudahDiKolam.add(k);
+        pool.push({ ...t, bankId });
+        ditambah++;
+      }
+      if (ditambah > 0) console.info(`[pass] kolam ditambah ${ditambah} baris dari database`);
     } catch (e) {
       console.error("[pass] carry-over gagal dimuat:", e);
     }

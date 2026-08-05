@@ -26,8 +26,26 @@ type DbParsedTx = {
  * yang belum di-claim, di rentang lookback hari sebelum upload baru.
  *
  * @param fromDate YYYY-MM-DD — earliest tanggal carryover (e.g. periodStart - lookback)
- * @param beforeDate YYYY-MM-DD — exclusive upper bound (e.g. periodStart of current upload)
- *                                supaya tidak overlap dengan PDF yang baru di-upload
+ * @param beforeDate YYYY-MM-DD — exclusive upper bound.
+ *
+ * DULU batas atasnya = periodStart berkas baru, dengan anggapan "yang di dalam
+ * periode pasti sudah ada di berkasnya sendiri". Anggapan itu SALAH, dan
+ * salahnya mahal — SBR-1-0127 (5 Agustus 2026): baris Rp 1.032.000 tanggal
+ * 31 Juli 14.55 sudah ada di database sejak unggahan 1 Agustus, tapi tidak ikut
+ * terbaca di berkas 5 Agustus (unduhan mutasinya mulai lebih siang). Ia bukan
+ * carry-over karena tanggalnya = periodStart, dan bukan isi berkas karena
+ * memang tidak ada di sana. Uangnya di rekening, catatannya di database, dan
+ * tidak ada satu pun yang mempertemukan keduanya: vonisnya "tidak ada di
+ * rekening" — tuduhan, atas uang yang sebenarnya masuk.
+ *
+ * Sekarang pemanggilnya melebarkan batas ini sampai MELEWATI periodEnd, dan
+ * menyaring ganda di sisi sana. Baris yang sudah ada di berkas tidak akan
+ * masuk dua kali.
+ *
+ * PAGINASI WAJIB: PostgREST memotong di 1000 baris tanpa error dan tanpa tanda.
+ * Jendela yang baru saja dilebarkan justru yang paling mungkin menyentuhnya,
+ * dan kolam yang terpotong diam-diam melahirkan vonis "tidak ada" yang palsu —
+ * persis cacat yang perubahan ini dibuat untuk menutupnya.
  */
 export async function loadCarryoverPdfTxs(
   supabase: SupabaseClient,
@@ -39,17 +57,30 @@ export async function loadCarryoverPdfTxs(
     beforeDate: string;
   },
 ): Promise<PdfTransaction[]> {
-  const { data, error } = await supabase
-    .from("parsed_transactions")
-    .select(
-      "id, bank_id, no_ref, tanggal, jam, nominal_kredit, nominal_debet, nama_pengirim, nama_penerima, deskripsi, saldo, page, bbox_y_bottom, bbox_height",
-    )
-    .eq("account_id", args.accountId)
-    .eq("bank_id", args.bankId)
-    .is("claimed_by_input_id", null)
-    .gte("tanggal", args.fromDate)
-    .lt("tanggal", args.beforeDate)
-    .order("tanggal", { ascending: true });
+  const kumpul: any[] = [];
+  let error: { message: string } | null = null;
+  const HAL = 500;
+  for (let ofs = 0; ; ofs += HAL) {
+    const r = await supabase
+      .from("parsed_transactions")
+      .select(
+        "id, bank_id, no_ref, tanggal, jam, nominal_kredit, nominal_debet, nama_pengirim, nama_penerima, deskripsi, saldo, page, bbox_y_bottom, bbox_height",
+      )
+      .eq("account_id", args.accountId)
+      .eq("bank_id", args.bankId)
+      .is("claimed_by_input_id", null)
+      .gte("tanggal", args.fromDate)
+      .lt("tanggal", args.beforeDate)
+      .order("tanggal", { ascending: true })
+      .order("id", { ascending: true })
+      .range(ofs, ofs + HAL - 1);
+    if (r.error) { error = r.error; break; }
+    const b = (r.data ?? []) as any[];
+    kumpul.push(...b);
+    if (b.length < HAL) break;
+    if (kumpul.length >= 20000) break;   // rem darurat
+  }
+  const data = kumpul;
 
   if (error) {
     console.error("loadCarryoverPdfTxs error:", error.message);
