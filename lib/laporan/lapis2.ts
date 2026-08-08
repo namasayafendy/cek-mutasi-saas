@@ -134,8 +134,19 @@ export interface IsiLapis2 {
       /** Seluruh vonis yang pernah jatuh untuk tanggal+arah itu — pembanding
        *  yang membuat "7 dari 24" bisa dibaca tanpa membuka laporan lama. */
       divonisTgl: { n: number; rp: number };
-      /** true = tanggal ini baru pertama kali dinilai (aliran hari ini). */
+      /** true = tidak ada satu pun anggotanya yang pernah tertahan gerbang.
+       *  DIPERTAHANKAN untuk gadai versi lama; yang dipakai `susulan`. */
       pertamaKali?: boolean;
+      /** Bagian dari `baru` yang PERNAH tertahan gerbang lalu dibereskan
+       *  tangan — inilah TINDAK LANJUT yang sesungguhnya. Sisanya (baru −
+       *  susulan) adalah ALIRAN.
+       *
+       *  Dasar lama memakai TANGGAL KONTRAK, dan itu patah pada kejadian yang
+       *  paling biasa: resi yang tertahan pagi lalu dibereskan siang hari
+       *  bertanggal SAMA dengan aliran normalnya, jadi mustahil dipisah lewat
+       *  tanggal. 8 Agustus 2026 seluruh 32 resi jatuh ke satu keranjang dan
+       *  ALIRAN tercetak "0 resi". */
+      susulan?: { n: number; rp: number };
       /** Diputus MANUSIA di /belum-cocok, bukan mesin. Inilah yang menjelaskan
        *  kenapa cacah di sini bisa LEBIH BESAR daripada "SUSULAN" di LAPIS 1:
        *  yang ditutup tangan pada sela dua laporan tidak pernah terlihat di
@@ -256,14 +267,24 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   } else if (daftar.length === 0) {
     L.push(`   ➖ tidak ada resi baru sejak laporan sebelumnya.`);
   } else {
-    // ALIRAN — per tanggal kontrak, dengan pecahan masuk/keluar. Bentuknya
-    // sengaja sama dengan blok ALIRAN HARI INI di laporan LAPIS 1.
-    const aliran = daftar.filter((d) => d.pertamaKali !== false);
-    const lanjut = daftar.filter((d) => d.pertamaKali === false);
+    // ALIRAN dan TINDAK LANJUT dipisah PER RESI, bukan per tanggal.
+    //
+    // Satu tanggal bisa memuat dua-duanya sekaligus, dan itu keadaan yang
+    // paling sering: resi yang tertahan pagi lalu dibereskan siang hari
+    // bertanggal SAMA dengan aliran normal hari itu. Memilahnya lewat tanggal
+    // membuat seluruh hari jatuh ke satu keranjang — 8 Agustus 2026 ALIRAN
+    // tercetak "masuk 0 resi" padahal 29 resi mengalir normal.
     const perTgl = new Map<string, { n: number; rp: number; mN: number; mRp: number; kN: number; kRp: number }>();
-    for (const d of aliran) {
+    let lanjutN = 0, lanjutRp = 0;
+    for (const d of daftar) {
+      const sN = Number(d.susulan?.n ?? (d.pertamaKali === false ? d.baru?.n : 0) ?? 0);
+      const sRp = Number(d.susulan?.rp ?? (d.pertamaKali === false ? d.baru?.rp : 0) ?? 0);
+      lanjutN += sN; lanjutRp += sRp;
+      // Sisanya aliran. Tidak pernah negatif walau angka dari seberang aneh.
+      const n = Math.max(0, Number(d.baru?.n ?? 0) - sN);
+      const r = Math.max(0, Number(d.baru?.rp ?? 0) - sRp);
+      if (n === 0 && r === 0) continue;
       const g = perTgl.get(d.tgl) ?? { n: 0, rp: 0, mN: 0, mRp: 0, kN: 0, kRp: 0 };
-      const n = Number(d.baru?.n ?? 0), r = Number(d.baru?.rp ?? 0);
       g.n += n; g.rp += r;
       if (arahKeluar(d.arah)) { g.kN += n; g.kRp += r; } else { g.mN += n; g.mRp += r; }
       perTgl.set(d.tgl, g);
@@ -273,10 +294,9 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       L.push(`      masuk  ${String(g.mN).padStart(3)} resi · ${rp(g.mRp)}`);
       L.push(`      keluar ${String(g.kN).padStart(3)} resi · ${rp(g.kRp)}`);
     }
-    if (lanjut.length) {
-      const n = lanjut.reduce((s, d) => s + Number(d.baru?.n ?? 0), 0);
-      const r = lanjut.reduce((s, d) => s + Number(d.baru?.rp ?? 0), 0);
-      L.push(`   tindak lanjut dari Lapis 1   ${n} resi · ${rp(r)}`);
+    if (lanjutN > 0) {
+      L.push(`   tindak lanjut dari Lapis 1   ${lanjutN} resi · ${rp(lanjutRp)}`);
+      L.push(`      (tadinya tertahan di gerbang, sudah dibereskan)`);
     }
     for (const d of daftar) {
       totN += Number(d.baru?.n ?? 0); totRp += Number(d.baru?.rp ?? 0);
