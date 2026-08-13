@@ -51,6 +51,11 @@ type ClaimedInputInfo = {
   manual_claim_reason: string | null;
   manual_claimed_at: string | null;
   created_at: string;
+  /** Id klaim Aceh Gadai yang memegang baris ini. */
+  gadai_klaim_id?: string | null;
+  /** Nomor kontrak (SBR/SJB) pemegangnya. NULL untuk baris lama (kolomnya baru
+   *  ada 13 Agustus 2026) dan untuk input manual lokal yang bukan klaim gadai. */
+  gadai_no_faktur?: string | null;
 };
 
 type BankCardStats = {
@@ -230,7 +235,7 @@ export default function MutasiTab({
           const { data: ciData, error: ciErr } = await supabase
             .from("cek_inputs")
             .select(
-              "id, outlet_id, session_id, tanggal_input, manual_claim_reason, manual_claimed_at, created_at",
+              "id, outlet_id, session_id, tanggal_input, manual_claim_reason, manual_claimed_at, created_at, gadai_klaim_id, gadai_no_faktur",
             )
             .in("id", slice);
           if (ciErr) continue;

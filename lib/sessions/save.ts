@@ -112,6 +112,18 @@ export async function saveSession(
     // selamanya. Hanya id berpola klaim gadai yang disimpan supaya input
     // manual biasa (id lokal) tidak ikut terbawa.
     gadai_klaim_id: /^TFK[DM]?-/.test(String(i.id ?? "")) ? String(i.id) : null,
+    // Nomor kontraknya ikut disimpan. Ia SUDAH ada di muatan penarikan dari
+    // gadai, tapi dulu dibuang begitu sesi ditutup — sehingga layar History >
+    // Mutasi hanya bisa memberi tahu sebuah uang diklaim oleh outlet MANA,
+    // bukan oleh kontrak apa. Untuk menelusuri "uang ini milik siapa" nomor
+    // outlet tidak menolong; nomor kontraknya yang dicari.
+    //
+    // Disimpan di sini, bukan ditanyakan balik ke gadai tiap layar dibuka:
+    // satu panggilan jaringan per klik, dan layarnya ikut mati kalau gadai
+    // sedang tidak bisa dihubungi.
+    gadai_no_faktur: /^TFK[DM]?-/.test(String(i.id ?? ""))
+      ? (String((i as any).noFaktur ?? "").trim() || null)
+      : null,
   }));
 
   let carryoverClaimed = 0;

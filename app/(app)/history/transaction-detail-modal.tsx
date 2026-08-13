@@ -12,6 +12,7 @@ import {
   ExternalLink,
   Clock,
   PencilLine,
+  FileText,
 } from "lucide-react";
 import { formatRupiah, formatDateID, parseDateISO, formatDateLong } from "@/lib/format";
 
@@ -41,6 +42,11 @@ type ClaimedInputInfo = {
   manual_claim_reason: string | null;
   manual_claimed_at: string | null;
   created_at: string;
+  /** Id klaim Aceh Gadai yang memegang baris ini. */
+  gadai_klaim_id?: string | null;
+  /** Nomor kontrak (SBR/SJB) pemegangnya. NULL untuk baris lama (kolomnya baru
+   *  ada 13 Agustus 2026) dan untuk input manual lokal yang bukan klaim gadai. */
+  gadai_no_faktur?: string | null;
 };
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
@@ -205,6 +211,28 @@ export function TransactionDetailModal({
                         style={{ backgroundColor: outlet.warna_hex }}
                       />
                       Outlet: <strong>{outlet.nama}</strong>
+                    </div>
+                  )}
+                  {/* NOMOR KONTRAKNYA, bukan cuma outletnya.
+                      Pemilik, 13 Agustus 2026: "sekarang hanya ada catatan
+                      diklaim oleh outlet mana — buat no kontraknya juga tampil".
+                      Menelusuri "uang ini milik siapa" mustahil dengan nama
+                      outlet: satu outlet mengklaim puluhan baris sehari. */}
+                  {inputInfo?.gadai_no_faktur && (
+                    <div className="flex items-center gap-1.5 text-green-800">
+                      <FileText className="h-3.5 w-3.5" />
+                      Kontrak: <strong>{inputInfo.gadai_no_faktur}</strong>
+                    </div>
+                  )}
+                  {/* Baris lama belum menyimpan nomor kontrak (kolomnya baru
+                      ada 13 Agu 2026). Id klaimnya tetap ditampilkan supaya
+                      tidak ada yang kosong tanpa keterangan — id itu masih bisa
+                      dicari di aplikasi gadai. */}
+                  {!inputInfo?.gadai_no_faktur && inputInfo?.gadai_klaim_id && (
+                    <div className="flex items-center gap-1.5 text-green-700">
+                      <FileText className="h-3.5 w-3.5" />
+                      Klaim gadai: <strong>{inputInfo.gadai_klaim_id}</strong>
+                      <span className="text-green-600/70">(no kontrak belum tercatat)</span>
                     </div>
                   )}
                   {reason && (
