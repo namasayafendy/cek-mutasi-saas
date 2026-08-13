@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useState, useTransition } from "react";
 import {
   ambilBelumCocok, cariKandidat, cocokkanManual, batalkanKlaim, terimaBuktiBeda,
+  ambilDibatalkan, pulihkanPembatalan, type BarisDibatalkan,
   type BarisBelumCocok, type KandidatMutasi,
 } from "./actions";
 
@@ -44,6 +45,15 @@ export function BelumCocokClient() {
   const [cariLain, setCariLain] = useState("");
   const [cariTgl, setCariTgl] = useState("");
   const [catatan, setCatatan] = useState("");
+  // Panel pemulihan pembatalan. Sengaja TERTUTUP secara bawaan: ini jalan
+  // keluar darurat, bukan pekerjaan harian — kalau ia terbuka terus, daftar
+  // yang benar-benar perlu dikerjakan jadi tenggelam di bawahnya.
+  const [bukaPulih, setBukaPulih] = useState(false);
+  const [dibatalkan, setDibatalkan] = useState<BarisDibatalkan[] | null>(null);
+  const [muatPulih, setMuatPulih] = useState(false);
+  const [pilihPulih, setPilihPulih] = useState<BarisDibatalkan | null>(null);
+  const [catatanPulih, setCatatanPulih] = useState("");
+  const [sadarDobel, setSadarDobel] = useState(false);
   const [sibuk, mulai] = useTransition();
 
   const segarkan = useCallback(async () => {
@@ -110,6 +120,33 @@ export function BelumCocokClient() {
         if ((r as any).buktiTerakhir === true) setSadarTerakhir(true);
       }
       else { setOkMsg(r.msg); tutup(); await segarkan(); }
+    });
+  }
+
+  async function muatDibatalkan() {
+    setMuatPulih(true); setError("");
+    const r = await ambilDibatalkan(30);
+    setMuatPulih(false);
+    if (r.ok) setDibatalkan(r.items);
+    else { setDibatalkan([]); setError(r.msg ?? "Gagal memuat daftar pembatalan."); }
+  }
+
+  function jalankanPulih(d: BarisDibatalkan) {
+    mulai(async () => {
+      setError(""); setOkMsg("");
+      const r = await pulihkanPembatalan(d.klaimId, catatanPulih, sadarDobel);
+      if (!r.ok) {
+        setError(r.msg);
+        // Peringatan dobel: tekanan berikutnya berarti menegaskan.
+        if ((r as any).akanDobel === true) setSadarDobel(true);
+        return;
+      }
+      setOkMsg(r.msg);
+      setPilihPulih(null); setCatatanPulih(""); setSadarDobel(false);
+      // Dua daftar disegarkan: yang dipulihkan kembali PENDING sehingga ia bisa
+      // muncul lagi di daftar utama, dan ia harus hilang dari daftar pembatalan.
+      await muatDibatalkan();
+      await segarkan();
     });
   }
 
@@ -197,6 +234,127 @@ export function BelumCocokClient() {
               </button>
             </div>
           ))}
+
+          {/* ── JALAN PULANG DARI PEMBATALAN ──
+              Tombol "Batalkan (salah catat)" dulunya pintu satu arah: sekali
+              ditekan, klaimnya lenyap dari daftar di atas — satu-satunya layar
+              tempat ia pernah terlihat — jadi salah tekan berubah jadi keadaan
+              permanen yang hanya bisa dibetulkan lewat SQL ke produksi.
+
+              SBR-4-0182 (11 Agustus 2026) berakhir DIBATALKAN padahal
+              catatannya sendiri berbunyi "Cocok ke baris mutasi … a.n. FAZDRIA":
+              temuannya benar, statusnya yang keliru, dan tidak ada tombol yang
+              bisa membetulkannya. Kontraknya nongkrong dua hari di Kotak Masuk
+              sebagai "tidak ada slip" untuk uang yang jelas ada di rekening. */}
+          <div className="card p-4">
+            <button
+              onClick={() => {
+                const buka = !bukaPulih;
+                setBukaPulih(buka);
+                if (buka && dibatalkan === null) void muatDibatalkan();
+              }}
+              className="flex w-full items-center justify-between text-left"
+            >
+              <span className="text-sm font-medium text-slate-700">
+                Salah tekan &ldquo;Batalkan&rdquo;? Pulihkan di sini
+              </span>
+              <span className="text-xs text-slate-400">{bukaPulih ? "tutup" : "buka"}</span>
+            </button>
+
+            {bukaPulih && (
+              <div className="mt-3 border-t border-slate-200 pt-3">
+                <p className="mb-3 text-xs text-slate-500">
+                  Pembatalan 30 hari terakhir. Memulihkan mengembalikan resinya ke
+                  <b> PENDING</b> — bukan langsung dinyatakan cocok. Kalau uangnya memang
+                  ada, ia akan cocok sendiri pada kiriman mutasi berikutnya.
+                </p>
+
+                {muatPulih && <p className="text-sm text-slate-500">Memuat…</p>}
+                {!muatPulih && dibatalkan?.length === 0 && (
+                  <p className="text-sm text-slate-500">
+                    Tidak ada pembatalan dalam 30 hari terakhir.
+                  </p>
+                )}
+
+                {dibatalkan?.map((d) => (
+                  <div key={d.klaimId} className="mb-2 rounded-lg border border-slate-200 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-slate-900">{d.noFaktur}</div>
+                        <div className="text-xs text-slate-500">
+                          {d.outlet} · {d.arah === "DEBET" ? "uang KELUAR" : "uang MASUK"} ·{" "}
+                          {tglID(d.tglTransaksi)}{d.jamTransfer ? ` ${d.jamTransfer}` : ""}
+                        </div>
+                        {d.catatan && (
+                          <div className="mt-1 text-xs text-slate-400">{d.catatan}</div>
+                        )}
+                      </div>
+                      <div className="shrink-0 text-right text-sm font-semibold text-slate-900">
+                        {rp(d.nominal)}
+                      </div>
+                    </div>
+
+                    {/* Transaksi yang sudah BATAL tidak punya kewajiban bank untuk
+                        dibuktikan, jadi tombolnya TIDAK ditawarkan sama sekali —
+                        tombol yang selalu gagal lebih buruk daripada tombol yang
+                        tidak ada. */}
+                    {/* Dua pembatalan bisa terlihat sama padahal artinya
+                        berlawanan: yang satu mencabut bukti satu-satunya
+                        (keliru), yang satu membuang resi DOBEL (benar).
+                        Bedanya disebut di sini, sebelum tombolnya ditekan. */}
+                    {d.akanDobel && (
+                      <p className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-800">
+                        Transaksinya sudah punya bukti berlaku {rp(d.buktiHidup)} — sudah
+                        menutupi kewajibannya {rp(d.bankWajib)}. Pembatalan ini kemungkinan
+                        besar MEMANG benar (resi dobel); memulihkannya membuat buktinya
+                        terbaca dua kali.
+                      </p>
+                    )}
+                    {d.bolehPulih ? (
+                      <button
+                        onClick={() => { setPilihPulih(d); setCatatanPulih(""); setSadarDobel(false); }}
+                        className="btn-secondary mt-2 w-full text-sm"
+                      >
+                        Batalkan pembatalan
+                      </button>
+                    ) : (
+                      <p className="mt-2 text-xs text-amber-700">
+                        Transaksinya sudah BATAL — resinya tidak perlu dipulihkan.
+                        Kalau transaksinya yang salah dibatalkan, betulkan transaksinya dulu.
+                      </p>
+                    )}
+
+                    {pilihPulih?.klaimId === d.klaimId && (
+                      <div className="mt-2 rounded-lg bg-slate-50 p-2">
+                        <textarea
+                          value={catatanPulih}
+                          onChange={(e) => setCatatanPulih(e.target.value)}
+                          rows={2}
+                          placeholder="Kenapa pembatalannya keliru?"
+                          className="w-full rounded-lg border border-slate-300 p-2 text-sm"
+                        />
+                        <div className="mt-1 text-xs text-slate-400">
+                          {catatanPulih.trim().length}/10 huruf minimum
+                        </div>
+                        <div className="mt-2 flex gap-2">
+                          <button onClick={() => setPilihPulih(null)} className="btn-secondary flex-1 text-sm">
+                            Tutup
+                          </button>
+                          <button
+                            onClick={() => void jalankanPulih(d)}
+                            disabled={sibuk || catatanPulih.trim().length < 10}
+                            className="btn-primary flex-1 text-sm disabled:opacity-40"
+                          >
+                            {sibuk ? "Menyimpan…" : "Pulihkan"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </>
       ) : (
         <>

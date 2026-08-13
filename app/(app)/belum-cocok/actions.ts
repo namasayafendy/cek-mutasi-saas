@@ -504,3 +504,94 @@ export async function batalkanKlaim(
     return { ok: false, msg: e instanceof Error ? e.message : String(e) };
   }
 }
+
+// ── PEMBATALAN YANG BISA DIPULIHKAN ──────────────────────────
+//
+// `batalkanKlaim` di atas adalah PINTU SATU ARAH. Sekali ditekan, klaimnya
+// hilang dari daftar di halaman ini — satu-satunya layar tempat ia pernah
+// terlihat — sehingga salah tekan berubah jadi keadaan permanen yang hanya bisa
+// dibetulkan dengan SQL langsung ke produksi.
+//
+// Itu bukan kekhawatiran teoretis: SBR-4-0182 berakhir DIBATALKAN pada 11
+// Agustus 2026 padahal catatannya sendiri berbunyi "Cocok ke baris mutasi …
+// a.n. FAZDRIA". Sebabnya bisa ditelusuri ke layar ini: memilih baris calon
+// MENGISI OTOMATIS kotak catatan, dan kotak catatan itu dipakai bersama oleh
+// tombol "cocok manual" DAN tombol "batalkan". Kalau penutupan manualnya gagal
+// (barisnya sudah dipegang klaim lain), satu-satunya tombol yang "berhasil"
+// adalah yang artinya justru berlawanan.
+
+export interface BarisDibatalkan {
+  klaimId: string;
+  noFaktur: string;
+  outlet: string;
+  arah: string;
+  nominal: number;
+  tglTransaksi: string;
+  jamTransfer: string | null;
+  sumber: string;
+  catatan: string | null;
+  statusTransaksi: string | null;
+  bolehPulih: boolean;
+  /** Bukti yang MASIH berlaku di transaksi yang sama, dan kewajiban banknya.
+   *  akanDobel = pembatalannya hampir pasti BENAR (resi dobel) dan
+   *  memulihkannya akan membuat buktinya terbaca dua kali. */
+  buktiHidup: number;
+  bankWajib: number;
+  akanDobel: boolean;
+}
+
+export async function ambilDibatalkan(
+  hari = 30,
+): Promise<{ ok: boolean; msg?: string; items: BarisDibatalkan[] }> {
+  const k = await konfigGadai();
+  if (!k) return { ok: false, msg: "Sinkronisasi belum dikonfigurasi.", items: [] };
+  try {
+    const res = await fetch(`${k.base}/api/transfer-klaim/batal-undo?hari=${hari}`, {
+      headers: { Authorization: `Bearer ${k.key}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(15000),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j?.ok) return { ok: false, msg: j?.msg ?? `Gagal (HTTP ${res.status}).`, items: [] };
+    return { ok: true, items: (j.items ?? []) as BarisDibatalkan[] };
+  } catch (e) {
+    return { ok: false, msg: e instanceof Error ? e.message : String(e), items: [] };
+  }
+}
+
+/**
+ * Batalkan pembatalan — klaimnya kembali PENDING, bukan langsung MATCHED.
+ *
+ * Sengaja tidak langsung dinyatakan cocok: memulihkan berarti "pertanyaannya
+ * dibuka lagi", bukan "jawabannya sudah ketemu". Kalau uangnya memang ada, ia
+ * akan cocok sendiri pada kiriman mutasi berikutnya.
+ */
+export async function pulihkanPembatalan(
+  klaimId: string,
+  alasan: string,
+  /** Penegasan saat pemulihan akan mendobelkan bukti — gadai menolak sekali dulu. */
+  sadarDobel = false,
+) {
+  const k = await konfigGadai();
+  if (!k) return { ok: false, msg: "Sinkronisasi belum dikonfigurasi." };
+  if (alasan.trim().length < 10) {
+    return { ok: false, msg: "Alasan wajib diisi minimal 10 huruf — sebutkan kenapa pembatalannya keliru." };
+  }
+  try {
+    const res = await fetch(`${k.base}/api/transfer-klaim/batal-undo`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${k.key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ klaimId, alasan: alasan.trim(), sadarDobel }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j?.ok) {
+      // akanDobel bukan kegagalan — itu pertanyaan. Diteruskan apa adanya supaya
+      // layar bisa meminta penegasan, bukan sekadar menampilkan merah.
+      return { ok: false, msg: j?.msg ?? `Gagal (HTTP ${res.status}).`, akanDobel: j?.akanDobel === true };
+    }
+    return { ok: true, msg: j.msg ?? "Pembatalan dipulihkan." };
+  } catch (e) {
+    return { ok: false, msg: e instanceof Error ? e.message : String(e) };
+  }
+}
