@@ -333,10 +333,34 @@ export function runMatching(
       // Tebakan lintas hari hanya diterima kalau ia satu-satunya kandidat.
       const bedaHari = diffDays(input.tanggal, available[0].tanggalDate) !== 0;
       const sedangDirebutkan = rebutan.has(`${toDateISO(input.tanggal)}|${input.nominal}`);
-      // Tolak menebak lintas hari kalau (a) kandidatnya masih lebih dari satu,
-      // ATAU (b) nominal ini sedang diperebutkan beberapa input di tanggal yang
-      // sama — (b) yang benar-benar menutup insiden KRUKUH.
-      if (bedaHari && (available.length > 1 || sedangDirebutkan)) {
+
+      // ── (c) UANG HARI SENDIRI SUDAH DIAMBIL ORANG LAIN ──
+      //
+      // Pagar (a) dan (b) hanya melihat KE DALAM SATU SESI. Lintas sesi ia
+      // buta, dan di situ kebocorannya — kejadian nyata SJB-1-0186:
+      //
+      //   Kasir mencatat perpanjang yang SAMA dua kali (BB-...-3763 pukul
+      //   16:05 dan BB-...-5153 pukul 19:54), masing-masing menuntut porsi
+      //   bank Rp 460.000. Klaim pertama dicocokkan pada sesi 11 Agustus dan
+      //   mengambil satu-satunya kredit Rp 460.000 tanggal 10 Agustus. Klaim
+      //   kedua baru diproses pada sesi 13 Agustus — di sesi itu ia SENDIRIAN,
+      //   jadi (b) tidak menyala; dan baris hari itu sudah `claimedByOther`
+      //   sehingga kandidat tersisa cuma SATU, jadi (a) juga tidak menyala.
+      //   Hasilnya ia menebak ke tanggal 11 Agustus dan MENGAMBIL pembayaran
+      //   Rp 460.000 milik SBR-4-0182 yang masuk 25 jam kemudian.
+      //
+      // Polanya khas dan mudah dikenali: "uang bernominal ini di HARI SAYA
+      // SENDIRI ada, tapi sudah dipegang orang lain". Itu bukan alasan untuk
+      // mengambil uang hari berikutnya — itu justru pertanda saya kembar, atau
+      // pemegang yang satu itu yang salah. Dua-duanya urusan manusia.
+      const adaHariSamaTapiSudahDiambil = transactions.some((tx) => {
+        if (!nominalMatches(input.nominal, tx.kredit, rules)) return false;
+        if (diffDays(input.tanggal, tx.tanggalDate) !== 0) return false;
+        if (!skipBankFilter && input.bankId && tx.bankId && input.bankId !== tx.bankId) return false;
+        return tx.claimedByOther || claimed.has(txKey(tx));
+      });
+
+      if (bedaHari && (available.length > 1 || sedangDirebutkan || adaHariSamaTapiSudahDiambil)) {
         const datesSet = new Set<string>();
         for (const c of available) datesSet.add(c.tanggal);
         return {
