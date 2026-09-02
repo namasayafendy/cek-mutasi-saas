@@ -222,7 +222,11 @@ export type UserInput = {
 };
 
 /** Fase B: bagaimana sebuah input ter-match (label keyakinan) */
-export type MatchedBy = "REF" | "NAMA_JAM" | "NOMINAL";
+/** Cara MESIN mencocokkan, dari yang paling kuat ke yang paling lemah.
+ *  NOMINAL_JAM ditambahkan 3 September 2026: nominal + jam pada HARI YANG SAMA,
+ *  untuk resi yang jamnya terbaca tapi namanya tidak. NOMINAL tetap ada sebagai
+ *  jaring terakhir — ia boleh salah kontrak, tapi nominalnya pasti sama. */
+export type MatchedBy = "REF" | "NAMA_JAM" | "NOMINAL_JAM" | "NOMINAL";
 
 /** Fase B: masalah ref yang perlu perhatian, apapun status akhirnya */
 export type RefIssue = "REF_NOMINAL_BEDA" | "REF_SUDAH_DIKLAIM";

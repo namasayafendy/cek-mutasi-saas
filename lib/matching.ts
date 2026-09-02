@@ -25,6 +25,7 @@ import type {
   MatchSummary,
   MatchMode,
   RefIssue,
+  MatchedBy,
 } from "@/lib/types";
 import { diffDays } from "@/lib/format";
 
@@ -49,6 +50,10 @@ export const DEFAULT_RULES: MatchRules = {
 const PASS2_LOOKBACK_DAYS = 14;
 const PASS2_FORWARD_DAYS = 1;
 const PASS2_JAM_TOLERANSI_MENIT = 5;
+// Toleransi jam untuk PASS 3. Disamakan dengan PASS 2 supaya hanya ada SATU
+// angka yang perlu dipikirkan saat menyetelnya. Waktu di resi adalah waktu
+// nasabah menekan kirim; bank membukukannya beberapa saat kemudian.
+const PASS3_JAM_TOLERANSI_MENIT = 5;
 
 function nominalMatches(input: number, candidate: number, rules: MatchRules): boolean {
   if (rules.match_mode === "exact") return candidate === input;
@@ -139,7 +144,7 @@ export function runMatching(
   // refIssue ditemukan di Pass 1 tapi input jatuh ke pass berikutnya -> tempel di hasil akhir.
   const pendingRefIssue: (RefIssue | undefined)[] = inputs.map(() => undefined);
 
-  function buildMatched(input: UserInput, picked: PdfTransaction, matchedBy: "REF" | "NAMA_JAM" | "NOMINAL"): MatchResult {
+  function buildMatched(input: UserInput, picked: PdfTransaction, matchedBy: MatchedBy): MatchResult {
     claimed.add(txKey(picked));
     const colorHex = outletColors.get(input.outletId) ?? "#FFEB3B";
     return {
@@ -259,7 +264,67 @@ export function runMatching(
     resolved[idx] = buildMatched(input, available[0], "NAMA_JAM");
   });
 
-  // ── PASS 3: NOMINAL + jendela rules (perilaku lama; jalur input manual) ──
+
+  // ── PASS 3: NOMINAL + JAM, HARI YANG SAMA (ditambahkan 3 September 2026) ──
+  //
+  // Permintaan pemilik, sesudah ditemukan bahwa jam yang SUDAH dibaca AI tidak
+  // pernah terpakai: PASS 2 mensyaratkan nama DAN jam, jadi resi yang jamnya
+  // terbaca tapi namanya tidak langsung terjun ke pencocokan nominal — dan
+  // pencocokan nominal buta terhadap jam. Pemenangnya di sana ditentukan urutan
+  // baris di PDF, yang untuk dua kredit bernominal sama di hari yang sama
+  // praktis undian.
+  //
+  // Kejadian nyata 30 Agustus 2026: dua klaim GoPay Rp 150.000 di KR. GEUKUEH
+  // dan dua baris DOMPET ANAK BANGSA Rp 150.000 pada hari yang sama. Keduanya
+  // dipasangkan lewat urutan baris; hasilnya KEBETULAN benar. Uangnya memang
+  // tidak akan hilang (hari & nominal sama), tapi KONTRAK-nya bisa tertukar,
+  // dan tidak akan ada yang tahu.
+  //
+  // WAJIB HARI YANG SAMA, dan pembatasan ini disengaja. Tanpa nama yang
+  // menguatkan, jam di hari yang BERBEDA bukan bukti melainkan kebetulan:
+  // SBR-4-0419 (1 Sep, jam resi 18:02) tercocok ke setoran 30 Agustus jam
+  // 17.57 — beda hanya 5 menit, dan tetap salah kontrak. Toleransi jam berapa
+  // pun tidak akan menolak pasangan itu; yang salah di sana TANGGALNYA. Maka
+  // tebakan lintas hari tetap urusan PASS 4 dengan pagarnya sendiri.
+  //
+  // Kalau jamnya tidak terbaca, atau tidak ada kandidat sejam pun, pass ini
+  // DIAM dan membiarkan PASS 4 bekerja seperti biasa — permintaan pemilik:
+  // "yang penting nominal sama, tetap ter-matched".
+  inputs.forEach((input, idx) => {
+    if (!shouldProcess(input) || resolved[idx]) return;
+    const jamInput = jamToMinutes(input.jamResi);
+    if (jamInput === null) return;                 // jam tak terbaca -> PASS 4
+
+    const rules = getRules(input);
+    const skipBankFilter = forceCrossBank || !input.bankId;
+    const candidates = transactions.filter((tx) => {
+      if (tx.claimedByOther) return false;
+      if (!skipBankFilter && input.bankId && tx.bankId && input.bankId !== tx.bankId) {
+        return false;
+      }
+      if (!nominalMatches(input.nominal, tx.kredit, rules)) return false;
+      if (diffDays(input.tanggal, tx.tanggalDate) !== 0) return false;   // HARI SAMA
+      const jamTx = jamToMinutes(tx.waktu);
+      if (jamTx === null) return false;
+      return Math.abs(jamTx - jamInput) <= PASS3_JAM_TOLERANSI_MENIT;
+    });
+
+    const available = candidates.filter((tx) => !claimed.has(txKey(tx)));
+    if (available.length === 0) return;            // biar PASS 4 yang mencoba
+
+    // Yang jamnya PALING DEKAT menang. Seri dipecah nomor baris, sama seperti
+    // pass lain — tapi seri di sini berarti dua kredit berjarak menit yang
+    // sama persis dari resi, yang praktis tidak terjadi.
+    available.sort((a, b) => {
+      const ja = Math.abs((jamToMinutes(a.waktu) ?? 0) - jamInput);
+      const jb = Math.abs((jamToMinutes(b.waktu) ?? 0) - jamInput);
+      if (ja !== jb) return ja - jb;
+      return a.no - b.no;
+    });
+    resolved[idx] = buildMatched(input, available[0], "NOMINAL_JAM");
+  });
+
+  // ── PASS 4: NOMINAL + jendela rules (perilaku lama; jalur input manual) ──
   //
   // REBUTAN NOMINAL: kalau pada SATU tanggal ada LEBIH DARI SATU input dengan
   // nominal yang sama, mereka berebut kredit yang sama. Yang diproses belakangan
