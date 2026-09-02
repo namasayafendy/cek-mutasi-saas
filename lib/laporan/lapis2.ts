@@ -89,6 +89,12 @@ export interface IsiLapis2 {
   debetNganggur: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
   rpDebetNganggur: number;
   sisaDebetNganggur?: number;
+  /** Potongan admin bank (Rp 2.500 / Rp 6.500) yang SENGAJA tidak dirinci.
+   *  Keputusan pemilik 3 September 2026. Tetap dicetak satu baris: angka yang
+   *  lenyap tanpa keterangan sama menakutkannya dengan angka yang salah, dan
+   *  kalau bank menaikkan tarifnya, baris inilah yang memperlihatkannya. */
+  nBiayaAdmin?: number;
+  rpBiayaAdmin?: number;
   /** Tanggal terakhir yang benar-benar diuji untuk "tanpa pemilik". Terisi =
    *  ada ekor tanggal yang SENGAJA dilewati karena klaim gadai untuk hari itu
    *  belum lahir (cron malam belum menyapunya). */
@@ -396,6 +402,11 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       const sisaD = nD - Math.min(8, isi.debetNganggur.length);
       if (sisaD > 0) L.push(`   …dan ${sisaD} lagi`);
     }
+  }
+  // Disebut DI LUAR cacah di atas, bukan dijumlahkan ke dalamnya: ini bukan
+  // uang tanpa pemilik, ini potongan bank yang pemiliknya sudah jelas.
+  if (Number(isi.nBiayaAdmin ?? 0) > 0) {
+    L.push(`   ℹ️ ${isi.nBiayaAdmin} potongan admin bank · ${rp(Number(isi.rpBiayaAdmin ?? 0))} — tidak dirinci.`);
   }
   if (isi.nganggurBatas) {
     L.push(`   ℹ️ diperiksa sampai ${tgl(isi.nganggurBatas)} saja — sesudah itu klaimnya belum lahir.`);

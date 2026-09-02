@@ -18,6 +18,7 @@
 // jadi lupa satu baris itu berarti kebocoran lintas-akun.
 // ============================================================
 
+import { adalahBiayaAdmin } from "@/lib/bank/biayaAdmin";
 import { getAccountContext } from "@/lib/supabase/context";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { antreLaporan } from "@/lib/telegram/outbox";
@@ -262,7 +263,19 @@ async function susunLaporanLapis2(
     .sort((a, b) => (a.tgl < b.tgl ? -1 : a.tgl > b.tgl ? 1 : 0));
 
   const rowsK = (kredit?.unclaimedRows ?? []).filter((x) => x.tgl >= LANTAI_LAPIS2);
-  const rowsD = (debet?.unclaimedRows ?? []).filter((x) => x.tgl >= LANTAI_LAPIS2);
+  const rowsDSemua = (debet?.unclaimedRows ?? []).filter((x) => x.tgl >= LANTAI_LAPIS2);
+
+  // ── POTONGAN ADMIN BANK DIPISAH, BUKAN DIBUANG ──
+  //
+  // Rp 2.500 dan Rp 6.500 adalah biaya yang dibebankan bank, bukan uang
+  // perusahaan yang bergerak ke siapa pun. Tiap hari ia mendarat di blok
+  // "UANG DI MUTASI TANPA PEMILIK" dan menyita tempat baris yang benar-benar
+  // perlu dilihat. Keputusan pemilik 3 September 2026.
+  //
+  // Cacah & jumlahnya tetap dibawa ke laporan sebagai SATU baris. Kalau bank
+  // menaikkan tarifnya, baris itulah yang akan memperlihatkannya.
+  const rowsDAdmin = rowsDSemua.filter((x) => adalahBiayaAdmin(x.nominal));
+  const rowsD = rowsDSemua.filter((x) => !adalahBiayaAdmin(x.nominal));
 
   // Tunggakan dari sisi gadai.
   let tunggakan: IsiLapis2["tunggakan"] = [];
@@ -478,8 +491,16 @@ async function susunLaporanLapis2(
     sisaKreditNganggur: Math.max(0, Number(kredit?.unclaimedBelumLapor ?? rowsK.length) - rowsK.length),
     rpKreditNganggur: rowsK.reduce((s, x) => s + Number(x.nominal || 0), 0),
     debetNganggur: rowsD,
-    sisaDebetNganggur: Math.max(0, Number(debet?.unclaimedBelumLapor ?? rowsD.length) - rowsD.length),
+    // Potongan admin ikut dikurangkan dari "sisa yang belum dilaporkan".
+    // Tanpa ini, baris yang sengaja tidak dirinci akan muncul lagi sebagai
+    // "…dan N lagi" — persis angka yang baru saja kita sembunyikan.
+    sisaDebetNganggur: Math.max(
+      0,
+      Number(debet?.unclaimedBelumLapor ?? rowsDSemua.length) - rowsD.length - rowsDAdmin.length,
+    ),
     rpDebetNganggur: rowsD.reduce((s, x) => s + Number(x.nominal || 0), 0),
+    nBiayaAdmin: rowsDAdmin.length,
+    rpBiayaAdmin: rowsDAdmin.reduce((s, x) => s + Number(x.nominal || 0), 0),
     // Ekor tanggal yang SENGAJA tidak diuji, dan apakah pemeriksaannya jalan.
     // Keduanya harus sampai ke laporan: "(0) karena bersih" dan "(0) karena
     // belum diperiksa" tidak boleh berbunyi sama.
