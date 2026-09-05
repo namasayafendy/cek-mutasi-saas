@@ -116,6 +116,9 @@ export interface IsiLapis2 {
       menggantung: { n: number; rp: number };
     };
     tanggal: { tgl: string; arah: string;
+               /** SEMUA klaim hidup tanggal itu (dilepas + tertahan) — inilah
+                *  angka "total" yang dicetak Lapis 1, dan yang HARUS sama di sini. */
+               lahir?: { n: number; rp: number };
                dilepas: { n: number; rp: number };
                divonis: { n: number; rp: number };
                menggantung: { n: number; rp: number };
@@ -173,13 +176,19 @@ export interface IsiLapis2 {
     /** Vonis tanpa `matched_at` — tidak bisa dipilah baru/lama. Disebut, bukan
      *  dihilangkan diam-diam. */
     tanpaWaktuVonis?: { n: number; rp: number };
-    ketinggalan: { no_faktur: string; outlet: string; arah: string; tgl: string; nominal: number }[];
+    ketinggalan: { klaim_id?: string; no_faktur: string; outlet: string; arah: string; tgl: string; nominal: number }[];
     sisaKetinggalan?: number;
     tertahanPerSebab?: { sebab: string; teks: string; n: number; rp: number }[];
     gerbangError?: string | null;
   } | null;
   /** Sebab kenapa sandingan tidak bisa diambil. */
   sandinganGagal?: string | null;
+  /** Klaim yang pass berkas ini TAHAN (berebut baris / di luar periode).
+   *  Sisi gadai tahu SIAPA yang belum dijawab (`sandingan.ketinggalan`); sisi
+   *  ini tahu KENAPA. Dipasangkan lewat klaim_id supaya tiap resi yang belum
+   *  cocok punya alasannya — permintaan pemilik 5 September 2026. */
+  alasanKlaim?: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
+                  sebab: "BEREBUT" | "LUAR_PERIODE" }[];
   /** Resi yang sudah lama tidak ketemu dan belum dibereskan (dari sisi gadai). */
   tunggakan: {
     no_faktur: string; outlet: string; tgl: string; nominal: number; umur: number;
@@ -246,107 +255,148 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   if (isi.nganggurDiperiksa === false) awas.push("pemeriksaan uang tanpa pemilik tidak jalan");
   if (isi.utuh === false) awas.push("berkas mutasi TIDAK utuh — ada baris yang hilang");
   if (isi.nyambung === false) awas.push(`berkas tidak nyambung dengan unggahan sebelumnya (beda ${rp(isi.selisihSambungan)})`);
-  if (Number(isi.ditahanKonflik ?? 0) > 0) awas.push(`${isi.ditahanKonflik} resi berebut baris mutasi yang sama`);
+  // Dulu berbunyi "N resi berebut baris mutasi yang sama" tanpa nama, dan
+  // pemilik membacanya sebagai "N resi kehilangan uangnya". Sekarang namanya
+  // ada di blok pertama, jadi kalimat ini cukup menunjuk ke sana.
+  if (Number(isi.ditahanKonflik ?? 0) > 0) awas.push(`${isi.ditahanKonflik} resi belum bisa dinilai (berebut baris mutasi) — lihat "belum dijawab" di bawah`);
   if (awas.length) {
     L.push("");
     L.push(`🚨 JANGAN PAKAI LAPORAN INI MENUTUP HARI:`);
     awas.forEach((a) => L.push(`   • ${a}`));
   }
 
-  // ── 1. RESI DITERIMA DARI LAPIS 1 ──
+  // ── 1. DITERIMA DARI LAPIS 1 → COCOK / TIDAK COCOK / BELUM DIJAWAB ──
   //
-  // Sumbernya angka gadai (baruDivonis), bukan hitungan sendiri. Dua sisi yang
-  // menghitung sendiri-sendiri akan menyimpang, dan menyimpangnya justru
-  // terlihat seperti kebocoran.
+  // Dibentuk ULANG 5 September 2026 atas permintaan pemilik, dan bentuknya
+  // sengaja MENIRU LAPIS 1: sebut dulu berapa yang diterima (harus sama dengan
+  // "DIKIRIM KE LAPIS 2" di Lapis 1 untuk tanggal yang sama), baru berapa yang
+  // cocok, berapa yang tidak — dan yang belum dijawab disebut satu per satu
+  // beserta SEBABNYA.
+  //
+  // Bentuk lama mencetak "4 Sep 37 resi · Rp 38.269.000" yang bukan hitungan
+  // melainkan SISA: total 39 dikurangi 2 resi "tindak lanjut" (Rp 271.000).
+  // Angka sisa tidak bisa dijumlahkan dari daftar mana pun. Pemilik
+  // menyandingkannya dengan Lapis 1 (39 · Rp 38.510.000) dan bertanya "di mana
+  // selisihnya" — padahal tidak ada yang hilang: satu resi masih tertahan
+  // gerbang saat Lapis 1 memotret (07:30) dan dilepas sebelum Lapis 2
+  // menghitung (09:14); satu lagi diparkir karena berebut baris dan disebut di
+  // blok lain. Dua laporan yang memakai DASAR berbeda (tanggal resi vs tanggal
+  // transaksi; "diuji sesi ini" vs "dikirim") memang tidak akan pernah sama,
+  // dan selisihnya terbaca seperti kebocoran.
+  //
+  // Sumber angkanya SATU: `sandingan.tanggal` dari Aceh Gadai, dikelompokkan
+  // per TANGGAL TRANSAKSI — dasar yang sama dengan Lapis 1. Yang dikerjakan di
+  // sini hanya penjumlahan, dan pemeriksaan bahwa jumlahnya tutup.
+  //
+  // Klaim yang sudah MATI (dobel / dibatalkan) dikeluarkan dari "total" persis
+  // seperti Lapis 1 mengeluarkannya dari "dikirim", lalu disebut terpisah.
   const sd = isi.sandingan;
-  const daftar = Array.isArray(sd?.baruDivonis) ? sd!.baruDivonis! : null;
   const arahKeluar = (a: string) => ["DEBET", "KELUAR"].includes(String(a).toUpperCase());
+  const daftar = Array.isArray(sd?.baruDivonis) ? sd!.baruDivonis! : null;
+  const sel0 = { n: 0, rp: 0 };
+  const alasanOleh = new Map<string, "BEREBUT" | "LUAR_PERIODE">();
+  for (const a of (isi.alasanKlaim ?? [])) alasanOleh.set(String(a.id), a.sebab);
+  const teksSebab = (sebab?: string) =>
+    sebab === "BEREBUT" ? "berebut baris mutasi — baris bernominal sama sudah dipegang klaim lain"
+    : sebab === "LUAR_PERIODE" ? "di luar periode berkas — menunggu mutasi berikutnya"
+    : "belum dijawab Lapis 2";
 
   L.push("");
-  L.push(`RESI DITERIMA DARI LAPIS 1`);
+  L.push(`DITERIMA DARI LAPIS 1`);
 
-  let totN = 0, totRp = 0, adaN = 0, adaRp = 0, takN = 0, takRp = 0;
-
-  if (!daftar) {
-    L.push(`   ➖ tidak dikabarkan Aceh Gadai (versi lama / tanpa patokan waktu).`);
-    totN = Number(isi.nDiuji || 0); totRp = Number(isi.rpDiuji || 0);
-  } else if (daftar.length === 0) {
-    L.push(`   ➖ tidak ada resi baru sejak laporan sebelumnya.`);
-  } else {
-    // ALIRAN dan TINDAK LANJUT dipisah PER RESI, bukan per tanggal.
-    //
-    // Satu tanggal bisa memuat dua-duanya sekaligus, dan itu keadaan yang
-    // paling sering: resi yang tertahan pagi lalu dibereskan siang hari
-    // bertanggal SAMA dengan aliran normal hari itu. Memilahnya lewat tanggal
-    // membuat seluruh hari jatuh ke satu keranjang — 8 Agustus 2026 ALIRAN
-    // tercetak "masuk 0 resi" padahal 29 resi mengalir normal.
-    const perTgl = new Map<string, { n: number; rp: number; mN: number; mRp: number; kN: number; kRp: number }>();
-    let lanjutN = 0, lanjutRp = 0;
-    for (const d of daftar) {
-      const sN = Number(d.susulan?.n ?? (d.pertamaKali === false ? d.baru?.n : 0) ?? 0);
-      const sRp = Number(d.susulan?.rp ?? (d.pertamaKali === false ? d.baru?.rp : 0) ?? 0);
-      lanjutN += sN; lanjutRp += sRp;
-      // Sisanya aliran. Tidak pernah negatif walau angka dari seberang aneh.
-      const n = Math.max(0, Number(d.baru?.n ?? 0) - sN);
-      const r = Math.max(0, Number(d.baru?.rp ?? 0) - sRp);
-      if (n === 0 && r === 0) continue;
-      const g = perTgl.get(d.tgl) ?? { n: 0, rp: 0, mN: 0, mRp: 0, kN: 0, kRp: 0 };
-      g.n += n; g.rp += r;
-      if (arahKeluar(d.arah)) { g.kN += n; g.kRp += r; } else { g.mN += n; g.mRp += r; }
-      perTgl.set(d.tgl, g);
-    }
-    for (const [t, g] of [...perTgl.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1))) {
-      L.push(`   ${tgl(t)}   ${g.n} resi · ${rp(g.rp)}`);
-      L.push(`      masuk  ${String(g.mN).padStart(3)} resi · ${rp(g.mRp)}`);
-      L.push(`      keluar ${String(g.kN).padStart(3)} resi · ${rp(g.kRp)}`);
-    }
-    if (lanjutN > 0) {
-      L.push(`   tindak lanjut dari Lapis 1   ${lanjutN} resi · ${rp(lanjutRp)}`);
-      L.push(`      (tadinya tertahan di gerbang, sudah dibereskan)`);
-    }
-    for (const d of daftar) {
-      totN += Number(d.baru?.n ?? 0); totRp += Number(d.baru?.rp ?? 0);
-      adaN += Number(d.rinci?.MATCHED?.n ?? 0); adaRp += Number(d.rinci?.MATCHED?.rp ?? 0);
-      takN += Number(d.rinci?.UNMATCHED?.n ?? 0); takRp += Number(d.rinci?.UNMATCHED?.rp ?? 0);
-    }
-    L.push(`   TOTAL DICOCOKKAN   ${totN} resi · ${rp(totRp)}`);
-  }
-
-  // ── 2. HASIL PENCOCOKAN KE MUTASI ──
-  L.push("");
-  L.push(`DICOCOKKAN DENGAN MUTASI`);
-  if (!daftar) {
+  if (!sd || !Array.isArray(sd.tanggal)) {
+    // Tanpa angka gadai, yang bisa dikatakan hanya hitungan sisi ini — dan itu
+    // dikatakan apa adanya, bukan disamarkan sebagai sandingan.
+    L.push(`   ➖ angka dari Aceh Gadai tidak bisa diambil — di bawah ini hitungan Lapis 2 saja.`);
     const nGagal = isi.tidakKetemu.length;
     const rpGagal = isi.tidakKetemu.reduce((s, x) => s + (Number(x.nominal) || 0), 0);
-    adaN = totN - nGagal; adaRp = totRp - rpGagal; takN = nGagal; takRp = rpGagal;
-  }
-  L.push(`   ✅ ada di rekening   ${String(adaN).padStart(3)} resi · ${rp(adaRp)}`);
-  L.push(`   ${takN > 0 ? "⛔" : "✅"} tidak ada           ${String(takN).padStart(3)} resi · ${rp(takRp)}`);
-  // Sisanya (dobel/dibatalkan) hanya disebut kalau memang ada — kalau tidak, ia
-  // cuma memanjangkan halaman dengan nol.
-  const sisa = totN - adaN - takN;
-  if (sisa !== 0) L.push(`   ➖ dobel / dibatalkan  ${sisa} resi`);
+    L.push(`   diuji ${isi.nDiuji} resi · ${rp(isi.rpDiuji)}`);
+    L.push(`   ✅ cocok di rekening   ${isi.nDiuji - nGagal} · ${rp(isi.rpDiuji - rpGagal)}`);
+    L.push(`   ${nGagal > 0 ? "⛔" : "✅"} tidak ada di rekening ${nGagal} · ${rp(rpGagal)}`);
+    isi.tidakKetemu.slice(0, 15).forEach((x) =>
+      L.push(`      • ${x.no_faktur} · ${x.outlet} · ${tgl(x.tgl)} · ${rp(x.nominal)}`));
+  } else {
+    // Satu tanggal = dua arah. Digabung per tanggal supaya dibaca sekali duduk.
+    type Sisi = { total: { n: number; rp: number }; cocok: { n: number; rp: number };
+                  tak: { n: number; rp: number }; gantung: { n: number; rp: number };
+                  tahan: { n: number; rp: number }; mati: { n: number; rp: number };
+                  susulan: { n: number; rp: number }; ada: boolean };
+    const kosong = (): Sisi => ({ total: { ...sel0 }, cocok: { ...sel0 }, tak: { ...sel0 },
+      gantung: { ...sel0 }, tahan: { ...sel0 }, mati: { ...sel0 }, susulan: { ...sel0 }, ada: false });
+    const perTgl = new Map<string, { masuk: Sisi; keluar: Sisi; baru: boolean }>();
+    for (const t of sd.tanggal) {
+      const g = perTgl.get(t.tgl) ?? { masuk: kosong(), keluar: kosong(), baru: false };
+      const x = arahKeluar(t.arah) ? g.keluar : g.masuk;
+      const r = t.rinci ?? {};
+      const M = r.MATCHED ?? sel0, U = r.UNMATCHED ?? sel0;
+      const D = r.DUPLIKAT ?? sel0, Bt = r.DIBATALKAN ?? sel0;
+      const lahir = t.lahir ?? { n: t.dilepas.n + t.tertahan.n, rp: t.dilepas.rp + t.tertahan.rp };
+      x.ada = true;
+      x.total = { n: lahir.n - D.n - Bt.n, rp: lahir.rp - D.rp - Bt.rp };
+      x.cocok = { n: M.n, rp: M.rp };
+      x.tak = { n: U.n, rp: U.rp };
+      x.gantung = { n: t.menggantung.n, rp: t.menggantung.rp };
+      x.tahan = { n: t.tertahan.n, rp: t.tertahan.rp };
+      x.mati = { n: D.n + Bt.n, rp: D.rp + Bt.rp };
+      const bd = daftar?.find((d) => d.tgl === t.tgl && arahKeluar(d.arah) === arahKeluar(t.arah));
+      if (bd) { g.baru = true; x.susulan = { n: bd.susulan?.n ?? 0, rp: bd.susulan?.rp ?? 0 }; }
+      perTgl.set(t.tgl, g);
+    }
 
-  // Daftarnya diambil dari sumber yang SAMA dengan cacahnya. Memakai daftar
-  // dari pass berkas ini sementara cacahnya dari gadai membuat keduanya bisa
-  // berselisih — dan pernah: laporan mencetak "⛔ tidak ada 1 resi" dengan
-  // daftar KOSONG, jadi kontraknya tidak bisa dikejar siapa pun.
-  const namaTak = (daftar && Array.isArray(sd?.baruTakKetemu) && sd!.baruTakKetemu!.length)
-    ? sd!.baruTakKetemu!.map((x) => ({ no_faktur: x.no_faktur, outlet: x.outlet, tgl: x.tgl, nominal: x.nominal }))
-    : isi.tidakKetemu.map((x) => ({ no_faktur: x.no_faktur, outlet: x.outlet, tgl: x.tgl, nominal: x.nominal }));
-  if (namaTak.length) {
-    L.push("");
-    L.push(`   yang TIDAK ada di rekening:`);
-    namaTak.slice(0, 15).forEach((x) => {
-      L.push(`   • ${x.no_faktur} · ${x.outlet} · ${tgl(x.tgl)} · ${rp(x.nominal)}`);
-    });
-    if (namaTak.length > 15) L.push(`   …dan ${namaTak.length - 15} lagi`);
-    L.push(`   ↳ semuanya masuk /belum-cocok, diselesaikan manual.`);
-  } else if (takN > 0) {
-    // Cacahnya bilang ada, daftarnya kosong. Itu keadaan yang harus berbunyi,
-    // bukan didiamkan — kalau tidak, ada resi gagal yang tak punya nama.
-    L.push(`   🚨 ${takN} resi tidak ketemu TAPI kontraknya tidak terbawa —`);
-    L.push(`      buka /belum-cocok untuk melihatnya.`);
+    // Yang dicetak penuh: tanggal yang vonisnya BERUBAH di sesi ini, atau yang
+    // masih punya pertanyaan (belum dijawab / tidak ketemu / tertahan). Sisanya
+    // sudah pernah dibaca pemilik di laporan sebelumnya — cukup satu baris.
+    const semuaTgl = [...perTgl.keys()].sort((a, b) => (a < b ? 1 : -1));
+    const perlu = (g: { masuk: Sisi; keluar: Sisi; baru: boolean }) =>
+      g.baru || [g.masuk, g.keluar].some((x) => x.gantung.n > 0 || x.tak.n > 0 || x.tahan.n > 0);
+    const penting = semuaTgl.filter((t) => perlu(perTgl.get(t)!));
+    const tenang = semuaTgl.filter((t) => !perlu(perTgl.get(t)!));
+
+    const cetakSisi = (label: string, x: Sisi, t: string, keluar: boolean) => {
+      if (!x.ada || (x.total.n === 0 && x.mati.n === 0)) return;
+      L.push(`   ${label.padEnd(7)}${String(x.total.n).padStart(3)} resi · ${rp(x.total.rp)}`);
+      const semuaCocok = x.tak.n === 0 && x.gantung.n === 0 && x.tahan.n === 0;
+      L.push(`      ✅ cocok di rekening  ${String(x.cocok.n).padStart(3)} · ${rp(x.cocok.rp)}` + (semuaCocok ? " — semua cocok" : ""));
+      if (x.tak.n > 0) {
+        L.push(`      ⛔ tidak ada di rekening ${String(x.tak.n).padStart(2)} · ${rp(x.tak.rp)}`);
+        const nama = (sd.baruTakKetemu ?? []).filter((k) => k.tgl === t && arahKeluar(k.arah) === keluar);
+        nama.slice(0, 10).forEach((k) =>
+          L.push(`         • ${k.no_faktur} · ${k.outlet} · ${rp(k.nominal)} — tidak ada di rekening`));
+        if (x.tak.n > nama.length) L.push(`         …${x.tak.n - nama.length} dari laporan sebelumnya, lihat /belum-cocok`);
+      }
+      if (x.gantung.n > 0) {
+        L.push(`      ⏳ belum dijawab        ${String(x.gantung.n).padStart(2)} · ${rp(x.gantung.rp)}`);
+        const nama = (sd.ketinggalan ?? []).filter((k) => k.tgl === t && arahKeluar(k.arah) === keluar);
+        nama.slice(0, 10).forEach((k) =>
+          L.push(`         • ${k.no_faktur} · ${k.outlet} · ${rp(k.nominal)} — ${teksSebab(k.klaim_id ? alasanOleh.get(String(k.klaim_id)) : undefined)}`));
+        if (x.gantung.n > nama.length) L.push(`         …dan ${x.gantung.n - nama.length} lagi`);
+      }
+      if (x.tahan.n > 0) L.push(`      🚧 tertahan gerbang Lapis 1 ${x.tahan.n} · ${rp(x.tahan.rp)} — belum dikirim ke sini`);
+      if (x.susulan.n > 0) L.push(`      (termasuk ${x.susulan.n} resi · ${rp(x.susulan.rp)} yang tadinya tertahan lalu dibereskan)`);
+      if (x.mati.n > 0) L.push(`      ➖ dobel / dibatalkan ${x.mati.n} · ${rp(x.mati.rp)} — tidak dihitung, sama seperti Lapis 1`);
+      // Penjumlahan ditutup di depan mata. Kalau tidak tutup, itu cacat laporan
+      // ini sendiri dan harus berbunyi — bukan didiamkan.
+      const bagian = x.cocok.n + x.tak.n + x.gantung.n + x.tahan.n;
+      if (bagian !== x.total.n) {
+        L.push(`      🚨 jumlahnya TIDAK tutup: ${x.cocok.n}+${x.tak.n}+${x.gantung.n}+${x.tahan.n} = ${bagian}, bukan ${x.total.n}`);
+      }
+    };
+
+    for (const t of penting.slice(0, 6)) {
+      const g = perTgl.get(t)!;
+      L.push(`   ${tgl(t)}`);
+      cetakSisi("masuk", g.masuk, t, false);
+      cetakSisi("keluar", g.keluar, t, true);
+    }
+    if (penting.length > 6) L.push(`   …dan ${penting.length - 6} tanggal lagi yang masih punya pertanyaan`);
+    if (tenang.length) {
+      const jml = tenang.reduce((s, t) => {
+        const g = perTgl.get(t)!;
+        return { n: s.n + g.masuk.total.n + g.keluar.total.n, rp: s.rp + g.masuk.total.rp + g.keluar.total.rp };
+      }, { ...sel0 });
+      L.push(`   ${tenang.length} tanggal lain (${jml.n} resi · ${rp(jml.rp)}) — semua cocok, tidak berubah sejak laporan sebelumnya.`);
+    }
+    if (penting.length === 0 && tenang.length === 0) L.push(`   ➖ tidak ada resi dalam periode ini.`);
   }
 
   // ── BELUM BERES DARI SEBELUMNYA ──

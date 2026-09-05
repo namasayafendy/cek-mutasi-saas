@@ -169,6 +169,10 @@ export interface RingkasPass {
   tertahanGerbang?: { jml: number; rp: number;
                       perSebab: { sebab: string; teks: string; n: number; rp: number }[];
                       gerbangError: string | null } | null;
+  /** Klaim yang pass ini TAHAN (berebut baris / di luar periode), lengkap
+   *  identitasnya — dipasangkan ke `sandingan.ketinggalan` lewat klaim_id. */
+  ditahanDaftar?: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
+                    sebab: "BEREBUT" | "LUAR_PERIODE" }[];
 }
 
 export interface RingkasBerkas {
@@ -512,6 +516,9 @@ async function susunLaporanLapis2(
       : pass.every((p) => p.unclaimedDiperiksa !== false),
     sandingan,
     sandinganGagal,
+    // Alasan per klaim yang belum dijawab, dari pass berkas ini. Sisi gadai
+    // tahu SIAPA yang menggantung (ketinggalan); sisi ini tahu KENAPA.
+    alasanKlaim: pass.flatMap((p) => p.ditahanDaftar ?? []),
     tunggakan,
     gagal,
   };

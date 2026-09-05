@@ -204,6 +204,13 @@ export interface HasilPass {
    *  memvonisnya UNMATCHED berarti mengubah "saya menolak menebak" menjadi
    *  "uang tidak ditemukan", dan itu tuduhan terhadap kasir. */
   ditahanKonflik: number;
+  /** IDENTITAS klaim yang ditahan (berebut / di luar periode). Cacahnya sudah
+   *  lama ada; tanpa daftarnya laporan hanya bisa bilang "1 resi berebut"
+   *  tanpa menyebut kontrak mana — dan cacah yang tak bisa ditindaklanjuti
+   *  sama saja dengan tidak dilaporkan. Ditambahkan 5 September 2026 atas
+   *  permintaan pemilik: yang belum cocok disebut "no kontrak, rupiah, alasan". */
+  ditahanDaftar: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
+                   sebab: "BEREBUT" | "LUAR_PERIODE" }[];
   /** Klaim yang sudah terbukti cocok di sesi sebelumnya (vonisnya gagal
    *  terkirim waktu itu), dilaporkan ulang tanpa dicocokkan lagi. */
   sudahTerbuktiSebelumnya: number;
@@ -279,6 +286,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     unclaimedBatas: null, unclaimedDiperiksa: false,
     klaimDinilai: 0, cocok: 0, belumKetemu: 0,
     ditahanDiLuarPeriode: 0, ditahanKonflik: 0, sudahTerbuktiSebelumnya: 0,
+    ditahanDaftar: [],
     manualDinilai: 0, manualCocok: 0, tertahanGerbang: null,
     terkirim: null, batal: null,
     unclaimedCount: 0, unclaimedTotal: 0,
@@ -680,6 +688,20 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
 
   // ── P3: jangan memvonis klaim di luar periode ──
   const laporan: { id: string; matched: boolean; matched_by: string | null; ref_issue: string | null; ambiguous: number }[] = [];
+  // Identitas yang ditahan, dibawa ke laporan. Dipotong 80 supaya satu berkas
+  // yang salah periode tidak mengirim ratusan baris; sisanya tetap terhitung
+  // di cacahnya.
+  const catatDitahan = (i: any, sebab: "BEREBUT" | "LUAR_PERIODE") => {
+    if (hasil.ditahanDaftar.length >= 80) return;
+    hasil.ditahanDaftar.push({
+      id: String(i.id),
+      no_faktur: String(i.noFaktur ?? i.no_faktur ?? "-"),
+      outlet: String(i.outletNama ?? i.outlet ?? "-"),
+      tgl: toDateISO(i.tanggal),
+      nominal: Number(i.nominal ?? 0),
+      sebab,
+    });
+  };
   // Kalau mutasi ini TIDAK NYAMBUNG dengan catatan terakhir, ada transaksi
   // sebelum periodStart yang belum pernah masuk. Klaim yang jendela mundurnya
   // menyentuh lubang itu tidak boleh divonis: uangnya bisa saja mendarat di
@@ -723,6 +745,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     // dirancang untuk berbunyi keras di sisi gadai, jadi tetap dikirim.
     if (m?.status === "all_taken" && !m.refIssue) {
       hasil.ditahanKonflik++;
+      catatDitahan(i, "BEREBUT");
       continue;
     }
 
@@ -730,6 +753,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     const iso = toDateISO(i.tanggal);
     if (iso < batasBawah) {
       hasil.ditahanDiLuarPeriode++;
+      catatDitahan(i, "LUAR_PERIODE");
       continue;
     }
     // Batas atas memakai jendela MAJU aturan klaim itu sendiri: transfer malam
@@ -738,6 +762,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     const maju = gadaiAwareRules(i, rulesById).forward_window_days ?? 0;
     if (iso > geserHari(periodEnd, -maju)) {
       hasil.ditahanDiLuarPeriode++;
+      catatDitahan(i, "LUAR_PERIODE");
       continue;
     }
 

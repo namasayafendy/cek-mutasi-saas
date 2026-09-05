@@ -221,6 +221,9 @@ export function AutoRunner({
           manualDinilai: h.manualDinilai,
           manualCocok: h.manualCocok,
           tertahanGerbang: h.tertahanGerbang,
+          // Identitas klaim yang ditahan (berebut / luar periode) — tanpa ini
+          // blok "belum dijawab" di laporan hanya punya cacah, bukan nama.
+          ditahanDaftar: h.ditahanDaftar,
         });
         const tutup = await tandaiSelesai(jobId, ringkasBerkas, [bersih(hasilKredit), bersih(hasilDebet)]);
         ubahTerakhir("selesai");
