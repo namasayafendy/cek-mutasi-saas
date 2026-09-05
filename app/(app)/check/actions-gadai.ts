@@ -33,6 +33,11 @@ export interface GadaiPullInput {
    *  membuat penanganan tangan tidak bisa dibedakan dari alur biasa — padahal
    *  justru barisan itu yang perlu diawasi lebih ketat. */
   sumber: string | null;
+  /** true = klaim ini SUDAH MATCHED di gadai dan memegang satu baris mutasi
+   *  (cocok lewat nominal). Ia dibawa hanya sebagai kandidat korban aturan
+   *  "bukti kuat mengusir bukti lemah": TIDAK dicocokkan, TIDAK dilaporkan,
+   *  TIDAK dihitung — kecuali kalau pada jalan ini ia benar-benar tersepak. */
+  sudahMemegang?: boolean;
 }
 
 /** Yang gadai TAHAN di Lapis 1 dan tidak pernah sampai ke sini. */
@@ -77,6 +82,7 @@ export async function pullGadaiClaims(
 
   // 2) Tarik klaim PENDING dari Aceh Gadai (read-only)
   let claims: any[] = [];
+  let pemegangRaw: any[] = [];
   let tertahan: GadaiTertahan | null = null;
   try {
     const base = c.gadai_api_url.replace(/\/+$/, "");
@@ -89,6 +95,11 @@ export async function pullGadaiClaims(
     const json = await res.json();
     if (!json?.ok) return { ok: false, error: json?.msg || "Aceh Gadai menolak permintaan." };
     claims = Array.isArray(json.claims) ? json.claims : [];
+    // Pemegang lemah (MATCHED lewat nominal) — kandidat korban aturan sepak.
+    // Gadai versi lama tidak mengirimnya; kosong berarti aturan tidak punya
+    // korban untuk dicocokkan ulang, dan pengusiran pun tidak akan terjadi
+    // (matching.ts hanya mengusir pemegang yang identitasnya diketahui).
+    pemegangRaw = Array.isArray(json.pemegang) ? json.pemegang : [];
     // Gerbang Lapis 1 → Lapis 2 (29 Juli 2026). Gadai versi lama tidak
     // mengirim medan ini; null berarti "tidak diketahui", BUKAN nol.
     if (json.tertahan && typeof json.tertahan === "object") {
@@ -156,7 +167,31 @@ export async function pullGadaiClaims(
     });
   }
 
-  return { ok: true, inputs, unmappedOutlets: [...unmapped], total: inputs.length, tertahan };
+  const total = inputs.length;
+
+  // Pemegang lemah (MATCHED lewat nominal) — dibawa TERPISAH dari `claims`
+  // supaya `total` tetap = klaim PENDING. Lihat komentar di sisi gadai.
+  for (const cl of pemegangRaw) {
+    const outId = outletMap.get(normName(cl.outlet)) ?? "";
+    const tgl = String(cl.tgl_transfer || cl.tgl_transaksi || "").slice(0, 10);
+    inputs.push({
+      id: String(cl.id),
+      tanggalISO: tgl,
+      outletId: outId,
+      bankId: defaultBankId,
+      matchRuleId: defaultRuleId,
+      nominal: Number(cl.nominal || 0),
+      refFt: cl.ref_ft ? String(cl.ref_ft) : null,
+      jamResi: cl.jam_transfer ? String(cl.jam_transfer) : null,
+      namaPengirimResi: cl.nama_pengirim ? String(cl.nama_pengirim) : null,
+      noFaktur: cl.no_faktur ? String(cl.no_faktur) : null,
+      outletNama: cl.outlet ? String(cl.outlet) : null,
+      sumber: cl.sumber ? String(cl.sumber) : null,
+      sudahMemegang: true,
+    });
+  }
+
+  return { ok: true, inputs, unmappedOutlets: [...unmapped], total, tertahan };
 }
 
 // ============================================================
@@ -273,6 +308,9 @@ export async function pushGadaiResults(
       matched_by: r.matched_by ?? null,
       ref_issue: r.ref_issue ?? null,
       ambiguous: Number(r.ambiguous ?? 0) || 0,
+      // Sebab yang bisa dibaca manusia untuk vonis DISEPAK — disimpan gadai ke
+      // catatan_koreksi supaya /belum-cocok dan Lapis 2 bisa menyebutkannya.
+      catatan: (r as any).catatan ? String((r as any).catatan).slice(0, 300) : null,
     }));
   if (clean.length === 0) return { ok: false, error: "Tidak ada hasil untuk dikirim." };
 

@@ -194,6 +194,17 @@ export type PdfTransaction = {
   /** Fase B: baris hasil lookup-ref yang SUDAH di-claim input lain (sesi lama/manual).
    *  Bukan kandidat matching — hanya utk deteksi "ref menunjuk mutasi terpakai". */
   claimedByOther?: boolean;
+  /** SIAPA yang memegang baris ini (kalau claimedByOther). Dibutuhkan aturan
+   *  "bukti kuat mengusir bukti lemah": klaim ber-REF boleh mengambil baris
+   *  yang dipegang klaim yang cocoknya cuma lewat nominal — dan TIDAK boleh
+   *  menyentuh yang manual atau yang juga ber-REF. Tanpa identitas pemegang,
+   *  aturan itu tidak bisa membedakan keduanya. */
+  pemegang?: {
+    inputId: string;
+    matchedBy: string | null;
+    manual: boolean;
+    gadaiKlaimId: string | null;
+  };
 };
 
 /** User input row during cek mutasi session */
@@ -213,6 +224,21 @@ export type UserInput = {
   jamResi?: string | null;
   /** Fase B (klaim gadai): nama pengirim di resi (dibaca AI) — kunci Pass-2 */
   namaPengirimResi?: string | null;
+  /** true = klaim ini SUDAH memegang satu baris mutasi dari sesi sebelumnya.
+   *  Klaim seperti ini tidak boleh ikut mengusir pemegang lain: hasilnya satu
+   *  klaim memegang DUA baris — indeks unik tidak mencegahnya (ia menjaga
+   *  satu baris satu klaim, bukan sebaliknya). */
+  sudahMemegang?: boolean;
+  /** 'MANUAL' = resi diketik owner di Lapis 1 (bukan bacaan AI). Dibawa ke
+   *  pencocokan supaya korban sepak yang manual dikenali dari SUMBERNYA,
+   *  bukan hanya dari pola id-nya. */
+  sumber?: string | null;
+  /** true = klaim ini sudah memegang baris di cek-mutasi (sesi lama) tapi di
+   *  gadai masih PENDING (vonisnya gagal terkirim). Ia tidak boleh mengusir
+   *  dan tidak dicocokkan ulang, TAPI tetap dilaporkan lewat jalur SESI_LAMA
+   *  supaya vonisnya akhirnya sampai. Berbeda dari sudahMemegang (dari daftar
+   *  `pemegang` gadai) yang tidak dilaporkan sama sekali. */
+  tidakBolehMengusir?: boolean;
 
   /** Identitas asal klaim — dibawa HANYA untuk laporan, tidak dipakai
    *  mencocokkan. Tanpa ini daftar "tidak ditemukan" cuma bisa menyebut
@@ -229,7 +255,11 @@ export type UserInput = {
 export type MatchedBy = "REF" | "NAMA_JAM" | "NOMINAL_JAM" | "NOMINAL";
 
 /** Fase B: masalah ref yang perlu perhatian, apapun status akhirnya */
-export type RefIssue = "REF_NOMINAL_BEDA" | "REF_SUDAH_DIKLAIM";
+export type RefIssue = "REF_NOMINAL_BEDA" | "REF_SUDAH_DIKLAIM"
+  /** Klaim ini DISEPAK dari barisnya oleh klaim ber-REF, lalu pencocokan
+   *  ulangnya TIDAK ketemu. Bukan "uang tidak ada" — uangnya ada, cuma bukan
+   *  milik klaim ini. Harus dicocokkan manusia. */
+  | "DISEPAK";
 
 export type MatchResult = (
   | {
@@ -252,4 +282,20 @@ export type MatchSummary = {
   noCandidate: UserInput[];
   allTaken: UserInput[];
   unclaimed: PdfTransaction[];
+  /** Pengusiran yang terjadi pada jalan ini: baris X pindah dari klaim lemah
+   *  ke klaim ber-REF. Pemanggil WAJIB mempersistenkan pelepasan pemegang lama
+   *  SEBELUM menyimpan sesi — kalau tidak, indeks unik di database menolak
+   *  pemegang baru dan RPC klaim diam-diam melewatinya. */
+  disepak?: {
+    txKey: string;
+    parsedTxId: string | null;
+    noRef: string | null;
+    tanggal: string;
+    kredit: number;
+    pemegangInputId: string;
+    pemegangKlaimId: string;
+    pemegangMatchedBy: string | null;
+    olehKlaimId: string;
+    olehNoFaktur: string | null;
+  }[];
 };

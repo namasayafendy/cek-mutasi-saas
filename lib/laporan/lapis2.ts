@@ -188,7 +188,11 @@ export interface IsiLapis2 {
    *  ini tahu KENAPA. Dipasangkan lewat klaim_id supaya tiap resi yang belum
    *  cocok punya alasannya — permintaan pemilik 5 September 2026. */
   alasanKlaim?: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
-                  sebab: "BEREBUT" | "LUAR_PERIODE" }[];
+                  sebab: "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU" }[];
+  /** Baris mutasi yang pindah pemilik pada jalan ini — jejak, bukan alarm. */
+  disepak?: { olehKlaimId: string; olehNoFaktur: string | null; pemegangKlaimId: string;
+              pemegangMatchedBy: string | null; noRef: string | null; tanggal: string; kredit: number;
+              nasib: "COCOK_ULANG" | "TAK_KETEMU" }[];
   /** Resi yang sudah lama tidak ketemu dan belum dibereskan (dari sisi gadai). */
   tunggakan: {
     no_faktur: string; outlet: string; tgl: string; nominal: number; umur: number;
@@ -294,12 +298,17 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   const arahKeluar = (a: string) => ["DEBET", "KELUAR"].includes(String(a).toUpperCase());
   const daftar = Array.isArray(sd?.baruDivonis) ? sd!.baruDivonis! : null;
   const sel0 = { n: 0, rp: 0 };
-  const alasanOleh = new Map<string, "BEREBUT" | "LUAR_PERIODE">();
+  const alasanOleh = new Map<string, "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU">();
   for (const a of (isi.alasanKlaim ?? [])) alasanOleh.set(String(a.id), a.sebab);
   const teksSebab = (sebab?: string) =>
     sebab === "BEREBUT" ? "berebut baris mutasi — baris bernominal sama sudah dipegang klaim lain"
     : sebab === "LUAR_PERIODE" ? "di luar periode berkas — menunggu mutasi berikutnya"
+    : sebab === "DISEPAK_TAK_KETEMU" ? "salah klaim sebelumnya, disepak oleh resi ber-referensi; pencocokan ulang TIDAK ketemu — cocokkan manual di /belum-cocok"
     : "belum dijawab Lapis 2";
+  // Sebab per NOMOR KONTRAK juga — daftar "tidak ada di rekening" dari gadai
+  // tidak membawa klaim_id, jadi pemasangannya lewat kontrak+nominal.
+  const alasanOlehFaktur = new Map<string, "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU">();
+  for (const a of (isi.alasanKlaim ?? [])) alasanOlehFaktur.set(`${a.no_faktur}|${Math.round(a.nominal)}`, a.sebab);
 
   L.push("");
   L.push(`DITERIMA DARI LAPIS 1`);
@@ -360,8 +369,10 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       if (x.tak.n > 0) {
         L.push(`      ⛔ tidak ada di rekening ${String(x.tak.n).padStart(2)} · ${rp(x.tak.rp)}`);
         const nama = (sd.baruTakKetemu ?? []).filter((k) => k.tgl === t && arahKeluar(k.arah) === keluar);
-        nama.slice(0, 10).forEach((k) =>
-          L.push(`         • ${k.no_faktur} · ${k.outlet} · ${rp(k.nominal)} — tidak ada di rekening`));
+        nama.slice(0, 10).forEach((k) => {
+          const sb = alasanOlehFaktur.get(`${k.no_faktur}|${Math.round(k.nominal)}`);
+          L.push(`         • ${k.no_faktur} · ${k.outlet} · ${rp(k.nominal)} — ${sb ? teksSebab(sb) : "tidak ada di rekening"}`);
+        });
         if (x.tak.n > nama.length) L.push(`         …${x.tak.n - nama.length} dari laporan sebelumnya, lihat /belum-cocok`);
       }
       if (x.gantung.n > 0) {
@@ -397,6 +408,26 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       L.push(`   ${tenang.length} tanggal lain (${jml.n} resi · ${rp(jml.rp)}) — semua cocok, tidak berubah sejak laporan sebelumnya.`);
     }
     if (penting.length === 0 && tenang.length === 0) L.push(`   ➖ tidak ada resi dalam periode ini.`);
+  }
+
+  // ── JEJAK: BARIS YANG PINDAH PEMILIK PADA JALAN INI ──
+  //
+  // Bukan alarm — bukti kuat (ref) mengusir tebakan (nominal), dan yang
+  // terusir langsung dicocokkan ulang. Tapi baris bank yang berpindah pemilik
+  // tanpa ada yang menekan apa pun HARUS terlihat sekali, di sini. Yang tidak
+  // ketemu pasangannya sudah disebut di blok atas dengan sebabnya, dan akan
+  // terus disebut sampai dibereskan manual.
+  const sepak = isi.disepak ?? [];
+  if (sepak.length) {
+    L.push("");
+    L.push(`🔁 DIBETULKAN OTOMATIS (${sepak.length})`);
+    sepak.slice(0, 8).forEach((d) => {
+      const cara = String(d.pemegangMatchedBy ?? "nominal").toLowerCase();
+      L.push(`   • baris ${tgl(d.tanggal)} · ${rp(d.kredit)}${d.noRef ? ` · ref ${d.noRef}` : ""}`);
+      L.push(`     → ${d.olehNoFaktur ?? d.olehKlaimId} (ref cocok persis); tadinya ${d.pemegangKlaimId} lewat ${cara}` +
+             (d.nasib === "COCOK_ULANG" ? " — sudah dipasangkan ulang ke baris lain" : " — TIDAK ketemu baris lain, lihat di atas"));
+    });
+    if (sepak.length > 8) L.push(`   …dan ${sepak.length - 8} lagi`);
   }
 
   // ── BELUM BERES DARI SEBELUMNYA ──

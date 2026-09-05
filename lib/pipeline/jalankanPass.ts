@@ -134,7 +134,8 @@ export interface AlasanBatal {
     | "PERIODE_KOSONG"
     | "TIDAK_ADA_KLAIM"
     | "TARIK_GAGAL"
-    | "KIRIM_GAGAL";
+    | "KIRIM_GAGAL"
+    | "GAGAL_SEPAK";
   pesan: string;
 }
 
@@ -210,7 +211,17 @@ export interface HasilPass {
    *  sama saja dengan tidak dilaporkan. Ditambahkan 5 September 2026 atas
    *  permintaan pemilik: yang belum cocok disebut "no kontrak, rupiah, alasan". */
   ditahanDaftar: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
-                   sebab: "BEREBUT" | "LUAR_PERIODE" }[];
+                   sebab: "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU" }[];
+  /** Pengusiran yang terjadi pada jalan ini (bukti kuat mengusir bukti lemah),
+   *  sudah DIPERSISTENKAN. Dibawa ke laporan sebagai jejak: pemilik berhak
+   *  tahu baris bank mana yang pindah pemilik tanpa ia menekan apa pun. */
+  disepak: {
+    olehKlaimId: string; olehNoFaktur: string | null;
+    pemegangKlaimId: string; pemegangMatchedBy: string | null;
+    noRef: string | null; tanggal: string; kredit: number;
+    /** Nasib pemegang lama pada jalan ini: cocok ke baris lain, atau tidak. */
+    nasib: "COCOK_ULANG" | "TAK_KETEMU";
+  }[];
   /** Klaim yang sudah terbukti cocok di sesi sebelumnya (vonisnya gagal
    *  terkirim waktu itu), dilaporkan ulang tanpa dicocokkan lagi. */
   sudahTerbuktiSebelumnya: number;
@@ -287,10 +298,13 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     klaimDinilai: 0, cocok: 0, belumKetemu: 0,
     ditahanDiLuarPeriode: 0, ditahanKonflik: 0, sudahTerbuktiSebelumnya: 0,
     ditahanDaftar: [],
+    disepak: [],
     manualDinilai: 0, manualCocok: 0, tertahanGerbang: null,
     terkirim: null, batal: null,
     unclaimedCount: 0, unclaimedTotal: 0,
   };
+  const tglTampil = (iso: string) => String(iso ?? "").slice(0, 10).split("-").reverse().join("/");
+  const rpTampil = (n: number) => "Rp " + Math.round(Number(n || 0)).toLocaleString("id-ID");
 
   /**
    * BARIS MUTASI TANPA PEMILIK — dibaca, BELUM distempel.
@@ -444,7 +458,9 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     hasil.batal = { kode: "TARIK_GAGAL", pesan: tarik.error };
     return hasil;
   }
-  hasil.klaimDitarik = tarik.inputs.length;
+  // Pemegang lemah ikut di tarik.inputs sebagai kandidat korban — bukan klaim
+  // yang "ditarik untuk dinilai". Menghitungnya membengkakkan angka ini ±750.
+  hasil.klaimDitarik = tarik.inputs.filter((i) => i.sudahMemegang !== true).length;
   hasil.outletTakDikenal = tarik.unmappedOutlets;
   hasil.tertahanGerbang = tarik.tertahan ?? null;
   // Dicatat SEBELUM klaim dibuang/disaring, supaya keanggotaannya tidak ikut
@@ -472,6 +488,8 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       refFt: i.refFt,
       jamResi: i.jamResi,
       namaPengirimResi: i.namaPengirimResi,
+      sudahMemegang: i.sudahMemegang === true,
+      sumber: i.sumber ?? null,
       // Ikut dibawa supaya daftar "tidak ditemukan" bisa menyebut kontrak dan
       // outletnya. Sebelum ini keduanya dibuang di sini, sehingga laporan
       // menulis "1. - · -" dan pemiliknya cuma dapat nominal — cukup untuk
@@ -575,12 +593,13 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   {
     const idPool = [...new Set(pool.map((t) => t.parsedTxId).filter(Boolean))] as string[];
     const terklaim = new Set<string>();
+    const pemegangBaris = new Map<string, { inputId: string; manualBaris: boolean }>();
     // Dipotong 500 supaya tidak pernah menyentuh batas 1000 baris PostgREST —
     // pemotongan senyap di titik seperti ini pernah membuat kas dobel.
     for (let i = 0; i < idPool.length; i += 500) {
       const { data, error } = await supabase
         .from("parsed_transactions")
-        .select("id")
+        .select("id, claimed_by_input_id, manual_claim_reason")
         .in("id", idPool.slice(i, i + 500))
         .not("claimed_by_input_id", "is", null);
       if (error) {
@@ -591,10 +610,72 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
         };
         return hasil;
       }
-      for (const r of (data ?? []) as any[]) terklaim.add(String(r.id));
+      for (const r of (data ?? []) as any[]) {
+        terklaim.add(String(r.id));
+        pemegangBaris.set(String(r.id), {
+          inputId: String(r.claimed_by_input_id),
+          manualBaris: !!r.manual_claim_reason,
+        });
+      }
+    }
+    // ── SIAPA PEMEGANGNYA — bukan cuma "sudah dipegang" ──
+    //
+    // Aturan "bukti kuat mengusir bukti lemah" (matching.ts, PASS 1) perlu tahu
+    // cara pemegang lama mencocokkan: NOMINAL boleh diusir oleh REF; MANUAL,
+    // REF, NAMA_JAM tidak boleh disentuh. Tanpa ini semua pemegang terlihat
+    // sama, dan aturannya harus memilih antara mengusir semua atau tidak sama
+    // sekali — dua-duanya salah.
+    const pemegangInput = new Map<string, { matchedBy: string | null; manual: boolean; gadaiKlaimId: string | null }>();
+    {
+      const idInput = [...new Set([...pemegangBaris.values()].map((p) => p.inputId))];
+      for (let i = 0; i < idInput.length; i += 500) {
+        const { data, error } = await supabase
+          .from("cek_inputs")
+          .select("id, matched_by, match_status, manual_claim_reason, gadai_klaim_id")
+          .in("id", idInput.slice(i, i + 500));
+        if (error) {
+          console.error("[pass] gagal membaca pemegang baris:", error);
+          hasil.batal = {
+            kode: "GAGAL_SIMPAN_BARIS",
+            pesan: "Tidak bisa membaca siapa pemegang baris mutasi — pencocokan dihentikan supaya tidak ada baris yang berpindah tangan tanpa dasar.",
+          };
+          return hasil;
+        }
+        for (const r of (data ?? []) as any[]) {
+          pemegangInput.set(String(r.id), {
+            matchedBy: r.matched_by ? String(r.matched_by) : null,
+            // MANUAL dalam tiga bentuk, semuanya mengunci: (1) penutupan tangan
+            // di sini (manual_claimed / alasan), (2) resi yang DIKETIK owner
+            // sendiri di Lapis 1 — id klaimnya berpola TFKM- (lib/sessions/
+            // save.ts). Yang kedua tidak menyimpan `sumber` di cek_inputs, jadi
+            // polanya yang dibaca. Aturan pemilik: yang manual, apa pun
+            // ceritanya, tidak boleh disepak.
+            // Resi ketikan owner: sisi MASUK ber-id TFKM-…, sisi KELUAR ber-id
+            // TFKD-{req}-M{acak} (app/api/tf-keluar/resi/route.ts:376). Keduanya
+            // dikenali dari polanya DAN dari `sumber` pada input korban.
+            manual: String(r.match_status ?? "") === "manual_claimed" || !!r.manual_claim_reason
+                    || /^TFKM-/i.test(String(r.gadai_klaim_id ?? ""))
+                    || /^TFKD-\d+-M/i.test(String(r.gadai_klaim_id ?? "")),
+            gadaiKlaimId: r.gadai_klaim_id ? String(r.gadai_klaim_id) : null,
+          });
+        }
+      }
     }
     for (const t of pool) {
-      if (t.parsedTxId && terklaim.has(t.parsedTxId)) t.claimedByOther = true;
+      if (!t.parsedTxId || !terklaim.has(t.parsedTxId)) continue;
+      t.claimedByOther = true;
+      const pb = pemegangBaris.get(t.parsedTxId);
+      const pi = pb ? pemegangInput.get(pb.inputId) : undefined;
+      if (pb && pi) {
+        t.pemegang = {
+          inputId: pb.inputId,
+          matchedBy: pi.matchedBy,
+          // Manual dari SISI MANA PUN mengunci: catatan di barisnya atau di
+          // inputnya sama-sama berarti manusia sudah memutuskan.
+          manual: pi.manual || pb.manualBaris,
+          gadaiKlaimId: pi.gadaiKlaimId,
+        };
+      }
     }
   }
 
@@ -609,12 +690,23 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   {
     const idKlaim = inputs.map((i) => i.id);
     for (let i = 0; i < idKlaim.length; i += 500) {
-      const { data } = await supabase
+      const { data, error: errTerbukti } = await supabase
         .from("cek_inputs")
         .select("gadai_klaim_id")
         .in("gadai_klaim_id", idKlaim.slice(i, i + 500))
         .not("matched_tx_id", "is", null)
         .is("deleted_at", null);
+      if (errTerbukti) {
+        // Daftar ini menjadi pagar 4 aturan sepak ("pengusir yang sudah
+        // memegang baris tidak boleh mengusir"). Kueri yang gagal dulu
+        // dibiarkan lewat — dan pagar yang gagal terbaca sama dengan pagar
+        // yang tidak ada. Sekarang berhenti.
+        hasil.batal = {
+          kode: "GAGAL_SIMPAN_BARIS",
+          pesan: "Tidak bisa memastikan klaim mana yang sudah memegang baris mutasi — pencocokan dihentikan supaya tidak ada klaim yang memegang dua baris.",
+        };
+        return hasil;
+      }
       for (const r of (data ?? []) as any[]) {
         if (r.gadai_klaim_id) sudahTerbukti.add(String(r.gadai_klaim_id));
       }
@@ -625,9 +717,112 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   onLangkah?.(`Mencocokkan ${inputs.length} klaim dengan ${pool.length} baris mutasi...`);
   const outletColors = new Map<string, string>(outlets.map((o) => [o.id, o.warna_hex]));
   const rulesById = new Map<string, MatchRulePreset>(rules.map((r) => [r.id, r]));
+  // Klaim PENDING di gadai yang ternyata sudah memegang baris di sini (vonis
+  // lama gagal terkirim): tidak boleh mengusir dan tidak dicocokkan ulang —
+  // tapi TETAP dilaporkan lewat jalur SESI_LAMA di bawah. Ditandai terpisah
+  // dari `sudahMemegang` (daftar pemegang dari gadai) yang memang tidak
+  // dilaporkan; menyamakan keduanya mematikan SESI_LAMA (temuan pemeriksa).
+  for (const i of inputs) {
+    if (sudahTerbukti.has(String(i.id)) && !(i as any).sudahMemegang) (i as any).tidakBolehMengusir = true;
+  }
+
   const { inputs: hasilInputs, summary } = runMatching(inputs, pool, outletColors, {
     getRulesForInput: (i) => gadaiAwareRules(i, rulesById),
   });
+
+  // ── PELEPASAN PEMEGANG LAMA DIPERSISTENKAN DULU, SEBELUM SESI DISIMPAN ──
+  //
+  // Pengusiran di matching.ts baru terjadi di memori. Kalau sesi disimpan
+  // begitu saja: indeks unik `uq_cek_inputs_satu_baris_satu_klaim_gadai`
+  // menolak pemegang baru, dan RPC claim_parsed_transactions hanya mengklaim
+  // baris yang claimed_by_input_id-nya NULL — jadi pemegang baru diam-diam
+  // tidak pernah tercatat, sementara laporan sudah bilang "cocok".
+  //
+  // Urutan dan pagarnya:
+  //   1. Baris mutasi dilepas dengan CAS (hanya kalau pemegangnya memang
+  //      input lama itu). Kalau nol baris berubah, ada yang mendahului kita —
+  //      berhenti, jangan menebak.
+  //   2. Baris cek_inputs lama DIHAPUS-LUNAK (deleted_at), bukan dihapus:
+  //      jejaknya tetap ada, dan indeks unik (parsial pada deleted_at IS NULL)
+  //      langsung membebaskan slotnya.
+  //   3. Dicatat ke audit_logs.
+  //   Gagal di mana pun = seluruh jalan dibatalkan sebelum menyimpan atau
+  //   mengirim apa pun. Setengah jalan di sini berarti satu uang dua pemilik.
+  const klaimDisepak = new Set<string>();
+  // Jejak pelepasan yang SUDAH dipersistenkan — untuk dibalik kalau langkah
+  // sesudahnya (simpan sesi / klaim baris) gagal. Setengah jalan di sini
+  // berarti baris bebas tanpa pemilik sementara gadai masih menganggapnya
+  // cocok; membalik lebih murah daripada mencari.
+  const dilepas: { parsedTxId: string; inputLama: string; olehKlaimId: string }[] = [];
+  const batalkanPelepasan = async () => {
+    for (const r of dilepas) {
+      // Baris pengusir yang mungkin sempat tersimpan oleh saveSession harus
+      // dinonaktifkan DULU — indeks unik menolak dua pemegang hidup.
+      await supabase.from("cek_inputs")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("matched_tx_id", r.parsedTxId).eq("gadai_klaim_id", r.olehKlaimId).is("deleted_at", null);
+      await supabase.from("cek_inputs")
+        .update({ deleted_at: null })
+        .eq("id", r.inputLama);
+      await supabase.from("parsed_transactions")
+        .update({ claimed_by_input_id: r.inputLama, claimed_at: new Date().toISOString() })
+        .eq("id", r.parsedTxId)
+        .or(`claimed_by_input_id.is.null,claimed_by_input_id.eq.${r.inputLama}`);
+      await supabase.from("audit_logs").insert({
+        account_id: accountId, user_id: userId,
+        action: "KLAIM_DISEPAK_DIBATALKAN", target_type: "cek_inputs", target_id: r.inputLama,
+        metadata: { baris: r.parsedTxId, oleh: r.olehKlaimId },
+      }).then(() => {}, () => {});
+    }
+  };
+  for (const d of (summary.disepak ?? [])) {
+    if (!d.parsedTxId) {
+      await batalkanPelepasan();
+      hasil.batal = { kode: "GAGAL_SEPAK", pesan: `Baris ${d.txKey} tidak punya id di database — pengusiran dibatalkan.` };
+      return hasil;
+    }
+    const { data: lepas, error: eLepas } = await supabase
+      .from("parsed_transactions")
+      .update({ claimed_by_input_id: null, claimed_at: null })
+      .eq("id", d.parsedTxId)
+      .eq("claimed_by_input_id", d.pemegangInputId)
+      .select("id");
+    if (eLepas || !lepas || lepas.length === 0) {
+      await batalkanPelepasan();
+      hasil.batal = {
+        kode: "GAGAL_SEPAK",
+        pesan: `Baris ${tglTampil(d.tanggal)} ${rpTampil(d.kredit)} tidak bisa dilepas dari ${d.pemegangKlaimId}` +
+               (eLepas ? `: ${eLepas.message}` : " — pemegangnya sudah berubah") + ". Jalan dihentikan.",
+      };
+      return hasil;
+    }
+    const { data: nonaktif, error: eInput } = await supabase
+      .from("cek_inputs")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", d.pemegangInputId)
+      .is("deleted_at", null)
+      .select("id");
+    if (eInput || !nonaktif || nonaktif.length !== 1) {
+      // Baris sudah dilepas di langkah 1 — kembalikan dulu, baru berhenti.
+      await supabase.from("parsed_transactions")
+        .update({ claimed_by_input_id: d.pemegangInputId, claimed_at: new Date().toISOString() })
+        .eq("id", d.parsedTxId).is("claimed_by_input_id", null);
+      await batalkanPelepasan();
+      hasil.batal = { kode: "GAGAL_SEPAK", pesan: `Klaim lama ${d.pemegangKlaimId} tidak bisa dinonaktifkan` + (eInput ? `: ${eInput.message}` : " (baris input tidak ditemukan / sudah nonaktif)") + ". Jalan dihentikan." };
+      return hasil;
+    }
+    dilepas.push({ parsedTxId: d.parsedTxId, inputLama: d.pemegangInputId, olehKlaimId: d.olehKlaimId });
+    await supabase.from("audit_logs").insert({
+      account_id: accountId, user_id: userId,
+      action: "KLAIM_DISEPAK", target_type: "cek_inputs", target_id: d.pemegangInputId,
+      metadata: {
+        baris: d.parsedTxId, no_ref: d.noRef, tanggal: d.tanggal, kredit: d.kredit,
+        pemegang_lama: d.pemegangKlaimId, cara_lama: d.pemegangMatchedBy,
+        oleh: d.olehKlaimId, oleh_no_faktur: d.olehNoFaktur, cara_baru: "REF",
+      },
+    }).then(({ error }) => { if (error) console.error("[pass] audit KLAIM_DISEPAK gagal:", error.message); });
+    klaimDisepak.add(d.pemegangKlaimId);
+  }
 
   const unclaimedIni = summary.unclaimed.filter((t) => t.source === "current");
   hasil.unclaimedCount = unclaimedIni.length;
@@ -687,11 +882,11 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   // yang salah sumber. Itu sebabnya sisi gadai tidak pernah melihat gejalanya.
 
   // ── P3: jangan memvonis klaim di luar periode ──
-  const laporan: { id: string; matched: boolean; matched_by: string | null; ref_issue: string | null; ambiguous: number }[] = [];
+  const laporan: { id: string; matched: boolean; matched_by: string | null; ref_issue: string | null; ambiguous: number; catatan?: string | null }[] = [];
   // Identitas yang ditahan, dibawa ke laporan. Dipotong 80 supaya satu berkas
   // yang salah periode tidak mengirim ratusan baris; sisanya tetap terhitung
   // di cacahnya.
-  const catatDitahan = (i: any, sebab: "BEREBUT" | "LUAR_PERIODE") => {
+  const catatDitahan = (i: any, sebab: "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU") => {
     if (hasil.ditahanDaftar.length >= 80) return;
     hasil.ditahanDaftar.push({
       id: String(i.id),
@@ -713,6 +908,50 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
 
   for (const i of hasilInputs) {
     const m = i.match;
+
+    // ── PEMEGANG LEMAH YANG TIDAK TERSEPAK: BUKAN URUSAN JALAN INI ──
+    //
+    // Ia dibawa hanya sebagai kandidat korban. Tidak dicocokkan (matching.ts
+    // melewatinya), tidak dilaporkan, tidak dihitung — kalau masuk `laporan`
+    // ia membengkakkan "diterima/dicocokkan" di Lapis 2 dan cacah "Cocok" di
+    // alert gadai dengan ratusan klaim lama tiap sesi.
+    if ((i as any).sudahMemegang && !klaimDisepak.has(String(i.id))) continue;
+
+    // ── YANG BARU DISEPAK: WAJIB dilaporkan pada jalan ini, apa pun nasibnya ──
+    //
+    // Barisnya sudah dilepas di database. Kalau ia tidak dilaporkan sekarang,
+    // sisi gadai tetap mengira ia MATCHED sementara di sini ia tidak memegang
+    // apa-apa — dua buku yang saling bertentangan, dan tak ada yang melihat.
+    // Karena itu ia melewati penjaga luar-periode DAN penjaga konflik:
+    //   cocok ulang  -> dikirim sebagai cocok (baris baru), tanpa keributan;
+    //   tidak ketemu -> dikirim UNMATCHED ber-sebab DISEPAK, masuk
+    //                   /belum-cocok, dan terus disebut Lapis 2 sampai manusia
+    //                   membereskannya (permintaan pemilik 5 September 2026).
+    if (klaimDisepak.has(String(i.id))) {
+      const d = (summary.disepak ?? []).find((x) => x.pemegangKlaimId === String(i.id));
+      if (m?.status === "matched") {
+        catatTanggal(hasil, i, arah);
+        laporan.push({ id: i.id, matched: true, matched_by: m.matchedBy ?? "NOMINAL", ref_issue: null, ambiguous: m.ambiguous ?? 0 });
+        if (d) hasil.disepak.push({ olehKlaimId: d.olehKlaimId, olehNoFaktur: d.olehNoFaktur, pemegangKlaimId: d.pemegangKlaimId,
+          pemegangMatchedBy: d.pemegangMatchedBy, noRef: d.noRef, tanggal: d.tanggal, kredit: d.kredit, nasib: "COCOK_ULANG" });
+      } else {
+        const catatan = `DISEPAK: baris ${tglTampil(d?.tanggal ?? "")} ${rpTampil(d?.kredit ?? i.nominal)}` +
+          (d?.noRef ? ` ref ${d.noRef}` : "") + ` ternyata milik ${d?.olehNoFaktur ?? d?.olehKlaimId ?? "klaim ber-ref"}; ` +
+          `pencocokan ulang tidak menemukan baris lain — cocokkan manual.`;
+        catatTanggal(hasil, i, arah);
+        catatDitahan(i, "DISEPAK_TAK_KETEMU");
+        if (hasil.tidakKetemu.length < 60) {
+          hasil.tidakKetemu.push({
+            no_faktur: String((i as any).noFaktur ?? "-"), outlet: String((i as any).outletNama ?? "-"),
+            tgl: toDateISO(i.tanggal), nominal: Number((i as any).nominal ?? 0), sebab: "salah klaim, disepak — tidak ada baris lain",
+          });
+        }
+        laporan.push({ id: i.id, matched: false, matched_by: null, ref_issue: "DISEPAK", ambiguous: 0, catatan } as any);
+        if (d) hasil.disepak.push({ olehKlaimId: d.olehKlaimId, olehNoFaktur: d.olehNoFaktur, pemegangKlaimId: d.pemegangKlaimId,
+          pemegangMatchedBy: d.pemegangMatchedBy, noRef: d.noRef, tanggal: d.tanggal, kredit: d.kredit, nasib: "TAK_KETEMU" });
+      }
+      continue;
+    }
 
     // Sudah pernah dibuktikan di sesi sebelumnya (vonisnya yang gagal terkirim).
     if (m?.status !== "matched" && sudahTerbukti.has(i.id)) {
@@ -812,7 +1051,12 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   onLangkah?.("Menyimpan sesi...");
   try {
     const { saveSession } = await import("@/lib/sessions/save");
-    const inputsBank = hasilInputs.filter((i) => i.bankId === bankId || !i.bankId);
+    // Pemegang lemah yang tidak tersepak TIDAK disimpan sebagai baris sesi:
+    // ia bukan input jalan ini, dan ±750 baris ber-match_status NULL tiap
+    // sesi hanya membengkakkan riwayat dan cacah total_input.
+    const inputsBank = hasilInputs.filter((i) =>
+      (i.bankId === bankId || !i.bankId) &&
+      !((i as any).sudahMemegang && !klaimDisepak.has(String(i.id))));
     if (inputsBank.length > 0) {
       const subSummary: MatchSummary = {
         totalInput: inputsBank.length,
@@ -851,11 +1095,52 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     // memakainya lagi untuk transaksi yang berbeda. Komentar di atas menjanjikan
     // urutan ini melindungi; sekarang ia benar-benar melindungi.
     console.error("[pass] gagal menyimpan sesi:", e);
+    if (dilepas.length) await batalkanPelepasan();
     hasil.batal = {
       kode: "GAGAL_SIMPAN_SESI",
       pesan: `Sesi gagal disimpan (${e instanceof Error ? e.message : String(e)}) — vonis TIDAK dikirim supaya baris mutasi tidak bisa dipakai dua kali.`,
     };
     return hasil;
+  }
+
+  // ── VERIFIKASI: BARIS YANG DILEPAS KINI BENAR-BENAR DIPEGANG PENGUSIRNYA ──
+  //
+  // Antara pelepasan (di atas) dan klaim baru (di dalam saveSession) tidak ada
+  // transaksi. Di jendela itu /belum-cocok atau sesi lain bisa mengambil
+  // barisnya; insert cek_inputs pengusir lalu ditolak indeks unik, save.ts
+  // hanya console.error, dan vonis "cocok" tetap akan dikirim ke gadai untuk
+  // baris yang tidak dipegang siapa pun. Diperiksa langsung ke basis data:
+  // setiap baris yang dilepas harus punya pemegang baru. Kalau tidak, semua
+  // pelepasan dibalik dan vonis TIDAK dikirim.
+  if (dilepas.length) {
+    const { data: cekBaris, error: eCek } = await supabase
+      .from("parsed_transactions")
+      .select("id, claimed_by_input_id")
+      .in("id", dilepas.map((r) => r.parsedTxId));
+    // Bukan sekadar "ada pemegang" — pemegangnya harus SI PENGUSIR. Di jendela
+    // lepas→klaim, input lokal (yang tidak dijaga indeks unik) bisa menyambar
+    // barisnya; "ada pemegang" akan meloloskannya (temuan pemeriksa).
+    const idPemegangBaru = [...new Set(((cekBaris ?? []) as any[]).map((b) => b.claimed_by_input_id).filter(Boolean))] as string[];
+    const { data: pemegangBaru, error: ePb } = idPemegangBaru.length
+      ? await supabase.from("cek_inputs").select("id, gadai_klaim_id").in("id", idPemegangBaru)
+      : { data: [], error: null };
+    const klaimDariInput = new Map<string, string | null>(
+      ((pemegangBaru ?? []) as any[]).map((r) => [String(r.id), r.gadai_klaim_id ? String(r.gadai_klaim_id) : null]));
+    const tanpaPemegang = (eCek || ePb) ? dilepas.map((r) => r.parsedTxId)
+      : dilepas.filter((r) => {
+          const b = ((cekBaris ?? []) as any[]).find((x) => String(x.id) === r.parsedTxId);
+          if (!b || !b.claimed_by_input_id) return true;
+          return klaimDariInput.get(String(b.claimed_by_input_id)) !== r.olehKlaimId;
+        }).map((r) => r.parsedTxId);
+    if (tanpaPemegang.length) {
+      await batalkanPelepasan();
+      hasil.batal = {
+        kode: "GAGAL_SEPAK",
+        pesan: `${tanpaPemegang.length} baris yang dilepas tidak berakhir di tangan klaim ber-ref` +
+               (eCek ? ` (${eCek.message})` : ePb ? ` (${ePb.message})` : "") + " — pelepasan dibalik, vonis TIDAK dikirim.",
+      };
+      return hasil;
+    }
   }
 
   // ── BARIS MUTASI TANPA PEMILIK — DIBACA SESUDAH SESI TERSIMPAN ──

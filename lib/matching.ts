@@ -116,6 +116,21 @@ export function runMatching(
   const mode = options?.mode ?? "all";
 
   const claimed = new Set<string>();
+  const disepak: MatchSummary["disepak"] = [];
+  // Klaim yang SUDAH memegang baris dari sesi lama hanya boleh bergerak kalau
+  // pada jalan ini ia tersepak. Selain itu ia diam: tidak mencari baris lain
+  // (itu jalan menuju satu klaim dua baris), tidak dihitung bersaing.
+  const disepakIds = new Set<string>();
+  const diamSaja = (input: UserInput) =>
+    (!!(input as any).sudahMemegang || !!(input as any).tidakBolehMengusir) && !disepakIds.has(String(input.id));
+  // Korban HANYA boleh disepak kalau ia ADA di daftar input jalan ini —
+  // itulah satu-satunya kendaraan untuk mencocokkannya ulang dan melaporkan
+  // nasibnya. Pemegang yang identitasnya diketahui dari database tapi tidak
+  // ikut ditarik (di luar jendela 60 hari, atau di bawah lantai laporan)
+  // TIDAK disepak: pengusirnya jatuh ke alarm REF_SUDAH_DIKLAIM seperti dulu.
+  // Ditemukan pemeriksa: tanpa syarat ini, mulai 11 September 2026 pemegang
+  // tertua bisa dilepas di DB tanpa pernah dilaporkan ke gadai.
+  const inputById = new Map<string, UserInput>(inputs.map((i) => [String(i.id), i]));
   const txKey = (t: PdfTransaction) => `${t.bankId ?? "_"}-${t.page}-${t.no}`;
 
   // Mode leftover-only: tx yang sudah matched di sebelumnya HARUS di-skip
@@ -180,7 +195,7 @@ export function runMatching(
       .replace(/B/g, "8").replace(/Z/g, "2");
 
   inputs.forEach((input, idx) => {
-    if (!shouldProcess(input)) return;
+    if (!shouldProcess(input) || diamSaja(input)) return;
     const refUp = kanonRef(input.refFt);
     if (!refUp) return;
 
@@ -200,6 +215,76 @@ export function runMatching(
     const available = nominalHits.filter(
       (tx) => !tx.claimedByOther && !claimed.has(txKey(tx)),
     );
+    // ── BUKTI KUAT MENGUSIR BUKTI LEMAH (5 September 2026) ──
+    //
+    // Ref+nominal cocok, tapi barisnya sudah dipegang klaim lain. Kalau
+    // pemegangnya cuma cocok lewat NOMINAL (tebakan), sementara klaim ini
+    // membawa nomor referensi yang menunjuk PERSIS ke baris itu, yang benar
+    // bukan memarkir klaim ber-ref — melainkan mengusir tebakannya.
+    //
+    // Kejadian nyata: SJB-2-0036 (LANGSA, tanpa ref/jam/nama) mengambil baris
+    // WAHYUDI PRAKARSA Rp 70.000 hanya karena nominalnya sama, saat berkas
+    // Agustus diproses. Tiga hari kemudian SBR-11-2096 datang dengan ref
+    // FT262438R70Q yang menunjuk baris itu — dan diparkir, sementara tebakan
+    // yang salah tetap "cocok".
+    //
+    // TIGA PAGAR, dari aturan pemilik ("yang manual dan yang kuat sesuai ref
+    // apa pun ceritanya tidak bisa disepak"):
+    //   1. Pemegang MANUAL tidak disentuh — manusia sudah memutuskan.
+    //   2. Pemegang ber-REF atau NAMA+JAM tidak disentuh — buktinya setara
+    //      atau lebih kuat; tabrakan begini adalah anomali untuk manusia.
+    //   3. Pemegang harus klaim gadai (punya id) supaya bisa dicocokkan ulang
+    //      dan dilaporkan; input lokal tak punya jalur itu.
+    // Ditambah: pemegang bukan diri sendiri, dan baris belum diambil pada
+    // jalan ini. Pengusiran dicatat ke `summary.disepak` — pemanggil WAJIB
+    // mempersistenkan pelepasannya sebelum menyimpan sesi.
+    //   4. PENGUSIRNYA sendiri belum memegang baris apa pun. Klaim yang sudah
+    //      terbukti di sesi lama lalu mengusir pemegang lain akan memegang DUA
+    //      baris — dan indeks unik tidak menjaga arah itu. Kasus nyata:
+    //      SBR-11-2096 sudah dipasangkan manual ke baris FIKRI AZIZI; tanpa
+    //      pagar ini ia akan ikut merebut baris WAHYUDI yang ref-nya cocok.
+    if (available.length === 0 && !(input as any).sudahMemegang && !(input as any).tidakBolehMengusir) {
+      const LEMAH = new Set(["NOMINAL", "NOMINAL_JAM"]);
+      const korban = nominalHits
+        .filter((tx) => {
+          if (!tx.claimedByOther || !tx.pemegang || tx.pemegang.manual) return false;
+          const kid = tx.pemegang.gadaiKlaimId;
+          if (!kid || kid === String(input.id)) return false;
+          if (!LEMAH.has(String(tx.pemegang.matchedBy ?? "").toUpperCase())) return false;
+          if (claimed.has(txKey(tx))) return false;
+          // Pagar 5: korban harus ikut di jalan ini, dan bukan resi ketikan owner.
+          const korbanInput = inputById.get(String(kid));
+          if (!korbanInput) return false;
+          if (String((korbanInput as any).sumber ?? "").toUpperCase() === "MANUAL") return false;
+          return true;
+        })
+        .sort((a, b) =>
+          Math.abs(diffDays(input.tanggal, a.tanggalDate)) -
+          Math.abs(diffDays(input.tanggal, b.tanggalDate)));
+      if (korban.length > 0) {
+        const tx = korban[0];
+        disepak.push({
+          txKey: txKey(tx),
+          parsedTxId: tx.parsedTxId ?? null,
+          noRef: tx.noRef ?? null,
+          tanggal: tx.tanggal,
+          kredit: tx.kredit,
+          pemegangInputId: tx.pemegang!.inputId,
+          pemegangKlaimId: String(tx.pemegang!.gadaiKlaimId),
+          pemegangMatchedBy: tx.pemegang!.matchedBy ?? null,
+          olehKlaimId: String(input.id),
+          olehNoFaktur: (input as any).noFaktur ?? null,
+        });
+        // Baris ini sekarang bebas untuk klaim ber-ref, dan pemegang lamanya
+        // akan dicocokkan ulang oleh pass 2-4 pada jalan yang SAMA — barisnya
+        // yang lama sudah masuk `claimed`, jadi ia tidak bisa merebutnya balik.
+        disepakIds.add(String(tx.pemegang!.gadaiKlaimId));
+        tx.claimedByOther = false;
+        tx.pemegang = undefined;
+        resolved[idx] = buildMatched(input, tx, "REF");
+        return;
+      }
+    }
     if (available.length > 0) {
       // Ref unik — kalau (langka) >1, pilih tanggal terdekat ke input.
       available.sort(
@@ -226,7 +311,7 @@ export function runMatching(
 
   // ── PASS 2: NAMA PENGIRIM + JAM (global) ──
   inputs.forEach((input, idx) => {
-    if (!shouldProcess(input) || resolved[idx]) return;
+    if (!shouldProcess(input) || resolved[idx] || diamSaja(input)) return;
     const jamInput = jamToMinutes(input.jamResi);
     const nama = String(input.namaPengirimResi ?? "").trim();
     if (jamInput === null || !nama) return;
@@ -291,7 +376,7 @@ export function runMatching(
   // DIAM dan membiarkan PASS 4 bekerja seperti biasa — permintaan pemilik:
   // "yang penting nominal sama, tetap ter-matched".
   inputs.forEach((input, idx) => {
-    if (!shouldProcess(input) || resolved[idx]) return;
+    if (!shouldProcess(input) || resolved[idx] || diamSaja(input)) return;
     const jamInput = jamToMinutes(input.jamResi);
     if (jamInput === null) return;                 // jam tak terbaca -> PASS 4
 
@@ -337,16 +422,29 @@ export function runMatching(
   const rebutan = new Set<string>();
   {
     const hitung = new Map<string, number>();
-    for (const i of inputs) {
-      if (!shouldProcess(i)) continue;
+    inputs.forEach((i, idx) => {
+      if (!shouldProcess(i)) return;
+      // Yang SUDAH terpasang lewat pass 1-3 tidak lagi bersaing memperebutkan
+      // nominal — ia sudah memegang barisnya sendiri. Menghitungnya membuat
+      // klaim yang tersisa tampak "direbutkan" padahal ia sendirian, lalu
+      // ditolak menebak lintas hari ke satu-satunya baris yang bebas.
+      // Terlihat pada pengusiran: SBR-11-2096 mengambil baris 31 Agu lewat
+      // ref, SJB-2-0036 yang terusir tinggal sendirian mengejar Rp 70.000 —
+      // tapi dihitung bersaing dengan pengusirnya sendiri.
+      // HANYA yang benar-benar MEMEGANG baris (status matched) yang berhenti
+      // bersaing. Yang all_taken tidak memegang apa-apa dan tetap pesaing —
+      // mengecualikannya (versi pertama aturan ini) melonggarkan penjaga
+      // anti-tebak-lintas-hari untuk saudaranya, ditemukan pemeriksa.
+      if (resolved[idx]?.status === "matched") return;
+      if (diamSaja(i)) return;
       const k = `${toDateISO(i.tanggal)}|${i.nominal}`;
       hitung.set(k, (hitung.get(k) ?? 0) + 1);
-    }
+    });
     for (const [k, n] of hitung) if (n > 1) rebutan.add(k);
   }
 
   const resultInputs: UserInput[] = inputs.map((input, idx) => {
-    if (!shouldProcess(input)) return input;
+    if (!shouldProcess(input) || diamSaja(input)) return input;
     if (resolved[idx]) {
       const withIssue = pendingRefIssue[idx]
         ? { ...resolved[idx]!, refIssue: resolved[idx]!.refIssue ?? pendingRefIssue[idx] }
@@ -478,6 +576,7 @@ export function runMatching(
   );
 
   const summary: MatchSummary = {
+    disepak,
     totalInput: resultInputs.length,
     matched: matched.length,
     noCandidate,

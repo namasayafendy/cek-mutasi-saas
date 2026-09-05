@@ -172,7 +172,11 @@ export interface RingkasPass {
   /** Klaim yang pass ini TAHAN (berebut baris / di luar periode), lengkap
    *  identitasnya — dipasangkan ke `sandingan.ketinggalan` lewat klaim_id. */
   ditahanDaftar?: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
-                    sebab: "BEREBUT" | "LUAR_PERIODE" }[];
+                    sebab: "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU" }[];
+  /** Baris yang pindah pemilik pada jalan ini (bukti kuat mengusir bukti lemah). */
+  disepak?: { olehKlaimId: string; olehNoFaktur: string | null; pemegangKlaimId: string;
+              pemegangMatchedBy: string | null; noRef: string | null; tanggal: string; kredit: number;
+              nasib: "COCOK_ULANG" | "TAK_KETEMU" }[];
 }
 
 export interface RingkasBerkas {
@@ -519,6 +523,7 @@ async function susunLaporanLapis2(
     // Alasan per klaim yang belum dijawab, dari pass berkas ini. Sisi gadai
     // tahu SIAPA yang menggantung (ketinggalan); sisi ini tahu KENAPA.
     alasanKlaim: pass.flatMap((p) => p.ditahanDaftar ?? []),
+    disepak: pass.flatMap((p) => p.disepak ?? []),
     tunggakan,
     gagal,
   };
