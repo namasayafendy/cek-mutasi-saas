@@ -180,6 +180,15 @@ export interface IsiLapis2 {
     sisaKetinggalan?: number;
     tertahanPerSebab?: { sebab: string; teks: string; n: number; rp: number }[];
     gerbangError?: string | null;
+    /** KANTOR PUSAT (sejak 23 Sep 2026): resi penjualan barang gudang aset
+     *  dan setoran tunai pusat. SUDAH termasuk di `tanggal` — hanya dipisah
+     *  supaya laporan menyebutnya dengan namanya sendiri. undefined = gadai
+     *  versi lama. */
+    pusat?: { tgl: string;
+              lahir: { n: number; rp: number }; cocok: { n: number; rp: number };
+              tak: { n: number; rp: number }; menggantung: { n: number; rp: number };
+              tertahan: { n: number; rp: number }; mati: { n: number; rp: number };
+              daftar: { no_faktur: string; jenis: string; nominal: number; ket: string }[] }[];
   } | null;
   /** Sebab kenapa sandingan tidak bisa diambil. */
   sandinganGagal?: string | null;
@@ -408,6 +417,33 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       L.push(`   ${tenang.length} tanggal lain (${jml.n} resi · ${rp(jml.rp)}) — semua cocok, tidak berubah sejak laporan sebelumnya.`);
     }
     if (penting.length === 0 && tenang.length === 0) L.push(`   ➖ tidak ada resi dalam periode ini.`);
+  }
+
+  // ── KANTOR PUSAT (sejak 23 Sep 2026) ──
+  //
+  // Resi penjualan barang gudang aset & setoran tunai kantor pusat. Mereka
+  // SUDAH ikut dihitung di blok di atas (totalnya harus tetap tutup dengan
+  // Lapis 1); blok ini hanya menyebutnya terpisah, per tanggal, dengan
+  // jawaban mutasinya: ada di rekening atau tidak. Hanya dicetak kalau ada.
+  const pusatSd = (sd && Array.isArray(sd.pusat)) ? sd.pusat.filter((p) => p.lahir.n - p.mati.n > 0) : [];
+  if (pusatSd.length) {
+    const labelJenis = (j: string) =>
+      j === "JUAL_ASET" ? "jual gudang aset" : j === "SETOR_BANK" ? "setoran tunai" : j;
+    L.push("");
+    L.push(`🏢 KANTOR PUSAT — resi jual gudang aset / setoran tunai (sudah termasuk di atas)`);
+    for (const p of pusatSd.slice(0, 6)) {
+      const n = p.lahir.n - p.mati.n;
+      const rpN = p.lahir.rp - p.mati.rp;
+      const semua = p.tak.n === 0 && p.menggantung.n === 0 && p.tertahan.n === 0;
+      L.push(`   ${tgl(p.tgl)}  ${n} resi · ${rp(rpN)}`);
+      L.push(`      ✅ ada di rekening ${p.cocok.n} · ${rp(p.cocok.rp)}` + (semua ? " — semua cocok" : ""));
+      if (p.tak.n > 0) L.push(`      ⛔ tidak ada di rekening ${p.tak.n} · ${rp(p.tak.rp)}`);
+      if (p.menggantung.n > 0) L.push(`      ⏳ belum dijawab ${p.menggantung.n} · ${rp(p.menggantung.rp)}`);
+      if (p.tertahan.n > 0) L.push(`      🚧 tertahan gerbang Lapis 1 ${p.tertahan.n} · ${rp(p.tertahan.rp)}`);
+      (p.daftar ?? []).slice(0, 6).forEach((d) =>
+        L.push(`         • ${d.no_faktur} · ${labelJenis(d.jenis)} · ${rp(d.nominal)} — ${d.ket}`));
+    }
+    if (pusatSd.length > 6) L.push(`   …dan ${pusatSd.length - 6} tanggal lagi`);
   }
 
   // ── JEJAK: BARIS YANG PINDAH PEMILIK PADA JALAN INI ──
