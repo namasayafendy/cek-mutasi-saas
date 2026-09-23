@@ -431,7 +431,17 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       j === "JUAL_ASET" ? "jual gudang aset" : j === "SETOR_BANK" ? "setoran tunai" : j;
     L.push("");
     L.push(`🏢 KANTOR PUSAT — resi jual gudang aset / setoran tunai (sudah termasuk di atas)`);
-    for (const p of pusatSd.slice(0, 6)) {
+    // Tanggal yang SEMUA resinya ada di rekening dilipat jadi satu baris —
+    // yang dirinci hanya tanggal yang punya perkara.
+    const beres = pusatSd.filter((p) => p.tak.n === 0 && p.menggantung.n === 0 && p.tertahan.n === 0);
+    const bermasalah = pusatSd.filter((p) => !(p.tak.n === 0 && p.menggantung.n === 0 && p.tertahan.n === 0));
+    if (beres.length) {
+      const nB = beres.reduce((t, p) => t + (p.lahir.n - p.mati.n), 0);
+      const rpB = beres.reduce((t, p) => t + (p.lahir.rp - p.mati.rp), 0);
+      L.push(`   ✅ ${beres.length} tanggal semua ada di rekening: ${nB} resi · ${rp(rpB)}` +
+             (beres.length <= 3 ? ` (${beres.map((p) => tgl(p.tgl)).join(", ")})` : ""));
+    }
+    for (const p of bermasalah.slice(0, 6)) {
       const n = p.lahir.n - p.mati.n;
       const rpN = p.lahir.rp - p.mati.rp;
       const semua = p.tak.n === 0 && p.menggantung.n === 0 && p.tertahan.n === 0;
@@ -443,7 +453,7 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       (p.daftar ?? []).slice(0, 6).forEach((d) =>
         L.push(`         • ${d.no_faktur} · ${labelJenis(d.jenis)} · ${rp(d.nominal)} — ${d.ket}`));
     }
-    if (pusatSd.length > 6) L.push(`   …dan ${pusatSd.length - 6} tanggal lagi`);
+    if (bermasalah.length > 6) L.push(`   …dan ${bermasalah.length - 6} tanggal bermasalah lagi`);
   }
 
   // ── JEJAK: BARIS YANG PINDAH PEMILIK PADA JALAN INI ──
