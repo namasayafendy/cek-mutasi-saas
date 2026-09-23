@@ -109,6 +109,22 @@ export async function catatLangkah(jobId: string, langkah: string): Promise<Bala
  * Lima menit jauh lebih lama daripada satu pengiriman yang sehat, jadi ia tidak
  * pernah merebut kunci yang benar-benar sedang bekerja.
  */
+/**
+ * Batas menunggu jawaban Aceh Gadai untuk ANGKA LAPORAN (sandingan & tunggakan).
+ *
+ * Dulu 8 detik, dan itu terlalu ketat. Rute /sandingan di sisi gadai
+ * menjalankan gerbang atas SELURUH klaim yang masih menggantung, jadi ongkosnya
+ * membengkak persis ketika ada yang macet — saat laporannya paling dibutuhkan.
+ * Akibatnya 22 dan 23 September 2026 laporan Lapis 2 dua hari berturut-turut
+ * menulis "angka dari Aceh Gadai tidak bisa diambil" dan blok SANDINGAN kosong,
+ * padahal justru itu inti pemeriksaan dua lapis.
+ *
+ * Ini panggilan PENYUSUN LAPORAN, bukan pemindah uang: menunggu lebih lama
+ * tidak berisiko apa pun, sementara menyerah terlalu cepat membuang bagian
+ * laporan yang paling berguna. Sisi gadai kini menyatakan maxDuration 60 detik.
+ */
+const BATAS_ANGKA_GADAI = 25000;
+
 const KUNCI_BASI_MENIT = 5;
 
 export async function kunciKirim(jobId: string, arah: "kredit" | "debet"): Promise<Balasan> {
@@ -417,7 +433,7 @@ async function susunLaporanLapis2(
             `${base}/api/transfer-klaim/sandingan?dari=${sDari}&sampai=${sSampai}` +
             (sejak ? `&sejak=${encodeURIComponent(sejak)}` : ""),
             { headers: { Authorization: `Bearer ${c.gadai_api_key}` },
-              cache: "no-store", signal: AbortSignal.timeout(8000) });
+              cache: "no-store", signal: AbortSignal.timeout(BATAS_ANGKA_GADAI) });
           if (resS.ok) {
             const j = await resS.json();
             if (j?.ok) sandingan = j as IsiLapis2["sandingan"];
@@ -443,7 +459,7 @@ async function susunLaporanLapis2(
         (sSampai ? `&tercakup=${sSampai}` : ""), {
         headers: { Authorization: `Bearer ${c.gadai_api_key}` },
         cache: "no-store",
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(BATAS_ANGKA_GADAI),
       });
       if (res.ok) {
         const j = await res.json();
