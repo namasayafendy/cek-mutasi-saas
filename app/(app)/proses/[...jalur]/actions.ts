@@ -97,31 +97,88 @@ export async function catatLangkah(jobId: string, langkah: string): Promise<Bala
  * rekonsiliasi penuh + alert Telegram. Terkirim dua kali berarti owner
  * menerima dua laporan yang saling bertentangan.
  */
+/**
+ * Umur kunci sebelum dianggap BASI dan boleh direbut.
+ *
+ * Seluruh alur ini berjalan di BROWSER pemilik. Kalau sambungannya putus di
+ * antara "kunci diambil" dan "pengiriman selesai", pelepas kuncinya tidak
+ * pernah sempat jalan — dan dulu itu berarti berkasnya terkunci SELAMANYA.
+ * Kejadian 22 September 2026: 39 hasil uang masuk Rp 36.623.000 menggantung
+ * dua hari padahal uangnya sudah terbukti mendarat di rekening.
+ *
+ * Lima menit jauh lebih lama daripada satu pengiriman yang sehat, jadi ia tidak
+ * pernah merebut kunci yang benar-benar sedang bekerja.
+ */
+const KUNCI_BASI_MENIT = 5;
+
 export async function kunciKirim(jobId: string, arah: "kredit" | "debet"): Promise<Balasan> {
   const r = await jobMilikku(jobId);
   if ("error" in r) return { ok: false, error: r.error };
-  const kolom = arah === "debet" ? "dikirim_debet_at" : "dikirim_kredit_at";
+  const kolomKunci = arah === "debet" ? "kunci_debet_at" : "kunci_kredit_at";
+  const kolomKirim = arah === "debet" ? "dikirim_debet_at" : "dikirim_kredit_at";
+  const basi = new Date(Date.now() - KUNCI_BASI_MENIT * 60_000).toISOString();
 
+  // Yang menolak pengiriman ulang HANYA stempel "sudah terkonfirmasi"
+  // (`dikirim_*_at`). Kuncinya sendiri boleh direbut begitu basi.
   const { data } = await r.db
     .from("mutasi_jobs")
-    .update({ [kolom]: new Date().toISOString() })
+    .update({ [kolomKunci]: new Date().toISOString() })
     .eq("id", jobId)
     .eq("account_id", r.ctx.account.id)
-    .is(kolom, null)
+    .is(kolomKirim, null)
+    .or(`${kolomKunci}.is.null,${kolomKunci}.lt.${basi}`)
     .select("id");
 
   if (!data || data.length === 0) {
-    return { ok: false, error: `Hasil ${arah} sudah pernah dikirim untuk berkas ini.` };
+    // DUA sebab yang berbeda, dan bedanya menentukan apa yang harus dilakukan
+    // pemiliknya: yang satu sudah selesai, yang satu tinggal ditunggu. Dulu
+    // keduanya diberi kalimat yang sama, dan itulah yang membuat berkas
+    // 22 September terlihat "sudah dikirim" padahal belum pernah sampai.
+    const { data: j } = await r.db
+      .from("mutasi_jobs")
+      .select(`${kolomKirim}, ${kolomKunci}`)
+      .eq("id", jobId)
+      .eq("account_id", r.ctx.account.id)
+      .maybeSingle();
+    const sudahTerkirim = !!(j as any)?.[kolomKirim];
+    return {
+      ok: false,
+      error: sudahTerkirim
+        ? `Hasil ${arah} sudah pernah dikirim untuk berkas ini.`
+        : `Hasil ${arah} sedang dikirim dari jendela lain. Tunggu ${KUNCI_BASI_MENIT} menit lalu coba lagi.`,
+    };
   }
   return { ok: true };
 }
 
-/** Lepas kunci kalau pengiriman gagal — kunci yang tidak pernah dilepas
- *  membuat job terkunci selamanya dan tidak bisa diulang. */
+/**
+ * Stempel "BENAR-BENAR terkirim", dipasang HANYA sesudah Aceh Gadai
+ * mengonfirmasi penerimaan. Sekaligus melepas kuncinya.
+ *
+ * Dulu stempel ini dipasang oleh kunciKirim() SEBELUM mengirim, jadi satu
+ * kolom memikul dua arti: "saya mulai" dan "sudah sampai". Memisahkannya
+ * adalah inti perbaikan ini.
+ */
+export async function tandaiTerkirim(jobId: string, arah: "kredit" | "debet"): Promise<Balasan> {
+  const r = await jobMilikku(jobId);
+  if ("error" in r) return { ok: false, error: r.error };
+  const kolomKunci = arah === "debet" ? "kunci_debet_at" : "kunci_kredit_at";
+  const kolomKirim = arah === "debet" ? "dikirim_debet_at" : "dikirim_kredit_at";
+  const { error } = await r.db
+    .from("mutasi_jobs")
+    .update({ [kolomKirim]: new Date().toISOString(), [kolomKunci]: null })
+    .eq("id", jobId)
+    .eq("account_id", r.ctx.account.id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/** Lepas kunci kalau pengiriman gagal. Stempel "sudah terkirim" TIDAK disentuh:
+ *  ia hanya boleh dipasang tandaiTerkirim() dan tidak pernah dicabut di sini. */
 export async function lepasKunci(jobId: string, arah: "kredit" | "debet"): Promise<Balasan> {
   const r = await jobMilikku(jobId);
   if ("error" in r) return { ok: false, error: r.error };
-  const kolom = arah === "debet" ? "dikirim_debet_at" : "dikirim_kredit_at";
+  const kolom = arah === "debet" ? "kunci_debet_at" : "kunci_kredit_at";
   await r.db
     .from("mutasi_jobs")
     .update({ [kolom]: null })

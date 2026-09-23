@@ -272,6 +272,11 @@ export interface OpsiPass {
   /** Dipanggil kalau pengiriman GAGAL sesudah kunci diambil, supaya kuncinya
    *  dilepas lagi — kunci yang tidak pernah dilepas = job terkunci selamanya. */
   lepasKunci?: () => Promise<void>;
+  /** Dipanggil SESUDAH gadai mengonfirmasi penerimaan. Di sinilah stempel
+   *  "sudah pernah dikirim" dipasang — bukan lagi di kunciKirim(). Memisahkan
+   *  keduanya membuat sambungan yang putus di tengah berbiaya beberapa menit,
+   *  bukan selamanya. Lihat kejadian 22 September 2026. */
+  tandaiTerkirim?: () => Promise<void>;
 }
 
 export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
@@ -1227,6 +1232,10 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     alarm: kirim.alarm,
     alertSent: kirim.alertSent,
   };
+
+  // Gadai SUDAH mengonfirmasi. Baru di sinilah berkas ini boleh dinyatakan
+  // "sudah pernah dikirim", dan kuncinya dilepas bersamaan.
+  if (opsi.tandaiTerkirim) await opsi.tandaiTerkirim();
 
   // ── STEMPEL "SUDAH DIBERITAHUKAN" — paling akhir, dan itu disengaja ──
   //

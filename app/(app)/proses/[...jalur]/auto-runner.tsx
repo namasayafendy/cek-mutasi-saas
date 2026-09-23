@@ -20,7 +20,7 @@ import { Loader2, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { prosesSatuBank } from "@/lib/pipeline/prosesSatuBank";
 import { jalankanPass, type HasilPass } from "@/lib/pipeline/jalankanPass";
-import { catatLangkah, kunciKirim, lepasKunci, tandaiSelesai, tandaiGagal } from "./actions";
+import { catatLangkah, kunciKirim, lepasKunci, tandaiTerkirim, tandaiSelesai, tandaiGagal } from "./actions";
 import { catatCakupan } from "@/lib/coverage/actions";
 import type { Bank, Outlet, MatchRulePreset } from "@/lib/types";
 
@@ -163,6 +163,7 @@ export function AutoRunner({
           onLangkah: (t) => setTahap((x) => [...x.slice(0, -1), { teks: t, keadaan: "jalan" }]),
           kunciKirim: async () => (await kunciKirim(jobId, "kredit")).ok,
           lepasKunci: async () => { await lepasKunci(jobId, "kredit"); },
+          tandaiTerkirim: async () => { await tandaiTerkirim(jobId, "kredit"); },
         });
         if (hasilKredit.terkirim) sudahTerkirim.push("kredit");
         ubahTerakhir(hasilKredit.batal ? "ragu" : "selesai");
@@ -175,6 +176,7 @@ export function AutoRunner({
           onLangkah: (t) => setTahap((x) => [...x.slice(0, -1), { teks: t, keadaan: "jalan" }]),
           kunciKirim: async () => (await kunciKirim(jobId, "debet")).ok,
           lepasKunci: async () => { await lepasKunci(jobId, "debet"); },
+          tandaiTerkirim: async () => { await tandaiTerkirim(jobId, "debet"); },
         });
         if (hasilDebet.terkirim) sudahTerkirim.push("debet");
         ubahTerakhir(hasilDebet.batal ? "ragu" : "selesai");
