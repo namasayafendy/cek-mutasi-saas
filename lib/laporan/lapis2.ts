@@ -428,9 +428,10 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   const pusatSd = (sd && Array.isArray(sd.pusat)) ? sd.pusat.filter((p) => p.lahir.n - p.mati.n > 0) : [];
   if (pusatSd.length) {
     const labelJenis = (j: string) =>
-      j === "JUAL_ASET" ? "jual gudang aset" : j === "SETOR_BANK" ? "setoran tunai" : j;
+      j === "JUAL_ASET" ? "jual gudang aset" : j === "SETOR_BANK" ? "setoran tunai"
+      : j === "MASUK_LAIN" ? "uang masuk lain-lain" : j;
     L.push("");
-    L.push(`🏢 KANTOR PUSAT — resi jual gudang aset / setoran tunai (sudah termasuk di atas)`);
+    L.push(`🏢 KANTOR PUSAT — resi jual gudang aset / setoran tunai / uang masuk lain-lain (sudah termasuk di atas)`);
     // Tanggal yang SEMUA resinya ada di rekening dilipat jadi satu baris —
     // yang dirinci hanya tanggal yang punya perkara.
     const beres = pusatSd.filter((p) => p.tak.n === 0 && p.menggantung.n === 0 && p.tertahan.n === 0);
