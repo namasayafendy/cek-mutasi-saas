@@ -167,10 +167,14 @@ export function SummaryPanel({
                           title={
                             i.match.matchedBy === "REF"
                               ? "Match pasti: no referensi resi ketemu persis di mutasi"
-                              : "Match kuat: nama pengirim + jam resi cocok dengan mutasi"
+                              : i.match.matchedBy === "NAMA"
+                                ? "Nama pengirim sama persis + nominal, TANPA jam, ±1 hari"
+                                : i.match.matchedBy === "NOMINAL_JAM"
+                                  ? "Nominal + jam resi pada hari yang sama"
+                                  : "Match kuat: nama pengirim + jam resi cocok dengan mutasi"
                           }
                         >
-                          {i.match.matchedBy === "REF" ? "REF" : "JAM"}
+                          {i.match.matchedBy === "REF" ? "REF" : i.match.matchedBy === "NAMA" ? "NAMA" : "JAM"}
                         </span>
                       )}
                       {i.match?.status === "matched" && (i.match.ambiguous ?? 0) > 1 && (
@@ -206,7 +210,9 @@ export function SummaryPanel({
                     </div>
                     {status === "all_taken" && i.match?.status === "all_taken" && (
                       <div className="mt-1 ml-5 text-[10px] text-amber-700 leading-tight">
-                        Sudah ke-claim ({i.match.conflictCount}x di tgl {i.match.conflictDates.join(", ")})
+                        {i.match.barisBebas
+                          ? <>Tidak ditebak: baris bernominal sama masih BEBAS di tgl {i.match.conflictDates.join(", ")} (beda hari)</>
+                          : <>Sudah ke-claim ({i.match.conflictCount}x di tgl {i.match.conflictDates.join(", ")})</>}
                       </div>
                     )}
                   </div>

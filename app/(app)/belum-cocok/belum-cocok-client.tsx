@@ -73,8 +73,21 @@ export function BelumCocokClient() {
   async function bukaBaris(it: BarisBelumCocok) {
     setBuka(it); setKandidat(null); setPilih(null); setAksi(""); setCatatan(""); setError(""); setCariLain(""); setCariTgl(""); setSadarTerakhir(false);
     const r = await cariKandidat(it.tgl, it.nominal, it.arah ?? "KREDIT");
-    if (r.ok) setKandidat(r.items);
-    else { setKandidat([]); setError(r.msg); }
+    if (!r.ok) { setKandidat([]); setError(r.msg); return; }
+    // Yang ditolak ditebak lintas hari: jendela bawaan (±4 hari di sekitar
+    // resi) TETAP ditampilkan — ia memuat baris di hari resi sendiri dan
+    // pemegangnya — lalu DITAMBAH pencarian di sekitar baris bebasnya,
+    // karena jendela bawaan terpotong di 40 baris dan baris itu bisa jatuh.
+    let items = r.items;
+    if (it.tolakLintasHari && it.barisBebasTgl) {
+      const r2 = await cariKandidat(it.tgl, it.nominal, it.arah ?? "KREDIT", undefined, it.barisBebasTgl);
+      if (r2.ok) {
+        const ada = new Set(items.map((x) => x.id));
+        items = [...items, ...r2.items.filter((x) => !ada.has(x.id))]
+          .sort((a, b) => (a.tgl + a.jam).localeCompare(b.tgl + b.jam));
+      }
+    }
+    setKandidat(items);
   }
 
   /** Cari ulang dengan nominal yang disebut sendiri — untuk satu transfer yang
@@ -212,11 +225,14 @@ export function BelumCocokClient() {
                           ? "bg-red-600 text-white"
                           : it.status === "DUPLIKAT"
                             ? "bg-amber-100 text-amber-800"
-                            : "bg-violet-100 text-violet-700")
+                            : it.tolakLintasHari
+                              ? "bg-sky-100 text-sky-800"
+                              : "bg-violet-100 text-violet-700")
                       }>
                         {it.status === "BUKTI_BEDA"
                           ? "⛔ bukti foto beda"
-                          : it.status === "DUPLIKAT" ? "resi dobel" : "belum divonis"}
+                          : it.status === "DUPLIKAT" ? "resi dobel"
+                          : it.tolakLintasHari ? "baris bebas, beda hari" : "belum divonis"}
                       </span>
                     )}
                   </div>
@@ -367,10 +383,29 @@ export function BelumCocokClient() {
               {(buka.arah ?? "KREDIT") === "DEBET" ? "uang KELUAR" : "uang MASUK"}
             </div>
             <div className="mt-2 text-lg font-semibold text-slate-900">{rp(buka.nominal)}</div>
-            <p className="mt-2 text-xs text-slate-600">
-              Dicari di mutasi rekening dan tidak ditemukan. Itu belum tentu berarti uangnya
-              tidak ada — periksa dulu baris calon di bawah.
-            </p>
+            {buka.tolakLintasHari ? (
+              <div className="mt-2 space-y-1 text-xs">
+                <p className="text-sky-800">
+                  Baris bernominal sama <b>ADA dan masih BEBAS</b>
+                  {buka.barisBebasTgl ? <> pada {tglID(buka.barisBebasTgl)}</> : null}, tapi harinya
+                  beda dari tanggal resi. Mesin sengaja tidak menebak ke hari lain: bisa saja itu
+                  transfer malam milik resi ini, bisa juga uang nasabah lain. Cocokkan baris bertanda
+                  🔎 hanya kalau nama / jam di foto resi sesuai.
+                </p>
+                {buka.hariSendiriDipegang && (
+                  <p className="font-medium text-red-700">
+                    ⚠️ Baris bernominal sama di HARI RESI sendiri sudah dipegang klaim lain. Periksa
+                    dulu apakah resi ini tercatat dua kali (kembar) — kalau ya, JANGAN dicocokkan ke
+                    baris hari lain, karena itu uang nasabah lain.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-slate-600">
+                Dicari di mutasi rekening dan tidak ditemukan. Itu belum tentu berarti uangnya
+                tidak ada — periksa dulu baris calon di bawah.
+              </p>
+            )}
           </div>
 
           {/* ── Baris calon ──
@@ -472,6 +507,11 @@ export function BelumCocokClient() {
                   {k.pihak ? ` · ${k.pihak}` : ""}
                 </span>
                 {k.no_ref && <div className="ml-6 truncate text-xs text-slate-400">{k.no_ref}</div>}
+                {buka.tolakLintasHari && !k.dipegang && k.tgl === buka.barisBebasTgl && k.nominal === buka.nominal && (
+                  <div className="ml-6 text-xs font-medium text-sky-800">
+                    🔎 baris bebas yang tidak ditebak mesin (beda hari dari resi)
+                  </div>
+                )}
                 {k.nominal !== buka.nominal && (
                   <div className="ml-6 text-xs text-amber-700">
                     beda {rp(Math.abs(k.nominal - buka.nominal))} dari nilai resi — biasanya biaya admin

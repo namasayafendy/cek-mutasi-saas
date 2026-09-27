@@ -40,6 +40,9 @@ export type InputRow = {
   matched_tx_id: string | null;
   conflict_count: number | null;
   conflict_dates: string[] | null;
+  /** 'BEDA_HARI_BEBAS' = bentrok ini sebenarnya "tidak ditebak": barisnya
+   *  bebas, cuma beda hari (sejak 27 Sep 2026). */
+  ref_issue?: string | null;
   manual_claim_reason: string | null;
   claim_category: string | null;
   deleted_at: string | null;

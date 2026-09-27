@@ -18,6 +18,7 @@
 // jadi lupa satu baris itu berarti kebocoran lintas-akun.
 // ============================================================
 
+import { tandaiTolakLintasHari } from "@/lib/laporan/tolakLintasHari";
 import { adalahBiayaAdmin } from "@/lib/bank/biayaAdmin";
 import { getAccountContext } from "@/lib/supabase/context";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -245,7 +246,7 @@ export interface RingkasPass {
   /** Klaim yang pass ini TAHAN (berebut baris / di luar periode), lengkap
    *  identitasnya — dipasangkan ke `sandingan.ketinggalan` lewat klaim_id. */
   ditahanDaftar?: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
-                    sebab: "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU" }[];
+                    sebab: "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU" }[];
   /** Baris yang pindah pemilik pada jalan ini (bukti kuat mengusir bukti lemah). */
   disepak?: { olehKlaimId: string; olehNoFaktur: string | null; pemegangKlaimId: string;
               pemegangMatchedBy: string | null; noRef: string | null; tanggal: string; kredit: number;
@@ -465,6 +466,9 @@ async function susunLaporanLapis2(
         const j = await res.json();
         if (j?.ok) {
           tunggakan = (j.items ?? []) as IsiLapis2["tunggakan"];
+          // Yang ditolak ditebak lintas hari disebut apa adanya — barisnya
+          // BEBAS, bukan "berebut" (SJB-3-0211, 27 Sep 2026).
+          await tandaiTolakLintasHari(r.db, r.ctx.account.id, tunggakan as any[]);
 
           // ── TELUSURI ULANG KE MUTASI YANG BARU DIUNGGAH ──
           //

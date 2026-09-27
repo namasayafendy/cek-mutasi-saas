@@ -197,7 +197,7 @@ export interface IsiLapis2 {
    *  ini tahu KENAPA. Dipasangkan lewat klaim_id supaya tiap resi yang belum
    *  cocok punya alasannya — permintaan pemilik 5 September 2026. */
   alasanKlaim?: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
-                  sebab: "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU" }[];
+                  sebab: "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU" }[];
   /** Baris mutasi yang pindah pemilik pada jalan ini — jejak, bukan alarm. */
   disepak?: { olehKlaimId: string; olehNoFaktur: string | null; pemegangKlaimId: string;
               pemegangMatchedBy: string | null; noRef: string | null; tanggal: string; kredit: number;
@@ -271,7 +271,17 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   // Dulu berbunyi "N resi berebut baris mutasi yang sama" tanpa nama, dan
   // pemilik membacanya sebagai "N resi kehilangan uangnya". Sekarang namanya
   // ada di blok pertama, jadi kalimat ini cukup menunjuk ke sana.
-  if (Number(isi.ditahanKonflik ?? 0) > 0) awas.push(`${isi.ditahanKonflik} resi belum bisa dinilai (berebut baris mutasi) — lihat "belum dijawab" di bawah`);
+  {
+    // ditahanKonflik menghitung DUA keadaan. Sejak 27 Sep 2026 keduanya
+    // dipisah: "berebut" (barisnya dipegang klaim lain) dan "tidak ditebak"
+    // (barisnya ADA dan BEBAS, tapi beda hari). SJB-3-0211 disebut "berebut
+    // baris mutasi — sudah dipegang klaim lain" padahal baris Neneng Juairiah
+    // tidak dipegang siapa pun.
+    const nTolak = (isi.alasanKlaim ?? []).filter((a) => a.sebab === "TOLAK_LINTAS_HARI").length;
+    const nBerebut = Math.max(0, Number(isi.ditahanKonflik ?? 0) - nTolak);
+    if (nBerebut > 0) awas.push(`${nBerebut} resi belum bisa dinilai (berebut baris mutasi) — lihat "belum dijawab" di bawah`);
+    if (nTolak > 0) awas.push(`${nTolak} resi tidak ditebak mesin: baris bernominal sama ADA dan MASIH BEBAS di hari lain — cocokkan manual di /belum-cocok`);
+  }
   if (awas.length) {
     L.push("");
     L.push(`🚨 JANGAN PAKAI LAPORAN INI MENUTUP HARI:`);
@@ -307,16 +317,17 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   const arahKeluar = (a: string) => ["DEBET", "KELUAR"].includes(String(a).toUpperCase());
   const daftar = Array.isArray(sd?.baruDivonis) ? sd!.baruDivonis! : null;
   const sel0 = { n: 0, rp: 0 };
-  const alasanOleh = new Map<string, "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU">();
+  const alasanOleh = new Map<string, "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU">();
   for (const a of (isi.alasanKlaim ?? [])) alasanOleh.set(String(a.id), a.sebab);
   const teksSebab = (sebab?: string) =>
     sebab === "BEREBUT" ? "berebut baris mutasi — baris bernominal sama sudah dipegang klaim lain"
+    : sebab === "TOLAK_LINTAS_HARI" ? "baris bernominal sama ADA dan MASIH BEBAS, tapi beda hari — mesin tidak menebak; cocokkan manual di /belum-cocok"
     : sebab === "LUAR_PERIODE" ? "di luar periode berkas — menunggu mutasi berikutnya"
     : sebab === "DISEPAK_TAK_KETEMU" ? "salah klaim sebelumnya, disepak oleh resi ber-referensi; pencocokan ulang TIDAK ketemu — cocokkan manual di /belum-cocok"
     : "belum dijawab Lapis 2";
   // Sebab per NOMOR KONTRAK juga — daftar "tidak ada di rekening" dari gadai
   // tidak membawa klaim_id, jadi pemasangannya lewat kontrak+nominal.
-  const alasanOlehFaktur = new Map<string, "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU">();
+  const alasanOlehFaktur = new Map<string, "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU">();
   for (const a of (isi.alasanKlaim ?? [])) alasanOlehFaktur.set(`${a.no_faktur}|${Math.round(a.nominal)}`, a.sebab);
 
   L.push("");

@@ -42,6 +42,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { runMatching, DEFAULT_RULES, type MatchRules } from "@/lib/matching";
 import { loadCarryoverPdfTxs } from "@/lib/sessions/carryover";
+import { namaResiKetat } from "@/lib/matching";
 import { loadRefPoolTxs } from "@/lib/sessions/ref-pool";
 import { toDateISO, parseDateISO } from "@/lib/format";
 import { pullGadaiClaims, pushGadaiResults } from "@/app/(app)/check/actions-gadai";
@@ -211,7 +212,7 @@ export interface HasilPass {
    *  sama saja dengan tidak dilaporkan. Ditambahkan 5 September 2026 atas
    *  permintaan pemilik: yang belum cocok disebut "no kontrak, rupiah, alasan". */
   ditahanDaftar: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
-                   sebab: "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU" }[];
+                   sebab: "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU" }[];
   /** Pengusiran yang terjadi pada jalan ini (bukti kuat mengusir bukti lemah),
    *  sudah DIPERSISTENKAN. Dibawa ke laporan sebagai jejak: pemilik berhak
    *  tahu baris bank mana yang pindah pemilik tanpa ia menekan apa pun. */
@@ -731,8 +732,60 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     if (sudahTerbukti.has(String(i.id)) && !(i as any).sudahMemegang) (i as any).tidakBolehMengusir = true;
   }
 
+  // ── PASS 3b (nama persis tanpa jam) butuh baris TERPEGANG di luar kolam ──
+  //
+  // Kolam hanya memuat berkas + carry-over yang BEBAS. Pagar "dua baris
+  // bernama sama = urusan manusia" harus juga melihat baris bernama sama yang
+  // sudah dipegang di luar berkas (mis. H-1 sebelum awal berkas) — tanpa itu
+  // klaim kembar bisa mengambil pembayaran kedua pengirim yang sama. Gagal
+  // memuat = PASS 3b dimatikan untuk jalan ini (lebih baik tidak menebak).
+  let opsiNama: { terpegangLuar: any[] } | undefined;
+  if (jenis === "kredit") {
+    const layak = inputs.filter((i) => !i.jamResi && namaResiKetat(i.namaPengirimResi));
+    if (layak.length) {
+      try {
+        const noms = [...new Set(layak.map((i) => Number(i.nominal)))];
+        const tMin = new Date(Math.min(...layak.map((i) => i.tanggal.getTime())));
+        const tMax = new Date(Math.max(...layak.map((i) => i.tanggal.getTime())));
+        const dari = geserHari(toDateISO(tMin), -1);
+        const sampai = geserHari(toDateISO(tMax), 1);
+        const diKolam = new Set(pool.map((t) => t.parsedTxId).filter(Boolean));
+        const terpegangLuar: any[] = [];
+        for (let a = 0; a < noms.length; a += 100) {
+          const { data, error } = await supabase
+            .from("parsed_transactions")
+            .select("id, tanggal, nominal_kredit, nama_pengirim, bank_id")
+            .eq("account_id", accountId)
+            .not("claimed_by_input_id", "is", null)
+            .is("deleted_at", null)
+            .gte("tanggal", dari)
+            .lte("tanggal", sampai)
+            .in("nominal_kredit", noms.slice(a, a + 100))
+            .limit(2000);
+          if (error) throw new Error(error.message);
+          for (const r of (data ?? []) as any[]) {
+            if (diKolam.has(String(r.id))) continue;
+            terpegangLuar.push({
+              tanggalDate: new Date(`${String(r.tanggal).slice(0, 10)}T12:00:00Z`),
+              kredit: Number(r.nominal_kredit ?? 0),
+              namaPengirim: r.nama_pengirim ?? null,
+              bankId: r.bank_id ?? null,
+            });
+          }
+        }
+        opsiNama = { terpegangLuar };
+      } catch (e) {
+        console.error("[pass] baris terpegang untuk PASS nama gagal dimuat — PASS nama dimatikan:", e);
+        opsiNama = undefined;
+      }
+    } else {
+      opsiNama = { terpegangLuar: [] };
+    }
+  }
+
   const { inputs: hasilInputs, summary } = runMatching(inputs, pool, outletColors, {
     getRulesForInput: (i) => gadaiAwareRules(i, rulesById),
+    nama: opsiNama,
   });
 
   // ── PELEPASAN PEMEGANG LAMA DIPERSISTENKAN DULU, SEBELUM SESI DISIMPAN ──
@@ -891,7 +944,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   // Identitas yang ditahan, dibawa ke laporan. Dipotong 80 supaya satu berkas
   // yang salah periode tidak mengirim ratusan baris; sisanya tetap terhitung
   // di cacahnya.
-  const catatDitahan = (i: any, sebab: "BEREBUT" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU") => {
+  const catatDitahan = (i: any, sebab: "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU") => {
     if (hasil.ditahanDaftar.length >= 80) return;
     hasil.ditahanDaftar.push({
       id: String(i.id),
@@ -989,7 +1042,14 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     // dirancang untuk berbunyi keras di sisi gadai, jadi tetap dikirim.
     if (m?.status === "all_taken" && !m.refIssue) {
       hasil.ditahanKonflik++;
-      catatDitahan(i, "BEREBUT");
+      // Dua keadaan yang dulu bernama sama: barisnya BENAR dipegang klaim
+      // lain (BEREBUT), atau barisnya ADA dan BEBAS tapi beda hari dan mesin
+      // menolak menebaknya (TOLAK_LINTAS_HARI). Yang kedua menunggu pemilik
+      // di /belum-cocok — tetap tidak dikirim ke gadai, sama seperti dulu.
+      // Kalau baris di HARI RESI SENDIRI sudah dipegang klaim lain, kalimat
+      // lama ("sudah dipegang klaim lain") justru yang benar — dan itu tanda
+      // resi kembar (SJB-1-0186). Label "baris bebas" hanya untuk yang tidak.
+      catatDitahan(i, m.barisBebas && !m.hariSendiriDipegang ? "TOLAK_LINTAS_HARI" : "BEREBUT");
       continue;
     }
 

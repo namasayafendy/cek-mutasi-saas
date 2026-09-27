@@ -24,6 +24,7 @@
 
 import { getAccountContext } from "@/lib/supabase/context";
 import { createClient } from "@/lib/supabase/server";
+import { tandaiTolakLintasHari } from "@/lib/laporan/tolakLintasHari";
 
 /** Keputusan pemilik 28 Juli 2026: apa pun sebelum tanggal ini sudah beres. */
 const LANTAI = "2026-07-22";
@@ -67,6 +68,12 @@ export interface BarisBelumCocok {
    *  "resi dipakai kontrak lain (dobel)" -> satu resi diklaim dua kontrak
    *  "belum pernah divonis…"             -> kalah berebut baris / di luar periode */
   sebab?: string;
+  /** true = mesin MENOLAK MENEBAK lintas hari: baris bernominal sama ADA dan
+   *  masih BEBAS pada `barisBebasTgl`, cuma beda hari. Diisi dari cek_inputs
+   *  terbaru (lib/laporan/tolakLintasHari.ts), bukan dari gadai. */
+  tolakLintasHari?: boolean;
+  hariSendiriDipegang?: boolean;
+  barisBebasTgl?: string | null;
 }
 
 export interface KandidatMutasi {
@@ -147,9 +154,14 @@ export async function ambilBelumCocok(): Promise<
     }
     const j = await res.json();
     if (!j?.ok) return { ok: false, msg: j?.msg ?? "Jawaban tidak dikenali." };
+    const items = (j.items ?? []) as BarisBelumCocok[];
+    // Sebab gadai untuk PENDING ("berebut baris mutasi / di luar periode")
+    // salah untuk yang ditolak ditebak lintas hari — barisnya BEBAS. Sisi ini
+    // yang tahu; ditandai di sini. Gagal menandai = sebab lama, bukan error.
+    await tandaiTolakLintasHari(k.db, k.ctx.account.id, items);
     return {
       ok: true,
-      items: (j.items ?? []) as BarisBelumCocok[],
+      items,
       salahArah: Number(j.salahArah ?? 0),
     };
   } catch (e) {

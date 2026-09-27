@@ -13,6 +13,9 @@
 //                     hanya 2 dobel dari 1.856 kredit.
 //   Pass 3 NOMINAL  — perilaku lama (nominal + jendela rules per-input), fallback
 //                     terakhir & satu-satunya jalur untuk input manual.
+//   (27 Sep 2026) NAMA — nama pengirim SAMA PERSIS + nominal, ±1 hari, untuk resi
+//                     tanpa jam; berjalan sebelum pencocokan nominal. Lihat
+//                     cocokNamaTanpaJam di bawah.
 // Pass dijalankan GLOBAL (semua input pass-1 dulu, baru pass-2, baru pass-3) dengan
 // satu claimed-set bersama — supaya input tanpa-ref tidak "menyambar" kredit yang
 // ditunjuk ref input lain.
@@ -93,6 +96,77 @@ export function namaCocok(a: string | null | undefined, b: string | null | undef
   return false;
 }
 
+// ── NAMA TANPA JAM: pencocokan nama yang KETAT ──────────────────────────
+//
+// 27 September 2026, SJB-3-0211 (BIREUEN) Rp 50.000. Resi DANA tanpa tanggal
+// dan jam; tanggalnya jatuh ke tanggal transaksi (26 Sep), padahal uangnya
+// masuk 25 Sep 22.31 a.n. NENENG JUAIRIAH — nama yang SAMA PERSIS dengan resi.
+// PASS 2 butuh jam, jadi dilewati; PASS 4 menemukan baris itu sebagai satu-
+// satunya kandidat tapi beda hari, dan pagar anti-tebak-lintas-hari menolak
+// (benar menolak — nominalnya diperebutkan empat resi). Pemilik menutupnya
+// dengan tangan. Nama pengirim yang sama persis adalah bukti yang tidak pernah
+// dipakai.
+//
+// SENGAJA BUKAN namaCocok. namaCocok longgar (satu kata ≥4 huruf yang sama
+// sudah cukup) karena di PASS 2 ia ditopang jam ±5 menit. Di sini tidak ada
+// jam, dan jendelanya melintasi hari — jadi namanya harus sama PERSIS setelah
+// dinormalkan, atau salah satunya terpotong di batas kata.
+//
+// Diuji ke 60 hari data hidup: dari 542 klaim bernama ≥2 kata yang baris
+// benarnya diketahui LEWAT JALAN LAIN (REF / NOMINAL_JAM / manual), 531 dapat
+// tepat satu baris dan 530 benar; yang satu lagi (SBR-11-2096) justru dibenarkan
+// ref dan jamnya sendiri — data lamanya yang tertukar. 30 resi bernama tanpa
+// jam: 28 sama dengan hasil sekarang, N69940 tertangkap, 1 membongkar pasangan
+// yang tertukar (SBR-12-0879 / SBR-4-0153).
+
+/** Nama yang bukan nama orang: dompet digital, penyedia, placeholder AI. */
+const NAMA_UMUM = new Set([
+  "GOPAY", "GOPAY SALDO", "GO PAY", "DANA", "ID DANA", "DANA ID", "OVO",
+  "SHOPEEPAY", "SHOPEE PAY", "AIRPAY", "DOMPET ANAK BANGSA",
+  "VISIONET INTERNASIONAL PT", "ESPAY", "FLIP", "LINKAJA", "QRIS", "TRANSFER",
+  "TABUNGAN BY JAGO", "TIDAK TERBACA", "TIDAK TERTERA",
+]);
+
+const rapikanNama = (s: string) =>
+  s.toUpperCase().replace(/[^A-Z ]/g, " ").replace(/\s+/g, " ").trim();
+
+/** Nama di RESI (dibaca AI). null = tidak layak jadi kunci: tersamar
+ *  ("dara ******", "0812****5803"), berangka, placeholder, nama penyedia, atau
+ *  kurang dari dua kata sungguhan (≥3 huruf). */
+export function namaResiKetat(s: string | null | undefined): string | null {
+  const t = String(s ?? "").trim();
+  if (!t) return null;
+  if (/[0-9*•…()]|\.\.\.|x{4}/i.test(t)) return null;
+  const n = rapikanNama(t);
+  if (!n || NAMA_UMUM.has(n)) return null;
+  if (n.split(" ").filter((w) => w.length >= 3).length < 2) return null;
+  return n;
+}
+
+/** Nama di MUTASI. Buang dulu tempelan bank SEBELUM dibesarkan — tempelannya
+ *  dikenali dari huruf campurannya (" Bank Seabank", " Bank BRI Jkt", " Dana"),
+ *  sehingga nama besar semua seperti PRADANA tidak tersentuh. Juga awalan
+ *  "DANA-" dan token FT yang terselip di nama (baris hasil parse ganda). */
+export function namaMutasiKetat(s: string | null | undefined): string | null {
+  let t = String(s ?? "").trim();
+  if (!t) return null;
+  t = t.replace(/\s+(Bank(\s+[A-Za-z]+)+|Dana)$/, "");
+  t = t.replace(/^DANA\s*-\s*/i, "");
+  t = t.replace(/\bFT\d{5}\S*/gi, " ");
+  const n = rapikanNama(t);
+  if (!n || NAMA_UMUM.has(n)) return null;
+  return n;
+}
+
+/** Sama persis, atau salah satu terpotong TEPAT di batas kata dan yang lebih
+ *  pendek masih ≥10 huruf (bank kadang memotong nama panjang). */
+export function namaSamaKetat(a: string | null, b: string | null): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [pendek, panjang] = a.length <= b.length ? [a, b] : [b, a];
+  return pendek.length >= 10 && panjang.startsWith(pendek) && panjang[pendek.length] === " ";
+}
+
 export type RunMatchingOptions = {
   /** Per-input rules getter. Diberi 1 input, harus return rules-nya. */
   getRulesForInput?: (input: UserInput) => MatchRules;
@@ -103,6 +177,17 @@ export type RunMatchingOptions = {
    * "leftover-only" — proses HANYA input dengan status no_candidate, sisanya di-keep.
    */
   mode?: "all" | "leftover-only";
+  /**
+   * PASS 3b (nama persis tanpa jam) HANYA berjalan kalau pemanggil mengisi
+   * ini. Isinya baris yang SUDAH DIPEGANG di luar kolam (kolam hanya memuat
+   * berkas + carry-over yang BEBAS), supaya pagar "dua baris bernama sama =
+   * urusan manusia" juga melihat baris terpegang di luar berkas. Tanpa itu
+   * pagarnya buta sebelah, jadi pemanggil yang tidak bisa memuatnya (layar
+   * /check lama) tidak mendapat PASS 3b sama sekali.
+   */
+  nama?: {
+    terpegangLuar: { tanggalDate: Date; kredit: number; namaPengirim: string | null; bankId?: string | null }[];
+  };
 };
 
 export function runMatching(
@@ -233,6 +318,10 @@ export function runMatching(
     //   1. Pemegang MANUAL tidak disentuh — manusia sudah memutuskan.
     //   2. Pemegang ber-REF atau NAMA+JAM tidak disentuh — buktinya setara
     //      atau lebih kuat; tabrakan begini adalah anomali untuk manusia.
+    //      NAMA (nama persis tanpa jam, ±1 hari) boleh diusir: ref yang
+    //      menunjuk barisnya lebih pasti daripada nama yang kebetulan sama.
+    //      WAJIB seirama dengan daftar pemegang lemah di gadai
+    //      (app/api/transfer-klaim/route.ts) — keduanya diubah 27 Sep 2026.
     //   3. Pemegang harus klaim gadai (punya id) supaya bisa dicocokkan ulang
     //      dan dilaporkan; input lokal tak punya jalur itu.
     // Ditambah: pemegang bukan diri sendiri, dan baris belum diambil pada
@@ -244,7 +333,7 @@ export function runMatching(
     //      SBR-11-2096 sudah dipasangkan manual ke baris FIKRI AZIZI; tanpa
     //      pagar ini ia akan ikut merebut baris WAHYUDI yang ref-nya cocok.
     if (available.length === 0 && !(input as any).sudahMemegang && !(input as any).tidakBolehMengusir) {
-      const LEMAH = new Set(["NOMINAL", "NOMINAL_JAM"]);
+      const LEMAH = new Set(["NOMINAL", "NOMINAL_JAM", "NAMA"]);
       const korban = nominalHits
         .filter((tx) => {
           if (!tx.claimedByOther || !tx.pemegang || tx.pemegang.manual) return false;
@@ -409,6 +498,57 @@ export function runMatching(
     resolved[idx] = buildMatched(input, available[0], "NOMINAL_JAM");
   });
 
+  // ── PASS 3b: NAMA PERSIS TANPA JAM, ±1 HARI (27 September 2026) ──
+  //
+  // Untuk resi yang namanya terbaca tapi jamnya TIDAK (resi DANA). Berjalan
+  // SEBELUM hitungan rebutan PASS 4, supaya klaim yang sudah terjawab lewat
+  // nama berhenti dihitung sebagai pesaing saudaranya.
+  //
+  // Pagarnya — semua harus terpenuhi, kalau tidak pass ini DIAM dan PASS 4
+  // bekerja seperti biasa (dengan pagarnya sendiri):
+  //   * nama resi layak (namaResiKetat) dan jam resi memang tidak terbaca;
+  //   * di jendela ±1 hari, dengan nominal sama, TEPAT SATU baris yang namanya
+  //     sama persis — dihitung SEMUA baris yang terlihat, terpegang atau
+  //     tidak. Dua baris bernama sama = pembayaran ganda atau baris hasil
+  //     parse ganda (5 Agu); keduanya urusan manusia;
+  //   * baris itu BEBAS;
+  //   * tidak ada input lain di jalan ini dengan nama persis & nominal sama
+  //     dalam ±2 hari (dua klaim untuk satu pengirim = kembar, bukan tebakan).
+  const namaKetatPer = inputs.map((i) =>
+    jamToMinutes(i.jamResi) === null ? namaResiKetat(i.namaPengirimResi) : null);
+  const terpegangLuar = options?.nama?.terpegangLuar ?? null;
+  if (terpegangLuar) inputs.forEach((input, idx) => {
+    if (!shouldProcess(input) || resolved[idx] || diamSaja(input)) return;
+    // Debet menuntut tanggal PERSIS (GADAI_DEBET_RULES); pass ini ±1 hari.
+    if (String(input.id).startsWith("TFKD-")) return;
+    const nama = namaKetatPer[idx];
+    if (!nama) return;
+
+    const saudara = inputs.some((j, jdx) =>
+      jdx !== idx && j.nominal === input.nominal &&
+      Math.abs(diffDays(input.tanggal, j.tanggal)) <= 2 &&
+      namaSamaKetat(nama, namaResiKetat(j.namaPengirimResi)));
+    if (saudara) return;
+
+    const skipBankFilter = forceCrossBank || !input.bankId;
+    const bernama = transactions.filter((tx) => {
+      if (!skipBankFilter && input.bankId && tx.bankId && input.bankId !== tx.bankId) return false;
+      if (tx.kredit !== input.nominal) return false;
+      if (Math.abs(diffDays(input.tanggal, tx.tanggalDate)) > 1) return false;
+      return namaSamaKetat(nama, namaMutasiKetat(tx.namaPengirim));
+    });
+    const luar = terpegangLuar.filter((t) => {
+      if (!skipBankFilter && input.bankId && t.bankId && input.bankId !== t.bankId) return false;
+      if (t.kredit !== input.nominal) return false;
+      if (Math.abs(diffDays(input.tanggal, t.tanggalDate)) > 1) return false;
+      return namaSamaKetat(nama, namaMutasiKetat(t.namaPengirim));
+    });
+    if (bernama.length !== 1 || luar.length > 0) return;
+    const tx = bernama[0];
+    if (tx.claimedByOther || claimed.has(txKey(tx))) return;
+    resolved[idx] = buildMatched(input, tx, "NAMA");
+  });
+
   // ── PASS 4: NOMINAL + jendela rules (perilaku lama; jalur input manual) ──
   //
   // REBUTAN NOMINAL: kalau pada SATU tanggal ada LEBIH DARI SATU input dengan
@@ -442,6 +582,14 @@ export function runMatching(
     });
     for (const [k, n] of hitung) if (n > 1) rebutan.add(k);
   }
+
+  // Baris BEBAS yang ditolak ditebak, per input — diperiksa ulang sesudah
+  // semua input diproses (lihat di bawah).
+  const barisTolak = new Map<number, PdfTransaction[]>();
+  const urutTglKronologis = (d: string[]) => [...d].sort((a, b) => {
+    const k = (x: string) => { const [dd, mm, yy] = x.split(/[-/]/).map(Number); return yy * 10000 + mm * 100 + dd; };
+    return k(a) - k(b);
+  });
 
   const resultInputs: UserInput[] = inputs.map((input, idx) => {
     if (!shouldProcess(input) || diamSaja(input)) return input;
@@ -526,12 +674,19 @@ export function runMatching(
       if (bedaHari && (available.length > 1 || sedangDirebutkan || adaHariSamaTapiSudahDiambil)) {
         const datesSet = new Set<string>();
         for (const c of available) datesSet.add(c.tanggal);
+        barisTolak.set(idx, available);
         return {
           ...input,
           match: {
             status: "all_taken",
             conflictCount: available.length,
-            conflictDates: Array.from(datesSet).sort(),
+            conflictDates: urutTglKronologis(Array.from(datesSet)),
+            hariSendiriDipegang: adaHariSamaTapiSudahDiambil,
+            // Baris-baris di atas BEBAS — mesin hanya menolak menebaknya.
+            // Tanpa penanda ini ia terbaca "sudah ke-claim input lain" di
+            // semua layar, dan pemilik mencari pemegang yang tidak ada
+            // (SJB-3-0211, 27 Sep 2026).
+            barisBebas: true,
             refIssue: pendingRefIssue[idx] ?? undefined,
           },
         };
@@ -567,6 +722,26 @@ export function runMatching(
     const match: MatchResult = { status: "no_candidate", refIssue: pendingRefIssue[idx] };
     return { ...input, match };
   });
+
+  // ── "BEBAS" HARUS MASIH BENAR DI AKHIR JALAN ──
+  //
+  // PASS 4 berjalan berurutan. Baris yang bebas saat input A menolak
+  // menebaknya bisa diambil input B yang diproses BELAKANGAN (tanggal lain,
+  // sendirian, boleh menebak). Tanpa pemeriksaan ulang, A tetap berbunyi
+  // "baris masih BEBAS" untuk baris yang sudah dipegang B (temuan peninjau
+  // 27 Sep 2026). Yang tersisa bebas saja yang disebut; kalau habis, ia
+  // kembali menjadi bentrok biasa.
+  for (const [idx, rows] of barisTolak) {
+    const m = resultInputs[idx]?.match as any;
+    if (!m || m.status !== "all_taken" || !m.barisBebas) continue;
+    const sisa = rows.filter((t) => !claimed.has(txKey(t)));
+    if (sisa.length === 0) {
+      m.barisBebas = false;
+      continue;
+    }
+    m.conflictCount = sisa.length;
+    m.conflictDates = urutTglKronologis([...new Set(sisa.map((t) => t.tanggal))]);
+  }
 
   const matched = resultInputs.filter((i) => i.match?.status === "matched");
   const noCandidate = resultInputs.filter((i) => i.match?.status === "no_candidate");

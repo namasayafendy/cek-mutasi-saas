@@ -452,8 +452,12 @@ function drawRecapPages(args: DrawRecapArgs) {
         const conflictCount = m?.status === "all_taken" ? m.conflictCount : 0;
         const conflictDates = m?.status === "all_taken" ? m.conflictDates.join(", ") : "";
         const bk = uploads.length > 0 ? ` [${bankLabel(i.bankId)}]` : "";
+        const bebas = m?.status === "all_taken" && !!m.barisBebas;
         line(
-          `  - ${formatDateID(i.tanggal)}${bk} | ${o?.nama ?? "?"} | Rp ${formatRupiah(i.nominal)} (${conflictCount}x ke-claim di ${conflictDates})`,
+          `  - ${formatDateID(i.tanggal)}${bk} | ${o?.nama ?? "?"} | Rp ${formatRupiah(i.nominal)} ` +
+          (bebas
+            ? `(tidak ditebak: ${conflictCount} baris masih bebas di ${conflictDates}, beda hari)`
+            : `(${conflictCount}x ke-claim di ${conflictDates})`),
         );
       }
     }

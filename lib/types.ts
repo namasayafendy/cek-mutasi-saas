@@ -251,8 +251,13 @@ export type UserInput = {
 /** Cara MESIN mencocokkan, dari yang paling kuat ke yang paling lemah.
  *  NOMINAL_JAM ditambahkan 3 September 2026: nominal + jam pada HARI YANG SAMA,
  *  untuk resi yang jamnya terbaca tapi namanya tidak. NOMINAL tetap ada sebagai
- *  jaring terakhir — ia boleh salah kontrak, tapi nominalnya pasti sama. */
-export type MatchedBy = "REF" | "NAMA_JAM" | "NOMINAL_JAM" | "NOMINAL";
+ *  jaring terakhir — ia boleh salah kontrak, tapi nominalnya pasti sama.
+ *  NAMA ditambahkan 27 September 2026: nama pengirim SAMA PERSIS + nominal,
+ *  ±1 hari, untuk resi yang namanya terbaca tapi jamnya tidak (resi DANA).
+ *  Urutan kekuatan: REF > NAMA_JAM > NAMA ≈ NOMINAL_JAM > NOMINAL. NAMA
+ *  termasuk yang LEMAH: klaim ber-REF yang menunjuk barisnya boleh
+ *  mengusirnya (lihat LEMAH di lib/matching.ts). */
+export type MatchedBy = "REF" | "NAMA_JAM" | "NAMA" | "NOMINAL_JAM" | "NOMINAL";
 
 /** Fase B: masalah ref yang perlu perhatian, apapun status akhirnya */
 export type RefIssue = "REF_NOMINAL_BEDA" | "REF_SUDAH_DIKLAIM"
@@ -273,7 +278,23 @@ export type MatchResult = (
       ambiguous?: number;
     }
   | { status: "no_candidate" }
-  | { status: "all_taken"; conflictCount: number; conflictDates: string[] }
+  | {
+      status: "all_taken"; conflictCount: number; conflictDates: string[];
+      /** true = mesin MENOLAK MENEBAK lintas hari: baris bernominal sama ADA
+       *  dan MASIH BEBAS pada `conflictDates`, tapi harinya beda dan nominal
+       *  itu sedang diperebutkan / baris hari sendiri sudah diambil. Ini BUKAN
+       *  "sudah ke-claim input lain" — `conflictCount` di sini menghitung
+       *  baris BEBAS. Sengaja tidak memakai refIssue: refIssue membuat klaim
+       *  dikirim ke gadai sebagai UNMATCHED + alarm (jalankanPass). Disimpan
+       *  ke kolom cek_inputs.ref_issue sebagai 'BEDA_HARI_BEBAS' (save.ts). */
+      barisBebas?: boolean;
+      /** true = baris bernominal sama di HARI RESI SENDIRI sudah dipegang
+       *  klaim lain. Tanda yang sama dengan resi kembar SJB-1-0186 (kasir
+       *  mencatat satu pembayaran dua kali): baris bebas di hari lain bisa
+       *  saja uang nasabah lain. Layar WAJIB menyebutnya, bukan hanya
+       *  "baris bebas" (temuan peninjau 27 Sep 2026). */
+      hariSendiriDipegang?: boolean;
+    }
 ) & { refIssue?: RefIssue };
 
 export type MatchSummary = {

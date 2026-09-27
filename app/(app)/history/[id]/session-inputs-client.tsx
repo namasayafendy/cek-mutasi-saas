@@ -392,7 +392,10 @@ export function SessionInputsClient({
                       {i.match_status === "all_taken" && (
                         <div className="text-xs">
                           <span className="inline-flex items-center gap-1 text-amber-700">
-                            <AlertTriangle className="h-3.5 w-3.5" /> Bentrok ({i.conflict_count}x)
+                            <AlertTriangle className="h-3.5 w-3.5" />{" "}
+                            {String(i.ref_issue ?? "").startsWith("BEDA_HARI_BEBAS")
+                              ? "Tidak ditebak — baris masih bebas, beda hari"
+                              : `Bentrok (${i.conflict_count}x)`}
                           </span>
                           {i.conflict_dates && i.conflict_dates.length > 0 && (
                             <div className="text-[10px] text-amber-700 mt-0.5">

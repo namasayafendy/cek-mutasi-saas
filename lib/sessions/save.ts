@@ -105,7 +105,15 @@ export async function saveSession(
     conflict_dates:
       i.match?.status === "all_taken" ? i.match.conflictDates : null,
     matched_by: i.match?.status === "matched" ? (i.match.matchedBy ?? null) : null,
-    ref_issue: i.match?.refIssue ?? null,
+    // 'BEDA_HARI_BEBAS' = mesin menolak menebak lintas hari, barisnya masih
+    // bebas (lihat MatchResult.barisBebas). Hanya ditulis ke KOLOM ini supaya
+    // layar riwayat & /belum-cocok bisa menyebutnya; tidak ada yang membaca
+    // kolom ini untuk memutuskan apa pun. refIssue di memori sengaja tidak
+    // dipakai: ia membuat klaim dikirim ke gadai sebagai UNMATCHED + alarm.
+    ref_issue: i.match?.refIssue
+      ?? (i.match?.status === "all_taken" && i.match.barisBebas
+        ? (i.match.hariSendiriDipegang ? "BEDA_HARI_BEBAS_HARI_SENDIRI_DIPEGANG" : "BEDA_HARI_BEBAS")
+        : null),
     // Simpan id klaim Aceh Gadai. Sebelumnya id ini dibawa saat menarik data
     // lalu HILANG begitu halaman ditutup, sehingga hasil "Cocokkan manual"
     // tidak pernah bisa dikembalikan ke gadai dan klaimnya beku UNMATCHED
