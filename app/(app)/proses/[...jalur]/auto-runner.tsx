@@ -227,6 +227,11 @@ export function AutoRunner({
           // blok "belum dijawab" di laporan hanya punya cacah, bukan nama.
           ditahanDaftar: h.ditahanDaftar,
           disepak: h.disepak,
+          // Pagar resi bekas (1 Okt 2026). Dua medan baru — tanpa baris ini
+          // keduanya lenyap di sini persis seperti empat medan di atas dulu:
+          // alarm REF yang dikirim ke gadai dan cocok ke "uang lama".
+          alarmRef: h.alarmRef,
+          uangLama: h.uangLama,
         });
         const tutup = await tandaiSelesai(jobId, ringkasBerkas, [bersih(hasilKredit), bersih(hasilDebet)]);
         ubahTerakhir("selesai");

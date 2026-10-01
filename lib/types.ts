@@ -204,6 +204,12 @@ export type PdfTransaction = {
     matchedBy: string | null;
     manual: boolean;
     gadaiKlaimId: string | null;
+    /** Nomor kontrak pemegang (cek_inputs.gadai_no_faktur). Hanya untuk
+     *  KALIMAT: alarm REF_SUDAH_DIKLAIM harus bisa menyebut "baris ini sudah
+     *  dipegang SJB-1-0250", bukan cuma "sudah dipakai input lain" — pemilik
+     *  perlu tahu kontrak mana yang dibuka untuk menilai resi bekas atau bukan
+     *  (uji resi bekas, 1 Okt 2026). Tidak dipakai mencocokkan. */
+    noFaktur?: string | null;
   };
 };
 
@@ -245,6 +251,17 @@ export type UserInput = {
    *  nominal, dan pemiliknya tidak tahu kontrak mana yang harus dibuka. */
   noFaktur?: string | null;
   outletNama?: string | null;
+
+  /** Tanggal TRANSAKSI gadai (bukan tanggal resi), UTC-noon. `tanggal` di
+   *  atas adalah tanggal RESI (tgl_transfer) — kunci jendela pencocokan.
+   *  Yang ini dipakai untuk satu pertanyaan saja: "apakah baris mutasi yang
+   *  dipakai klaim ini JAUH lebih tua daripada transaksinya?" — tanda resi
+   *  bekas. Kejadian nyata: SJB-10-1386 (LHOKSEUMAWE, transaksi 1 Sep 2026,
+   *  Rp 80.000) memakai resi Junaidi 29 Jun FT261805QY44 dan cocok lewat REF
+   *  ke baris 29 Juni tanpa satu peringatan pun (uji resi bekas, 1 Okt 2026).
+   *  undefined = tidak diketahui (layar /check lama tidak membawanya) —
+   *  pagar yang memakainya DIAM, bukan menganggap "baru". */
+  tanggalTransaksi?: Date | null;
 };
 
 /** Fase B: bagaimana sebuah input ter-match (label keyakinan) */
@@ -265,6 +282,38 @@ export type RefIssue = "REF_NOMINAL_BEDA" | "REF_SUDAH_DIKLAIM"
    *  ulangnya TIDAK ketemu. Bukan "uang tidak ada" — uangnya ada, cuma bukan
    *  milik klaim ini. Harus dicocokkan manusia. */
   | "DISEPAK";
+
+/** Nilai ref_issue yang DIKIRIM ke gadai (/api/transfer-klaim/result).
+ *  MUTASI_LAMA SENGAJA bukan anggota RefIssue: ia tidak lahir di pencocokan
+ *  dan tidak mengubah vonis — ia PERINGATAN yang ditempel jalankanPass pada
+ *  klaim yang tetap MATCHED (dikirim matched:true), karena baris mutasinya
+ *  lebih dari 3 hari lebih tua daripada transaksinya. Bayar di muka sampai
+ *  ±44 hari memang terjadi, jadi ini minta konfirmasi, bukan menolak. */
+export type RefIssueKirim = RefIssue | "MUTASI_LAMA";
+
+/** Pemegang baris yang ditunjuk REF klaim yang kalah (REF_SUDAH_DIKLAIM).
+ *  Dibawa supaya alarmnya bisa berkata "REF menunjuk baris yang sudah
+ *  dipegang <kontrak> — kemungkinan resi bekas", bukan "nomor resi
+ *  bermasalah" / "tidak ada di rekening" yang mengirim orang mencari uang
+ *  yang tidak hilang (uji resi bekas, 1 Okt 2026). */
+export type PemegangRef = {
+  /** Tanggal baris mutasi, YYYY-MM-DD. */
+  tanggal: string;
+  kredit: number;
+  parsedTxId: string | null;
+  /** cek_inputs.id pemegang dari sesi lama; null kalau pemegangnya klaim
+   *  lain di jalan INI atau identitasnya tidak terbaca. */
+  inputId: string | null;
+  gadaiKlaimId: string | null;
+  noFaktur: string | null;
+  /** Cara pemegang dulu mencocokkan baris ini (REF / NAMA_JAM / NOMINAL /
+   *  NAMA / MANUAL…), kalau diketahui. Pemegang yang cuma menebak lewat
+   *  nominal bisa saja yang keliru — alarmnya harus menyebut dua kemungkinan. */
+  caraPemegang?: string | null;
+  /** true = baris diambil klaim lain pada jalan yang sama (dua resi ber-REF
+   *  sama dalam satu sapuan). */
+  diJalanIni: boolean;
+};
 
 export type MatchResult = (
   | {
@@ -294,6 +343,10 @@ export type MatchResult = (
        *  saja uang nasabah lain. Layar WAJIB menyebutnya, bukan hanya
        *  "baris bebas" (temuan peninjau 27 Sep 2026). */
       hariSendiriDipegang?: boolean;
+      /** Hanya untuk refIssue REF_SUDAH_DIKLAIM dari PASS 1: siapa yang
+       *  memegang baris yang ditunjuk REF klaim ini, terdekat tanggalnya lebih
+       *  dulu. Tidak mengubah arti refIssue; hanya bahan kalimat alarm. */
+      dipegang?: PemegangRef[];
     }
 ) & { refIssue?: RefIssue };
 

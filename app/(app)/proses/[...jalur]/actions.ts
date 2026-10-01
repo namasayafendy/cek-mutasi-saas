@@ -24,9 +24,55 @@ import { getAccountContext } from "@/lib/supabase/context";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { antreLaporan } from "@/lib/telegram/outbox";
 import { hitungCakupan, saranExport, tglID, type BarisCakupan, type HasilCakupan } from "@/lib/coverage/celah";
-import { susunLapis2, type IsiLapis2 } from "@/lib/laporan/lapis2";
+import { susunLapis2, sebabAlarmRef, type IsiLapis2 } from "@/lib/laporan/lapis2";
 
 export type Balasan = { ok: boolean; error?: string };
+
+/**
+ * Klaim mana (dari daftar tunggakan) yang PERNAH dikirim sebagai alarm nomor
+ * referensi — REF_SUDAH_DIKLAIM / REF_NOMINAL_BEDA di cek_inputs.ref_issue
+ * (lib/sessions/save.ts). Dipakai supaya tunggakan semacam itu tidak diberi
+ * "ADA N baris bebas" (1 Okt 2026, uji resi bekas).
+ *
+ * Dibaca per 50 klaim dan HANYA baris ber-ref_issue REF_*, supaya tidak
+ * pernah menyentuh batas 1000 baris PostgREST — satu klaim PENDING bisa punya
+ * puluhan baris cek_inputs (satu per unggahan). Kalau tetap menyentuh batas,
+ * itu diperlakukan sebagai gagal, bukan dipotong diam-diam.
+ *
+ * @returns peta klaim_id -> ref_issue, atau null kalau GAGAL dibaca. Tidak
+ *   pernah melempar: null berarti "tidak diketahui", dan pemanggil wajib
+ *   memperlakukannya begitu — bukan sebagai "tidak ada alarm".
+ */
+async function bacaRefPernah(db: any, accountId: string, klaimIds: string[]): Promise<Map<string, string> | null> {
+  const ids = [...new Set(klaimIds.filter(Boolean))];
+  const peta = new Map<string, string>();
+  if (!ids.length) return peta;
+  try {
+    for (let i = 0; i < ids.length; i += 50) {
+      const { data, error } = await db
+        .from("cek_inputs")
+        .select("gadai_klaim_id, ref_issue")
+        .eq("account_id", accountId)
+        .in("gadai_klaim_id", ids.slice(i, i + 50))
+        .in("ref_issue", ["REF_SUDAH_DIKLAIM", "REF_NOMINAL_BEDA"])
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1000);
+      if (error) throw new Error(error.message);
+      const rows = (data ?? []) as any[];
+      if (rows.length >= 1000) throw new Error("riwayat ref_issue menyentuh batas 1000 baris");
+      for (const row of rows) {
+        const k = String(row.gadai_klaim_id);
+        // REF_SUDAH_DIKLAIM didahulukan: itu tanda resi bekas yang paling kuat.
+        if (!peta.has(k) || row.ref_issue === "REF_SUDAH_DIKLAIM") peta.set(k, String(row.ref_issue));
+      }
+    }
+    return peta;
+  } catch (e) {
+    console.error("[lapis2] gagal membaca riwayat alarm REF tunggakan:", e);
+    return null;
+  }
+}
 
 /**
  * Ambil konteks + pastikan job memang milik akun pemanggil.
@@ -251,6 +297,14 @@ export interface RingkasPass {
   disepak?: { olehKlaimId: string; olehNoFaktur: string | null; pemegangKlaimId: string;
               pemegangMatchedBy: string | null; noRef: string | null; tanggal: string; kredit: number;
               nasib: "COCOK_ULANG" | "TAK_KETEMU" }[];
+  /** Alarm nomor referensi yang dikirim pada jalan ini, dengan kalimatnya
+   *  (REF_SUDAH_DIKLAIM menyebut kontrak pemegang barisnya). 1 Okt 2026. */
+  alarmRef?: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
+               issue: string; ket: string }[];
+  /** Klaim cocok yang baris mutasinya >3 hari lebih tua daripada
+   *  transaksinya (MUTASI_LAMA) — minta konfirmasi bukan resi bekas. */
+  uangLama?: { id: string; no_faktur: string; outlet: string; nominal: number;
+               tglTransaksi: string; tglBaris: string; hari: number; matchedBy: string }[];
 }
 
 export interface RingkasBerkas {
@@ -481,7 +535,32 @@ async function susunLaporanLapis2(
           // Ini TIDAK mencocokkan apa pun — hanya melapor apakah ada calon.
           // Penutupan tetap keputusan manusia di /belum-cocok, karena satu
           // baris bisa saja milik permintaan lain.
+          //
+          // ── KECUALI ALARM REF / RESI BEKAS (1 Oktober 2026) ──
+          //
+          // Untuk klaim yang nomor referensinya menunjuk baris yang SUDAH
+          // dipegang kontrak lain, "ADA N baris bernominal sama yang masih
+          // bebas" adalah dorongan ke arah yang salah: barisnya yang benar
+          // sudah ketemu, dan baris bebas bernominal sama hampir pasti uang
+          // nasabah LAIN. Calonnya tidak dihitung sama sekali. Dikenali dari
+          // dua sumber: kalimat sebab dari gadai (catatan_koreksi), dan
+          // riwayat cek_inputs klaim itu sendiri — yang kedua tetap bekerja
+          // walau gadai belum menulis sebabnya. Gagal membaca riwayat = tidak
+          // ada calon yang dihitung untuk SIAPA PUN (tidak diketahui tidak
+          // boleh terbaca "bersih").
+          const refPernah = await bacaRefPernah(r.db, r.ctx.account.id,
+            tunggakan.map((t) => String((t as any).klaim_id ?? "")));
           for (const t of tunggakan) {
+            const issue = refPernah?.get(String((t as any).klaim_id ?? "")) ?? null;
+            if (issue && (!t.sebab || t.sebab === "tidak ada di rekening")) {
+              t.sebab = issue === "REF_SUDAH_DIKLAIM"
+                ? "REF menunjuk baris mutasi yang sudah dipegang klaim lain — kemungkinan resi bekas"
+                : "nomor resi menunjuk baris mutasi bernominal BEDA — salah baca AI atau resi diedit";
+            }
+            if (refPernah === null || issue || sebabAlarmRef(t.sebab)) {
+              (t as any).calonBebas = null;   // sengaja tidak ditelusuri
+              continue;
+            }
             try {
               const arahT = String((t as any).arah ?? "KREDIT").toUpperCase();
               const kol = arahT === "DEBET" ? "nominal_debet" : "nominal_kredit";
@@ -601,6 +680,18 @@ async function susunLaporanLapis2(
     // tahu SIAPA yang menggantung (ketinggalan); sisi ini tahu KENAPA.
     alasanKlaim: pass.flatMap((p) => p.ditahanDaftar ?? []),
     disepak: pass.flatMap((p) => p.disepak ?? []),
+    // TIDAK disaring lantai: alarm REF sering justru membawa tanggal resi
+    // LAMA (resi bekas), dan lantai tanggal resi akan membuangnya diam-diam.
+    // Isinya dipotong dan dijinakkan — teksnya lahir di browser.
+    alarmRef: pass.flatMap((p) => p.alarmRef ?? []).slice(0, 60).map((a) => ({
+      id: jinak(a.id, 60), no_faktur: jinak(a.no_faktur, 40), outlet: jinak(a.outlet, 40),
+      tgl: jinak(a.tgl, 10), nominal: Number(a.nominal) || 0, issue: jinak(a.issue, 30), ket: jinak(a.ket, 160),
+    })),
+    uangLama: pass.flatMap((p) => p.uangLama ?? []).slice(0, 60).map((u) => ({
+      id: jinak(u.id, 60), no_faktur: jinak(u.no_faktur, 40), outlet: jinak(u.outlet, 40),
+      nominal: Number(u.nominal) || 0, tglTransaksi: jinak(u.tglTransaksi, 10), tglBaris: jinak(u.tglBaris, 10),
+      hari: Math.trunc(Number(u.hari) || 0), matchedBy: jinak(u.matchedBy, 20),
+    })),
     tunggakan,
     gagal,
   };
@@ -698,6 +789,10 @@ function susunLaporan(
         ` → ${p.cocok} cocok, ${p.belumKetemu} belum ketemu` +
         (t && t.recheck > 0 ? ` (${t.recheck} menunggu mutasi berikutnya)` : ""),
     );
+    // "bukan masalah" hanya benar karena sejak 1 Okt 2026 cacah ini TIDAK
+    // lagi memuat klaim ber-alarm REF (jalankanPass mengirimnya sebelum
+    // saringan periode). Dulu resi bekas bertanggal lama ikut terhitung di
+    // sini dan kalimat ini menenangkan pemilik atas alarm yang ditelan.
     if (p.ditahanDiLuarPeriode > 0) {
       b.push(`   ↳ ${p.ditahanDiLuarPeriode} klaim di luar jangkauan berkas ini — menunggu mutasi lain, bukan masalah`);
     }

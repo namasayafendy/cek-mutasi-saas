@@ -24,6 +24,17 @@
 
 const rp = (n: number) => "Rp " + Math.round(Number(n) || 0).toLocaleString("id-ID");
 
+/** Sebab yang berasal dari alarm nomor referensi / resi bekas. "REF" huruf
+ *  besar sebagai kata utuh — kalimat DISEPAK memakai "ber-ref" huruf kecil
+ *  dan memang BOLEH diberi calon baris bebas (uangnya bukan miliknya, baris
+ *  lain mungkin miliknya). Dipakai juga oleh penyusun isi laporan. */
+export function sebabAlarmRef(sebab: unknown): boolean {
+  // "REF" sengaja peka huruf (DISEPAK memuat "ber-ref" huruf kecil); "nominal
+  // beda" tidak — label gadai menulisnya "NOMINAL BEDA" (peninjau 1 Okt 2026).
+  const t = String(sebab ?? "");
+  return /resi bekas|\bREF\b/.test(t) || /nominal beda/i.test(t);
+}
+
 const BULAN = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
 
 /** Tanggal kalender diperlakukan sebagai tanggal polos — diurai UTC, dibaca
@@ -202,6 +213,15 @@ export interface IsiLapis2 {
   disepak?: { olehKlaimId: string; olehNoFaktur: string | null; pemegangKlaimId: string;
               pemegangMatchedBy: string | null; noRef: string | null; tanggal: string; kredit: number;
               nasib: "COCOK_ULANG" | "TAK_KETEMU" }[];
+  /** Klaim yang dikirim ke gadai sebagai ALARM nomor referensi pada jalan
+   *  ini, dengan kalimatnya ("REF menunjuk baris yang sudah dipegang
+   *  SJB-1-0250 — kemungkinan resi bekas"). undefined = pass versi lama. */
+  alarmRef?: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
+               issue: string; ket: string }[];
+  /** Klaim COCOK yang baris mutasinya >3 hari lebih tua daripada
+   *  transaksinya (MUTASI_LAMA). Bukan vonis — minta konfirmasi pemilik. */
+  uangLama?: { id: string; no_faktur: string; outlet: string; nominal: number;
+               tglTransaksi: string; tglBaris: string; hari: number; matchedBy: string }[];
   /** Resi yang sudah lama tidak ketemu dan belum dibereskan (dari sisi gadai). */
   tunggakan: {
     no_faktur: string; outlet: string; tgl: string; nominal: number; umur: number;
@@ -329,6 +349,12 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   // tidak membawa klaim_id, jadi pemasangannya lewat kontrak+nominal.
   const alasanOlehFaktur = new Map<string, "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU">();
   for (const a of (isi.alasanKlaim ?? [])) alasanOlehFaktur.set(`${a.no_faktur}|${Math.round(a.nominal)}`, a.sebab);
+  // Kalimat ALARM REF per kontrak+nominal (1 Okt 2026). Gadai memvonisnya
+  // UNMATCHED, lalu daftarnya kembali ke sini tanpa klaim_id — dan tanpa peta
+  // ini tercetak "tidak ada di rekening" untuk uang yang justru ADA, hanya
+  // sudah dipegang kontrak lain (tanda resi bekas).
+  const alarmOlehFaktur = new Map<string, string>();
+  for (const a of (isi.alarmRef ?? [])) alarmOlehFaktur.set(`${a.no_faktur}|${Math.round(a.nominal)}`, a.ket);
 
   L.push("");
   L.push(`DITERIMA DARI LAPIS 1`);
@@ -342,8 +368,11 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     L.push(`   diuji ${isi.nDiuji} resi · ${rp(isi.rpDiuji)}`);
     L.push(`   ✅ cocok di rekening   ${isi.nDiuji - nGagal} · ${rp(isi.rpDiuji - rpGagal)}`);
     L.push(`   ${nGagal > 0 ? "⛔" : "✅"} tidak ada di rekening ${nGagal} · ${rp(rpGagal)}`);
+    // Sebabnya ikut kalau bukan kalimat baku — alarm REF ("kemungkinan resi
+    // bekas") tidak boleh tercetak sama dengan uang yang memang tidak ada.
     isi.tidakKetemu.slice(0, 15).forEach((x) =>
-      L.push(`      • ${x.no_faktur} · ${x.outlet} · ${tgl(x.tgl)} · ${rp(x.nominal)}`));
+      L.push(`      • ${x.no_faktur} · ${x.outlet} · ${tgl(x.tgl)} · ${rp(x.nominal)}` +
+             (x.sebab && x.sebab !== "tidak ada di rekening" ? ` — ${x.sebab}` : "")));
   } else {
     // Satu tanggal = dua arah. Digabung per tanggal supaya dibaca sekali duduk.
     type Sisi = { total: { n: number; rp: number }; cocok: { n: number; rp: number };
@@ -390,8 +419,11 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
         L.push(`      ⛔ tidak ada di rekening ${String(x.tak.n).padStart(2)} · ${rp(x.tak.rp)}`);
         const nama = (sd.baruTakKetemu ?? []).filter((k) => k.tgl === t && arahKeluar(k.arah) === keluar);
         nama.slice(0, 10).forEach((k) => {
-          const sb = alasanOlehFaktur.get(`${k.no_faktur}|${Math.round(k.nominal)}`);
-          L.push(`         • ${k.no_faktur} · ${k.outlet} · ${rp(k.nominal)} — ${sb ? teksSebab(sb) : "tidak ada di rekening"}`);
+          const kunci = `${k.no_faktur}|${Math.round(k.nominal)}`;
+          const alarm = alarmOlehFaktur.get(kunci);
+          const sb = alasanOlehFaktur.get(kunci);
+          L.push(`         • ${k.no_faktur} · ${k.outlet} · ${rp(k.nominal)} — ` +
+                 (alarm ?? (sb ? teksSebab(sb) : "tidak ada di rekening")));
         });
         if (x.tak.n > nama.length) L.push(`         …${x.tak.n - nama.length} dari laporan sebelumnya, lihat /belum-cocok`);
       }
@@ -468,6 +500,40 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     if (bermasalah.length > 6) L.push(`   …dan ${bermasalah.length - 6} tanggal bermasalah lagi`);
   }
 
+  // ── ALARM NOMOR RESI (1 Oktober 2026) ──
+  //
+  // Disebut di blok sendiri, bukan hanya di daftar per tanggal di atas. Sejak
+  // alarm REF tidak lagi ditelan saringan periode, klaim yang tanggal resinya
+  // di luar berkas ini pun ikut dikirim — dan tanggal semacam itu tidak punya
+  // baris di blok per tanggal. Tanpa blok ini alarmnya terkirim ke gadai
+  // tetapi tidak pernah terbaca di laporan ini. Bentuk paling lazim resi
+  // bekas: REF-nya menunjuk baris yang sudah dipegang kontrak lain.
+  const alarm = isi.alarmRef ?? [];
+  if (alarm.length) {
+    L.push("");
+    L.push(`🚨 ALARM NOMOR RESI (${alarm.length}) — dikirim ke Aceh Gadai, perlu dicek`);
+    alarm.slice(0, 10).forEach((a) =>
+      L.push(`   • ${a.no_faktur} · ${a.outlet} · ${tgl(a.tgl)} · ${rp(a.nominal)} — ${a.ket}`));
+    if (alarm.length > 10) L.push(`   …dan ${alarm.length - 10} lagi`);
+  }
+
+  // ── UANG LAMA DIPAKAI TRANSAKSI BARU (1 Oktober 2026) ──
+  //
+  // Klaim ini COCOK dan tetap dihitung cocok di atas. Yang ditanyakan cuma
+  // satu hal: baris mutasinya lebih dari 3 hari lebih tua daripada
+  // transaksinya. Bisa bayar di muka (SBR-10-8501, 41-48 hari), bisa juga
+  // resi bekas (SJB-10-1386: resi 29 Juni untuk transaksi 1 September) —
+  // mesin tidak bisa membedakannya, pemilik bisa.
+  const lama = isi.uangLama ?? [];
+  if (lama.length) {
+    L.push("");
+    L.push(`⚠️ UANG LAMA DIPAKAI TRANSAKSI BARU — konfirmasi bukan resi bekas (${lama.length})`);
+    lama.slice(0, 10).forEach((u) =>
+      L.push(`   • ${u.no_faktur} · ${u.outlet} · ${rp(u.nominal)} — baris mutasi ${tgl(u.tglBaris)}, ` +
+             `${u.hari} hari sebelum transaksi ${tgl(u.tglTransaksi)}`));
+    if (lama.length > 10) L.push(`   …dan ${lama.length - 10} lagi`);
+  }
+
   // ── JEJAK: BARIS YANG PINDAH PEMILIK PADA JALAN INI ──
   //
   // Bukan alarm — bukti kuat (ref) mengusir tebakan (nominal), dan yang
@@ -509,8 +575,16 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       const uangAda = String(x.status_asli ?? "").toUpperCase() === "MATCHED";
       L.push(`   • ${x.no_faktur} · ${x.outlet} · ${tgl(x.tgl)} · ${rp(x.nominal)} · ${x.umur} hari`);
       L.push(`     ${x.sebab ?? "belum diselesaikan"}`);
+      // Alarm REF / resi bekas TIDAK diberi "ADA N baris bebas": barisnya
+      // yang benar sudah ketemu dan dipegang kontrak lain, jadi baris bebas
+      // bernominal sama hampir pasti uang nasabah LAIN — menyebutnya
+      // mendorong pemilik menutup klaim dengan uang orang (1 Okt 2026).
+      // Penyaring utamanya di pemanggil (calonBebas tidak dihitung); ini
+      // jaring kedua kalau sebabnya datang dari gadai.
       if (uangAda) {
         L.push(`     ↳ uangnya SUDAH terbukti di rekening — yang perlu diperiksa fotonya.`);
+      } else if (sebabAlarmRef(x.sebab)) {
+        L.push(`     ↳ JANGAN ditutup dengan baris bebas lain — periksa dulu kontrak pemegang barisnya.`);
       } else if (Number(x.calonBebas ?? 0) > 0) {
         L.push(`     ↳ ADA ${x.calonBebas} baris mutasi bernominal sama yang masih bebas.`);
       }

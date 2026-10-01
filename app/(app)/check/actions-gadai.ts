@@ -11,6 +11,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { getAccountContext } from "@/lib/supabase/context";
+import type { RefIssueKirim } from "@/lib/types";
 
 export interface GadaiPullInput {
   id: string; // id klaim dari Aceh Gadai (utk referensi/dedup)
@@ -38,6 +39,12 @@ export interface GadaiPullInput {
    *  "bukti kuat mengusir bukti lemah": TIDAK dicocokkan, TIDAK dilaporkan,
    *  TIDAK dihitung — kecuali kalau pada jalan ini ia benar-benar tersepak. */
   sudahMemegang?: boolean;
+  /** Tanggal TRANSAKSI gadai YYYY-MM-DD (bukan tanggal resi — itu
+   *  `tanggalISO`). Dipakai pagar resi bekas (1 Okt 2026): peringatan
+   *  MUTASI_LAMA dan larangan mengusir pemegang bila baris yang ditunjuk ref
+   *  jauh lebih tua daripada transaksinya. Kosong = gadai versi lama /
+   *  tanggal tak terbaca → pagar itu diam (tidak diketahui ≠ baru). */
+  tanggalTransaksiISO?: string | null;
 }
 
 /** Yang gadai TAHAN di Lapis 1 dan tidak pernah sampai ke sini. */
@@ -144,6 +151,13 @@ export async function pullGadaiClaims(
   // 6) Map klaim → input
   const unmapped = new Set<string>();
   const inputs: GadaiPullInput[] = [];
+  // Tanggal transaksi hanya diterima kalau berbentuk YYYY-MM-DD. Bentuk lain
+  // dibuang jadi null — "tidak diketahui", dan pagar resi bekas diam — bukan
+  // ditebak; tebakan tanggal di sini bisa membuat klaim sah terbaca "uang lama".
+  const isoTransaksi = (v: unknown): string | null => {
+    const s = String(v ?? "").slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  };
   for (const cl of claims) {
     const outId = outletMap.get(normName(cl.outlet)) ?? "";
     if (!outId && cl.outlet) unmapped.add(String(cl.outlet));
@@ -164,6 +178,7 @@ export async function pullGadaiClaims(
       noFaktur: cl.no_faktur ? String(cl.no_faktur) : null,
       outletNama: cl.outlet ? String(cl.outlet) : null,
       sumber: cl.sumber ? String(cl.sumber) : null,
+      tanggalTransaksiISO: isoTransaksi(cl.tgl_transaksi),
     });
   }
 
@@ -188,6 +203,7 @@ export async function pullGadaiClaims(
       outletNama: cl.outlet ? String(cl.outlet) : null,
       sumber: cl.sumber ? String(cl.sumber) : null,
       sudahMemegang: true,
+      tanggalTransaksiISO: isoTransaksi(cl.tgl_transaksi),
     });
   }
 
@@ -209,10 +225,17 @@ export type GadaiPushRow = {
   matched: boolean;
   /** Fase C: label keyakinan match (REF/NAMA_JAM/NOMINAL) */
   matched_by?: string | null;
-  /** Fase C: masalah ref (REF_NOMINAL_BEDA / REF_SUDAH_DIKLAIM) -> alarm keras */
-  ref_issue?: string | null;
+  /** Fase C: masalah ref (REF_NOMINAL_BEDA / REF_SUDAH_DIKLAIM / DISEPAK) ->
+   *  alarm keras, dikirim matched:false. Sejak 1 Okt 2026 juga MUTASI_LAMA:
+   *  PERINGATAN pada klaim yang tetap matched:true (baris mutasinya >3 hari
+   *  lebih tua daripada transaksinya — pastikan bukan resi bekas). */
+  ref_issue?: RefIssueKirim | null;
   /** Fase D: jumlah kandidat saat match tebakan nominal (>1 = ambigu) */
   ambiguous?: number;
+  /** Kalimat untuk manusia (≤300 huruf), disimpan gadai ke catatan_koreksi
+   *  untuk SETIAP baris ber-ref_issue. REF_SUDAH_DIKLAIM menyebut kontrak
+   *  pemegang barisnya; MUTASI_LAMA menyebut tanggal baris & umurnya. */
+  catatan?: string | null;
 };
 
 /** Fase D: kredit mutasi periode ini yang TIDAK terpasang ke input mana pun —
@@ -308,9 +331,11 @@ export async function pushGadaiResults(
       matched_by: r.matched_by ?? null,
       ref_issue: r.ref_issue ?? null,
       ambiguous: Number(r.ambiguous ?? 0) || 0,
-      // Sebab yang bisa dibaca manusia untuk vonis DISEPAK — disimpan gadai ke
-      // catatan_koreksi supaya /belum-cocok dan Lapis 2 bisa menyebutkannya.
-      catatan: (r as any).catatan ? String((r as any).catatan).slice(0, 300) : null,
+      // Sebab yang bisa dibaca manusia — disimpan gadai ke catatan_koreksi
+      // supaya /belum-cocok dan Lapis 2 bisa menyebutkannya. Dulu hanya
+      // DISEPAK; sejak 1 Okt 2026 juga REF_SUDAH_DIKLAIM (kontrak pemegang
+      // barisnya) dan MUTASI_LAMA (umur baris mutasinya).
+      catatan: r.catatan ? String(r.catatan).slice(0, 300) : null,
     }));
   if (clean.length === 0) return { ok: false, error: "Tidak ada hasil untuk dikirim." };
 

@@ -32,6 +32,12 @@
 //       ini, satu berkas 3 hari akan memvonis klaim 57 hari lainnya UNMATCHED
 //       secara palsu. Yang di luar periode cukup DIDIAMKAN — ia tetap PENDING
 //       dan ikut tertarik lagi pada kiriman berikutnya.
+//       KECUALI yang membawa ref_issue (1 Oktober 2026): nomor referensinya
+//       sudah menunjuk baris tertentu di database, jadi jawabannya tidak
+//       bergantung pada tanggal berkas. Dulu alarm REF semacam itu ikut
+//       "didiamkan" di sini — dan resi bekas yang tanggal resinya lama (jauh
+//       sebelum periode berkas) PERSIS jatuh ke kelas ini, sehingga alarmnya
+//       tidak pernah berbunyi sama sekali (uji resi bekas, 1 Okt 2026).
 //
 // Catatan: `complete === null` BUKAN "tidak lengkap". Hanya parser BSI BSINet
 // yang mengisi total tercetak; untuk bank lain nilainya memang null. Menyamakan
@@ -42,7 +48,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { runMatching, DEFAULT_RULES, type MatchRules } from "@/lib/matching";
 import { loadCarryoverPdfTxs } from "@/lib/sessions/carryover";
-import { namaResiKetat } from "@/lib/matching";
+import { namaResiKetat, uangLamaHari } from "@/lib/matching";
 import { loadRefPoolTxs } from "@/lib/sessions/ref-pool";
 import { toDateISO, parseDateISO } from "@/lib/format";
 import { pullGadaiClaims, pushGadaiResults } from "@/app/(app)/check/actions-gadai";
@@ -81,6 +87,7 @@ import type {
   MatchSummary,
   Outlet,
   PdfTransaction,
+  RefIssueKirim,
   UserInput,
 } from "@/lib/types";
 
@@ -199,7 +206,9 @@ export interface HasilPass {
    *  "tidak ketemu". Kalau dihitung sebelum saringan, angkanya menakut-nakuti
    *  padahal sebagian besar cuma belum tercakup berkas ini. */
   belumKetemu: number;
-  /** Klaim tak-cocok yang SENGAJA tidak divonis karena di luar periode (P3). */
+  /** Klaim tak-cocok yang SENGAJA tidak divonis karena di luar periode (P3).
+   *  Sejak 1 Oktober 2026 TIDAK termasuk klaim yang membawa ref_issue: alarm
+   *  REF tidak bergantung pada cakupan tanggal berkas, jadi selalu dikirim. */
   ditahanDiLuarPeriode: number;
   /** Klaim yang kandidatnya ADA tapi sudah dipakai transaksi lain (all_taken).
    *  Ini KONFLIK yang butuh keputusan manusia, bukan "uangnya tidak ada" —
@@ -226,6 +235,21 @@ export interface HasilPass {
   /** Klaim yang sudah terbukti cocok di sesi sebelumnya (vonisnya gagal
    *  terkirim waktu itu), dilaporkan ulang tanpa dicocokkan lagi. */
   sudahTerbuktiSebelumnya: number;
+
+  /** ── UANG LAMA DIPAKAI TRANSAKSI BARU (1 Oktober 2026) ──
+   *  Klaim yang COCOK, tapi baris mutasinya lebih dari 3 hari lebih tua
+   *  daripada tanggal TRANSAKSI-nya. Vonisnya tetap cocok (bayar di muka
+   *  memang ada); dikirim ke gadai ber-ref_issue MUTASI_LAMA dan disebut di
+   *  laporan supaya pemilik memastikan bukan resi bekas. Asal: SJB-10-1386
+   *  memakai resi 29 Juni untuk transaksi 1 September, tanpa peringatan. */
+  uangLama: { id: string; no_faktur: string; outlet: string; nominal: number;
+              tglTransaksi: string; tglBaris: string; hari: number; matchedBy: string }[];
+  /** Klaim yang dikirim sebagai ALARM nomor referensi (REF_SUDAH_DIKLAIM /
+   *  REF_NOMINAL_BEDA), lengkap dengan kalimatnya. Disebut tersendiri di
+   *  laporan: yang tanggalnya di luar periode berkas tidak muncul di blok
+   *  per tanggal, dan dulu ditelan diam-diam sebagai LUAR_PERIODE. */
+  alarmRef: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
+              issue: string; ket: string }[];
 
   /** ── HASIL PENANGANAN MANUAL, DIHITUNG TERPISAH ──
    *
@@ -305,12 +329,19 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     ditahanDiLuarPeriode: 0, ditahanKonflik: 0, sudahTerbuktiSebelumnya: 0,
     ditahanDaftar: [],
     disepak: [],
+    uangLama: [], alarmRef: [],
     manualDinilai: 0, manualCocok: 0, tertahanGerbang: null,
     terkirim: null, batal: null,
     unclaimedCount: 0, unclaimedTotal: 0,
   };
   const tglTampil = (iso: string) => String(iso ?? "").slice(0, 10).split("-").reverse().join("/");
   const rpTampil = (n: number) => "Rp " + Math.round(Number(n || 0)).toLocaleString("id-ID");
+  /** "2026-08-18" -> "18/08/26" — bentuk tanggal pada catatan ke gadai
+   *  (kolom catatan_koreksi dipotong 300 huruf). */
+  const tglPendek = (iso: string) => {
+    const m = String(iso ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : String(iso ?? "-");
+  };
 
   /**
    * BARIS MUTASI TANPA PEMILIK — dibaca, BELUM distempel.
@@ -502,6 +533,11 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       // tahu ada masalah, tidak cukup untuk tahu harus membuka apa.
       noFaktur: i.noFaktur ?? null,
       outletNama: i.outletNama ?? null,
+      // Tanggal TRANSAKSI (bukan tanggal resi). Hanya dipakai pagar resi
+      // bekas: peringatan MUTASI_LAMA di bawah dan pagar 6 pengusiran di
+      // matching.ts. Tanggal tak sah = tidak diketahui (null), bukan dibuang:
+      // klaimnya tetap dinilai seperti dulu, hanya pagar itu yang diam.
+      tanggalTransaksi: i.tanggalTransaksiISO ? parseDateISO(i.tanggalTransaksiISO) : null,
     });
   }
   if (inputs.length === 0) {
@@ -631,13 +667,13 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     // REF, NAMA_JAM tidak boleh disentuh. Tanpa ini semua pemegang terlihat
     // sama, dan aturannya harus memilih antara mengusir semua atau tidak sama
     // sekali — dua-duanya salah.
-    const pemegangInput = new Map<string, { matchedBy: string | null; manual: boolean; gadaiKlaimId: string | null }>();
+    const pemegangInput = new Map<string, { matchedBy: string | null; manual: boolean; gadaiKlaimId: string | null; noFaktur: string | null }>();
     {
       const idInput = [...new Set([...pemegangBaris.values()].map((p) => p.inputId))];
       for (let i = 0; i < idInput.length; i += 500) {
         const { data, error } = await supabase
           .from("cek_inputs")
-          .select("id, matched_by, match_status, manual_claim_reason, gadai_klaim_id")
+          .select("id, matched_by, match_status, manual_claim_reason, gadai_klaim_id, gadai_no_faktur")
           .in("id", idInput.slice(i, i + 500));
         if (error) {
           console.error("[pass] gagal membaca pemegang baris:", error);
@@ -663,6 +699,9 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
                     || /^TFKM-/i.test(String(r.gadai_klaim_id ?? ""))
                     || /^TFKD-\d+-M/i.test(String(r.gadai_klaim_id ?? "")),
             gadaiKlaimId: r.gadai_klaim_id ? String(r.gadai_klaim_id) : null,
+            // Kontrak pemegang — hanya untuk kalimat alarm REF_SUDAH_DIKLAIM
+            // ("sudah dipegang SJB-1-0250 — kemungkinan resi bekas").
+            noFaktur: r.gadai_no_faktur ? String(r.gadai_no_faktur) : null,
           });
         }
       }
@@ -680,6 +719,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
           // inputnya sama-sama berarti manusia sudah memutuskan.
           manual: pi.manual || pb.manualBaris,
           gadaiKlaimId: pi.gadaiKlaimId,
+          noFaktur: pi.noFaktur,
         };
       }
     }
@@ -940,7 +980,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   // yang salah sumber. Itu sebabnya sisi gadai tidak pernah melihat gejalanya.
 
   // ── P3: jangan memvonis klaim di luar periode ──
-  const laporan: { id: string; matched: boolean; matched_by: string | null; ref_issue: string | null; ambiguous: number; catatan?: string | null }[] = [];
+  const laporan: { id: string; matched: boolean; matched_by: string | null; ref_issue: RefIssueKirim | null; ambiguous: number; catatan?: string | null }[] = [];
   // Identitas yang ditahan, dibawa ke laporan. Dipotong 80 supaya satu berkas
   // yang salah periode tidak mengirim ratusan baris; sisanya tetap terhitung
   // di cacahnya.
@@ -1024,12 +1064,46 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       // di sini HARUS bisa disandingkan dengan angka hari itu di Lapis 1.
       // Kalau keduanya beda, ada resi yang lolos di antara dua lapisan.
       catatTanggal(hasil, i, arah);
+
+      // ── UANG LAMA DIPAKAI TRANSAKSI BARU (1 Oktober 2026) ──
+      //
+      // Cocoknya TIDAK diubah — bayar di muka sampai ±44 hari memang terjadi
+      // (SBR-10-8501, SBR-10-4595). Yang ditambahkan hanya pertanyaan: baris
+      // ini lebih dari 3 hari lebih tua daripada TRANSAKSI-nya, pastikan bukan
+      // resi bekas. SJB-10-1386 (1 Sep) cocok lewat REF ke baris 29 Juni dan
+      // tidak ada satu pun yang bertanya.
+      //
+      // Hanya arah MASUK (resi nasabah), dan hanya klaim yang benar-benar
+      // dicocokkan pada jalan ini — pemegang lemah dan SESI_LAMA sudah
+      // dilewati di atas, jadi peringatannya berbunyi SEKALI, saat cocok.
+      // Kalau klaim cocok ini juga membawa REF_NOMINAL_BEDA, MUTASI_LAMA yang
+      // dikirim sebagai kodenya: untuk klaim yang COCOK, gadai tidak memakai
+      // REF_NOMINAL_BEDA sama sekali (hanya cabang tak-cocok yang membacanya),
+      // jadi kode lama itu cukup ikut disebut di catatan.
+      const hariLama = jenis === "kredit" ? uangLamaHari(i.tanggalTransaksi, m.txDate) : null;
+      let catatanLama: string | null = null;
+      if (hariLama !== null) {
+        const tglBaris = toDateISO(m.txDate);
+        catatanLama = `uang lama: baris mutasi tgl ${tglPendek(tglBaris)} (${hariLama} hari sebelum transaksi) — ` +
+          `konfirmasi bukan resi bekas` + (m.refIssue ? `; juga ${m.refIssue}` : "");
+        hasil.uangLama.push({
+          id: String(i.id),
+          no_faktur: String((i as any).noFaktur ?? "-"),
+          outlet: String((i as any).outletNama ?? "-"),
+          nominal: Number(i.nominal ?? 0),
+          tglTransaksi: toDateISO(i.tanggalTransaksi as Date),
+          tglBaris,
+          hari: hariLama,
+          matchedBy: String(m.matchedBy ?? "NOMINAL"),
+        });
+      }
       laporan.push({
         id: i.id,
         matched: true,
         matched_by: m.matchedBy ?? "NOMINAL",
-        ref_issue: m.refIssue ?? null,
+        ref_issue: catatanLama ? "MUTASI_LAMA" : (m.refIssue ?? null),
         ambiguous: m.ambiguous ?? 0,
+        ...(catatanLama ? { catatan: catatanLama } : {}),
       });
       continue;
     }
@@ -1039,7 +1113,8 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     // kredit, dan yang benar harus diputuskan manusia. Dikirim sebagai
     // matched:false, ia akan divonis UNMATCHED terminal dan berbunyi seperti
     // tuduhan. Kecuali kalau ia membawa ref_issue: itu memang alarm yang
-    // dirancang untuk berbunyi keras di sisi gadai, jadi tetap dikirim.
+    // dirancang untuk berbunyi keras di sisi gadai, jadi dikirim — lewat
+    // cabang ALARM REF tepat di bawah, SEBELUM saringan periode.
     if (m?.status === "all_taken" && !m.refIssue) {
       hasil.ditahanKonflik++;
       // Dua keadaan yang dulu bernama sama: barisnya BENAR dipegang klaim
@@ -1050,6 +1125,72 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       // lama ("sudah dipegang klaim lain") justru yang benar — dan itu tanda
       // resi kembar (SJB-1-0186). Label "baris bebas" hanya untuk yang tidak.
       catatDitahan(i, m.barisBebas && !m.hariSendiriDipegang ? "TOLAK_LINTAS_HARI" : "BEREBUT");
+      continue;
+    }
+
+    // ── ALARM REF: DIKIRIM SEBELUM SARINGAN PERIODE (1 Oktober 2026) ──
+    //
+    // REF_SUDAH_DIKLAIM / REF_NOMINAL_BEDA lahir dari nomor referensi yang
+    // SUDAH menunjuk baris tertentu — lewat ref-pool, dari tanggal berapa pun.
+    // Jawabannya tidak akan berubah dengan berkas berikutnya, jadi saringan
+    // P3 tidak berlaku. Dulu ia lewat P3 dulu: resi bekas dengan tanggal resi
+    // lama (jauh sebelum awal berkas) ditahan "LUAR_PERIODE — menunggu mutasi
+    // berikutnya, bukan masalah", tetap PENDING, ditarik lagi besok, ditahan
+    // lagi — alarmnya tidak pernah berbunyi (uji resi bekas, 1 Okt 2026).
+    // (DISEPAK sudah dikirim lebih awal di cabangnya sendiri.)
+    if (m?.refIssue) {
+      catatTanggal(hasil, i, arah);
+      const d = m.status === "all_taken" ? (m.dipegang ?? [])[0] : undefined;
+      let ket: string;
+      let catatan: string | null = null;
+      if (m.refIssue === "REF_SUDAH_DIKLAIM") {
+        // Nomor kontrak pemegang kalau diketahui; kalau tidak, "klaim lain" —
+        // jangan sampai kalimatnya diam-diam menyebut nama yang salah.
+        const pemegang = d?.noFaktur || "klaim lain";
+        // Pemegang yang dulu cuma MENEBAK (nominal / nama tanpa jam) bisa saja
+        // yang keliru — sejak pagar 6/7 pengusirannya ditahan untuk manusia.
+        // Kalimatnya menyebut dua kemungkinan, bukan langsung menuduh resi
+        // bekas (SBR-11-2096 vs tebakan SJB-2-0036, Sep 2026).
+        const tebakan = ["NOMINAL", "NOMINAL_JAM", "NAMA"].includes(String(d?.caraPemegang ?? "").toUpperCase());
+        const akhir = tebakan
+          ? `(cocok lewat tebakan ${String(d?.caraPemegang).toLowerCase()}) — resi bekas, ATAU tebakan ${pemegang} yang keliru; periksa`
+          : `— kemungkinan resi bekas`;
+        ket = `REF menunjuk baris yang sudah dipegang ${pemegang} ${akhir}`;
+        catatan = d
+          ? `REF menunjuk baris mutasi tgl ${tglPendek(d.tanggal)} ${rpTampil(d.kredit)} yang sudah dipegang ` +
+            `${pemegang} ${akhir}`
+          : `REF menunjuk baris mutasi yang sudah dipegang klaim lain — kemungkinan resi bekas`;
+      } else {
+        ket = "nomor resi menunjuk baris mutasi bernominal BEDA — salah baca AI atau resi diedit";
+      }
+      if (hasil.tidakKetemu.length < 60) {
+        hasil.tidakKetemu.push({
+          no_faktur: String((i as any).noFaktur ?? (i as any).no_faktur ?? "-"),
+          outlet:    String((i as any).outletNama ?? (i as any).outlet ?? "-"),
+          tgl:       toDateISO(i.tanggal),
+          nominal:   Number((i as any).nominal ?? 0),
+          sebab:     ket,
+        });
+      }
+      if (hasil.alarmRef.length < 60) {
+        hasil.alarmRef.push({
+          id: String(i.id),
+          no_faktur: String((i as any).noFaktur ?? "-"),
+          outlet: String((i as any).outletNama ?? "-"),
+          tgl: toDateISO(i.tanggal),
+          nominal: Number(i.nominal ?? 0),
+          issue: m.refIssue,
+          ket,
+        });
+      }
+      laporan.push({
+        id: i.id,
+        matched: false,
+        matched_by: null,
+        ref_issue: m.refIssue,
+        ambiguous: 0,
+        ...(catatan ? { catatan } : {}),
+      });
       continue;
     }
 
@@ -1079,14 +1220,16 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
         outlet:    String((i as any).outletNama ?? (i as any).outlet ?? "-"),
         tgl:       toDateISO(i.tanggal),
         nominal:   Number((i as any).nominal ?? 0),
-        sebab:     m?.refIssue ? "nomor resi bermasalah" : "tidak ada di rekening",
+        // Yang ber-ref_issue sudah keluar lewat cabang ALARM REF di atas
+        // dengan kalimatnya sendiri; yang sampai di sini memang tanpa ref.
+        sebab:     "tidak ada di rekening",
       });
     }
     laporan.push({
       id: i.id,
       matched: false,
       matched_by: null,
-      ref_issue: m?.refIssue ?? null,
+      ref_issue: null,
       ambiguous: 0,
     });
   }

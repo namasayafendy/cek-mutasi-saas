@@ -29,6 +29,7 @@ import type {
   MatchMode,
   RefIssue,
   MatchedBy,
+  PemegangRef,
 } from "@/lib/types";
 import { diffDays } from "@/lib/format";
 
@@ -58,6 +59,37 @@ const PASS2_JAM_TOLERANSI_MENIT = 5;
 // nasabah menekan kirim; bank membukukannya beberapa saat kemudian.
 const PASS3_JAM_TOLERANSI_MENIT = 5;
 
+// ── UANG LAMA: BARIS MUTASI JAUH LEBIH TUA DARIPADA TRANSAKSINYA ──
+//
+// Uji resi bekas, 1 Oktober 2026. SJB-10-1386 (LHOKSEUMAWE, transaksi 1 Sep,
+// Rp 80.000) memakai resi Junaidi bertanggal 29 Juni (FT261805QY44); PASS 1
+// REF menembus jendela tanggal dan memasangkannya ke baris 29 Juni yang
+// kebetulan belum berpemilik — hijau, tanpa satu peringatan pun. REF hanya
+// membuktikan "uang ini PERNAH masuk", bukan "uang ini untuk transaksi ini".
+//
+// Batas 3 hari sama dengan jendela mundur aturan nominal (lookback 3 hari):
+// transfer yang wajar mendarat paling lama beberapa hari sebelum transaksinya
+// dicatat kasir. Yang lebih tua dari itu hampir selalu datang lewat REF (yang
+// menembus jendela) atau resi yang tanggalnya memang lama. Bayar di muka
+// memang ada (SBR-10-8501 41-48 hari, SBR-10-4595 29 hari), karena itu
+// dipakai untuk MEMPERINGATKAN dan MENAHAN PENGUSIRAN — tidak pernah untuk
+// menolak cocok.
+export const BATAS_UANG_LAMA_HARI = 3;
+
+/** Berapa hari baris mutasi mendahului TRANSAKSI-nya, kalau lebih dari
+ *  BATAS_UANG_LAMA_HARI. null = tidak lama, atau tanggal transaksinya tidak
+ *  diketahui (tidak diketahui ≠ lama; pemanggil yang perlu membedakan
+ *  memeriksa tanggalTransaksi sendiri). Murni, tidak pernah melempar. */
+export function uangLamaHari(
+  tanggalTransaksi: Date | null | undefined,
+  tglBaris: Date | null | undefined,
+): number | null {
+  if (!tanggalTransaksi || !tglBaris) return null;
+  if (Number.isNaN(tanggalTransaksi.getTime()) || Number.isNaN(tglBaris.getTime())) return null;
+  const hari = diffDays(tanggalTransaksi, tglBaris);
+  return hari > BATAS_UANG_LAMA_HARI ? hari : null;
+}
+
 function nominalMatches(input: number, candidate: number, rules: MatchRules): boolean {
   if (rules.match_mode === "exact") return candidate === input;
   if (rules.match_mode === "tol_rp") {
@@ -78,6 +110,23 @@ function jamToMinutes(s: string | null | undefined): number | null {
   const mm = parseInt(m[2], 10);
   if (h > 23 || mm > 59) return null;
   return h * 60 + mm;
+}
+
+/** Pagar 7 pengusiran (lihat PASS 1): pemegang baris tampak PEMILIK SAH —
+ *  tanggal resinya sama dengan tanggal baris DAN jam resinya ±5 menit dari
+ *  jam baris. Jam yang tidak terbaca di salah satu sisi = tidak terbukti
+ *  (false), sehingga perilaku lama berlaku. Murni, tidak pernah melempar. */
+export function pemegangCocokJam(
+  pemegang: Pick<UserInput, "tanggal" | "jamResi">,
+  tx: Pick<PdfTransaction, "tanggalDate" | "waktu">,
+): boolean {
+  if (!pemegang?.tanggal || !tx?.tanggalDate) return false;
+  if (Number.isNaN(pemegang.tanggal.getTime()) || Number.isNaN(tx.tanggalDate.getTime())) return false;
+  if (diffDays(pemegang.tanggal, tx.tanggalDate) !== 0) return false;
+  const jp = jamToMinutes(pemegang.jamResi);
+  const jt = jamToMinutes(tx.waktu);
+  if (jp === null || jt === null) return false;
+  return Math.abs(jp - jt) <= PASS2_JAM_TOLERANSI_MENIT;
 }
 
 /** Perbandingan nama longgar: cocok kalau ada kata >=4 huruf yang sama, atau
@@ -243,9 +292,14 @@ export function runMatching(
   const resolved: (MatchResult | null)[] = inputs.map(() => null);
   // refIssue ditemukan di Pass 1 tapi input jatuh ke pass berikutnya -> tempel di hasil akhir.
   const pendingRefIssue: (RefIssue | undefined)[] = inputs.map(() => undefined);
+  // Siapa yang mengambil baris PADA JALAN INI (txKey -> id input). `claimed`
+  // hanya tahu "sudah diambil"; alarm REF_SUDAH_DIKLAIM perlu tahu OLEH SIAPA
+  // untuk bisa menyebut kontraknya.
+  const pengambilDiJalan = new Map<string, string>();
 
   function buildMatched(input: UserInput, picked: PdfTransaction, matchedBy: MatchedBy): MatchResult {
     claimed.add(txKey(picked));
+    pengambilDiJalan.set(txKey(picked), String(input.id));
     const colorHex = outletColors.get(input.outletId) ?? "#FFEB3B";
     return {
       status: "matched",
@@ -332,6 +386,24 @@ export function runMatching(
     //      baris — dan indeks unik tidak menjaga arah itu. Kasus nyata:
     //      SBR-11-2096 sudah dipasangkan manual ke baris FIKRI AZIZI; tanpa
     //      pagar ini ia akan ikut merebut baris WAHYUDI yang ref-nya cocok.
+    //
+    // ── RESI BEKAS TIDAK BOLEH MENGUSIR (1 Oktober 2026) ──
+    //
+    // Aturan "ref mengalahkan tebakan" mengandaikan klaim ber-ref itu PEMILIK
+    // barisnya. Resi bekas membalik andaian itu: resinya asli, ref-nya persis,
+    // tapi uangnya sudah dipakai — dan yang terusir justru pemilik sah, lalu
+    // dilaporkan "salah klaim, disepak". Disimulasikan ke data hidup pada uji
+    // resi bekas: SJB-1-0250 memegang baris 18 Agu 20.48 ANUAR MUDDIN
+    // Rp 300.000 (FT262309MB08) lewat NOMINAL, jam resinya 20:48; resi yang
+    // sama difoto ulang untuk transaksi 30 Sep mengusirnya tanpa syarat.
+    // Dua pagar tambahan; kalau salah satu menyala, pengusiran BATAL dan klaim
+    // ber-ref jatuh ke alarm REF_SUDAH_DIKLAIM di bawah — manusia memutuskan:
+    //   6. Baris yang ditunjuk ref-nya lebih dari BATAS_UANG_LAMA_HARI lebih
+    //      tua daripada TRANSAKSI pengusir (uangLamaHari) — tanda resi bekas.
+    //   7. Pemegang lama sendiri tampak pemilik sah: tanggal resinya SAMA
+    //      dengan tanggal baris DAN jam resinya ±5 menit dari jam baris.
+    //      Tebakan nominal yang dikuatkan jam & tanggal resinya sendiri bukan
+    //      tebakan lagi.
     if (available.length === 0 && !(input as any).sudahMemegang && !(input as any).tidakBolehMengusir) {
       const LEMAH = new Set(["NOMINAL", "NOMINAL_JAM", "NAMA"]);
       const korban = nominalHits
@@ -345,6 +417,10 @@ export function runMatching(
           const korbanInput = inputById.get(String(kid));
           if (!korbanInput) return false;
           if (String((korbanInput as any).sumber ?? "").toUpperCase() === "MANUAL") return false;
+          // Pagar 6: pengusir tampak resi bekas.
+          if (uangLamaHari(input.tanggalTransaksi, tx.tanggalDate) !== null) return false;
+          // Pagar 7: pemegang lama tampak pemilik sah.
+          if (pemegangCocokJam(korbanInput, tx)) return false;
           return true;
         })
         .sort((a, b) =>
@@ -388,13 +464,43 @@ export function runMatching(
     // Uangnya TERIDENTIFIKASI (ref+nominal cocok) tapi kreditnya sudah dipakai
     // input lain (sesi lama / manual / run ini). JANGAN jatuh ke tebakan nominal —
     // itu mereproduksi bug salah-pasang. Vonis: bentrok + penanda alarm.
+    //
+    // PEMEGANGNYA ikut dicatat (1 Oktober 2026). Alarm ini adalah bentuk
+    // paling lazim resi bekas, dan dulu sampai ke pemilik sebagai "nomor resi
+    // bermasalah" atau — sesudah gadai memvonisnya — "tidak ada di rekening".
+    // Dua-duanya mengirim orang mencari uang yang tidak hilang. Yang perlu
+    // dibaca: baris tanggal berapa, dipegang KONTRAK mana.
     const datesSet = new Set<string>();
     for (const c of nominalHits) datesSet.add(c.tanggal);
+    const dipegang: PemegangRef[] = nominalHits
+      .map((tx): PemegangRef => {
+        const olehJalan = pengambilDiJalan.get(txKey(tx));
+        const p = tx.claimedByOther ? tx.pemegang : undefined;
+        const inputJalan = olehJalan ? inputById.get(olehJalan) : undefined;
+        // Baris cek_inputs lama sering belum menyimpan nomor kontrak; kalau
+        // pemegangnya ikut ditarik di jalan ini (daftar pemegang lemah dari
+        // gadai), nomornya diambil dari situ.
+        const inputPemegang = p?.gadaiKlaimId ? inputById.get(String(p.gadaiKlaimId)) : undefined;
+        return {
+          tanggal: toDateISO(tx.tanggalDate),
+          kredit: tx.kredit,
+          parsedTxId: tx.parsedTxId ?? null,
+          inputId: p?.inputId ?? null,
+          gadaiKlaimId: p?.gadaiKlaimId ?? olehJalan ?? null,
+          noFaktur: p?.noFaktur ?? (inputPemegang as any)?.noFaktur ?? (inputJalan as any)?.noFaktur ?? null,
+          caraPemegang: p ? (p.manual ? "MANUAL" : (p.matchedBy ?? null)) : null,
+          diJalanIni: !p && !!olehJalan,
+        };
+      })
+      .sort((a, b) =>
+        Math.abs(diffDays(input.tanggal, new Date(`${a.tanggal}T12:00:00Z`))) -
+        Math.abs(diffDays(input.tanggal, new Date(`${b.tanggal}T12:00:00Z`))));
     resolved[idx] = {
       status: "all_taken",
       conflictCount: nominalHits.length,
       conflictDates: Array.from(datesSet),
       refIssue: "REF_SUDAH_DIKLAIM",
+      dipegang,
     };
   });
 
