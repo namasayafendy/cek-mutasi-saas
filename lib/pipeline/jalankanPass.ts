@@ -221,7 +221,15 @@ export interface HasilPass {
    *  sama saja dengan tidak dilaporkan. Ditambahkan 5 September 2026 atas
    *  permintaan pemilik: yang belum cocok disebut "no kontrak, rupiah, alasan". */
   ditahanDaftar: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
-                   sebab: "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU" }[];
+                   sebab: "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU";
+                   /** true = ditahan karena jam DAN nama resi membantah semua
+                    *  baris bebas bernominal sama (MatchResult.bertentangan,
+                    *  1 Okt 2026). Penanda TAMBAHAN, bukan sebab baru: tipe
+                    *  sebab di app/(app)/proses/[...jalur]/actions.ts tetap
+                    *  empat nilai, dan medan ini menumpang utuh sampai
+                    *  laporan Lapis 2 (lib/laporan/lapis2.ts) yang
+                    *  mengucapkannya. */
+                   bertentangan?: boolean }[];
   /** Pengusiran yang terjadi pada jalan ini (bukti kuat mengusir bukti lemah),
    *  sudah DIPERSISTENKAN. Dibawa ke laporan sebagai jejak: pemilik berhak
    *  tahu baris bank mana yang pindah pemilik tanpa ia menekan apa pun. */
@@ -984,7 +992,8 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   // Identitas yang ditahan, dibawa ke laporan. Dipotong 80 supaya satu berkas
   // yang salah periode tidak mengirim ratusan baris; sisanya tetap terhitung
   // di cacahnya.
-  const catatDitahan = (i: any, sebab: "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU") => {
+  const catatDitahan = (i: any, sebab: "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU",
+                        bertentangan = false) => {
     if (hasil.ditahanDaftar.length >= 80) return;
     hasil.ditahanDaftar.push({
       id: String(i.id),
@@ -993,6 +1002,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       tgl: toDateISO(i.tanggal),
       nominal: Number(i.nominal ?? 0),
       sebab,
+      ...(bertentangan ? { bertentangan: true } : {}),
     });
   };
   // Kalau mutasi ini TIDAK NYAMBUNG dengan catatan terakhir, ada transaksi
@@ -1085,7 +1095,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       if (hariLama !== null) {
         const tglBaris = toDateISO(m.txDate);
         catatanLama = `uang lama: baris mutasi tgl ${tglPendek(tglBaris)} (${hariLama} hari sebelum transaksi) — ` +
-          `konfirmasi bukan resi bekas` + (m.refIssue ? `; juga ${m.refIssue}` : "");
+          `belum pernah dipegang kontrak lain (catatan saja)` + (m.refIssue ? `; juga ${m.refIssue}` : "");
         hasil.uangLama.push({
           id: String(i.id),
           no_faktur: String((i as any).noFaktur ?? "-"),
@@ -1124,7 +1134,14 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       // Kalau baris di HARI RESI SENDIRI sudah dipegang klaim lain, kalimat
       // lama ("sudah dipegang klaim lain") justru yang benar — dan itu tanda
       // resi kembar (SJB-1-0186). Label "baris bebas" hanya untuk yang tidak.
-      catatDitahan(i, m.barisBebas && !m.hariSendiriDipegang ? "TOLAK_LINTAS_HARI" : "BEREBUT");
+      //
+      // BERTENTANGAN (1 Okt 2026): barisnya bebas, tapi jam DAN nama resi
+      // membantah semuanya (SJB-2-0056). Sama-sama DITAHAN — tidak dikirim
+      // ke gadai, menunggu pemilik di /belum-cocok. Sebabnya tetap salah satu
+      // dari dua di atas (tipe sebab di actions.ts tidak diperlebar); penanda
+      // `bertentangan` yang membuat laporan Lapis 2 mengucapkannya sendiri.
+      catatDitahan(i, m.barisBebas && !m.hariSendiriDipegang ? "TOLAK_LINTAS_HARI" : "BEREBUT",
+                   !!m.barisBebas && !!m.bertentangan);
       continue;
     }
 

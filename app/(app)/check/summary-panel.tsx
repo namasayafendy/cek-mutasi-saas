@@ -210,7 +210,9 @@ export function SummaryPanel({
                     </div>
                     {status === "all_taken" && i.match?.status === "all_taken" && (
                       <div className="mt-1 ml-5 text-[10px] text-amber-700 leading-tight">
-                        {i.match.barisBebas
+                        {i.match.bertentangan
+                          ? <>Tidak ditebak: baris bernominal sama ada di tgl {i.match.conflictDates.join(", ")}, tapi jam DAN nama di resi bertentangan</>
+                          : i.match.barisBebas
                           ? <>Tidak ditebak: baris bernominal sama masih BEBAS di tgl {i.match.conflictDates.join(", ")} (beda hari)</>
                           : <>Sudah ke-claim ({i.match.conflictCount}x di tgl {i.match.conflictDates.join(", ")})</>}
                       </div>

@@ -17,6 +17,15 @@
 // ref_issue 'BEDA_HARI_BEBAS' (lib/sessions/save.ts), sebabnya diganti dan
 // tanggal baris bebasnya dibawa supaya /belum-cocok langsung membukanya.
 //
+// 1 Oktober 2026 — 'BERTENTANGAN' / 'BERTENTANGAN_HARI_SENDIRI_DIPEGANG':
+// baris bebas bernominal sama ADA, tapi jam DAN nama di resi membantah
+// semuanya (pagar (d) PASS 4; SJB-2-0056 — resi ANDINI SAHPUTRI 12:03,
+// baris MUHAMMAD SIDDIQ 12.15). Ia TIDAK ditandai tolakLintasHari: layar
+// /belum-cocok mengucapkan penanda itu sebagai "baris bebas, BEDA HARI" dan
+// menandai barisnya 🔎 "baris bebas yang tidak ditebak" — padahal baris yang
+// dibantah bisa di hari resi sendiri, dan justru TIDAK boleh disodorkan
+// sebagai calon. Yang diganti hanya kalimat sebabnya.
+//
 // BACA-SAJA. Gagal membaca = daftar dibiarkan apa adanya (sebab gadai lama).
 // ============================================================
 
@@ -32,6 +41,10 @@ export interface TandaTolak {
   hariSendiriDipegang?: boolean;
   /** Tanggal (YYYY-MM-DD) baris bebas yang ditolak ditebak mesin. */
   barisBebasTgl?: string | null;
+  /** true = ditahan karena jam DAN nama resi membantah semua baris bebas
+   *  bernominal sama (ref_issue 'BERTENTANGAN…'). Belum dibaca layar mana
+   *  pun; sebabnya sudah diucapkan lewat `sebab`. */
+  bertentangan?: boolean;
   sebab?: string;
 }
 
@@ -62,7 +75,19 @@ export async function tandaiTolakLintasHari(
     for (const it of tunggu) {
       const r = terbaru.get(String(it.klaim_id));
       const ri = String(r?.ref_issue ?? "");
-      if (!r || r.match_status !== "all_taken" || !ri.startsWith("BEDA_HARI_BEBAS")) continue;
+      if (!r || r.match_status !== "all_taken") continue;
+      if (ri.startsWith("BERTENTANGAN")) {
+        const tglB = (Array.isArray(r.conflict_dates) ? r.conflict_dates : []) as string[];
+        it.bertentangan = true;
+        it.sebab = "tidak ditebak mesin — baris bernominal sama ADA" +
+          (tglB.length ? ` (tgl ${tglB.join(", ")})` : "") +
+          " tapi jam DAN nama di resi bertentangan dengannya; cocokkan hanya kalau foto resi membuktikan sebaliknya" +
+          (ri === "BERTENTANGAN_HARI_SENDIRI_DIPEGANG"
+            ? "; baris di hari resi sudah dipegang klaim lain — periksa dulu apakah resi ini kembar"
+            : "");
+        continue;
+      }
+      if (!ri.startsWith("BEDA_HARI_BEBAS")) continue;
       const tgl = (Array.isArray(r.conflict_dates) ? r.conflict_dates : []) as string[];
       const iso = tgl.map(keIso).filter(Boolean) as string[];
       // Jangkar = tanggal baris bebas yang PALING DEKAT ke tanggal resi.

@@ -393,7 +393,9 @@ export function SessionInputsClient({
                         <div className="text-xs">
                           <span className="inline-flex items-center gap-1 text-amber-700">
                             <AlertTriangle className="h-3.5 w-3.5" />{" "}
-                            {String(i.ref_issue ?? "").startsWith("BEDA_HARI_BEBAS")
+                            {String(i.ref_issue ?? "").startsWith("BERTENTANGAN")
+                              ? "Tidak ditebak — jam & nama resi bertentangan dengan baris"
+                              : String(i.ref_issue ?? "").startsWith("BEDA_HARI_BEBAS")
                               ? "Tidak ditebak — baris masih bebas, beda hari"
                               : `Bentrok (${i.conflict_count}x)`}
                           </span>

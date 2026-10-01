@@ -225,13 +225,14 @@ export function BelumCocokClient() {
                           ? "bg-red-600 text-white"
                           : it.status === "DUPLIKAT"
                             ? "bg-amber-100 text-amber-800"
-                            : it.tolakLintasHari
+                            : it.tolakLintasHari || it.bertentangan
                               ? "bg-sky-100 text-sky-800"
                               : "bg-violet-100 text-violet-700")
                       }>
                         {it.status === "BUKTI_BEDA"
                           ? "⛔ bukti foto beda"
                           : it.status === "DUPLIKAT" ? "resi dobel"
+                          : it.bertentangan ? "jam & nama bertentangan"
                           : it.tolakLintasHari ? "baris bebas, beda hari" : "belum divonis"}
                       </span>
                     )}
@@ -383,7 +384,14 @@ export function BelumCocokClient() {
               {(buka.arah ?? "KREDIT") === "DEBET" ? "uang KELUAR" : "uang MASUK"}
             </div>
             <div className="mt-2 text-lg font-semibold text-slate-900">{rp(buka.nominal)}</div>
-            {buka.tolakLintasHari ? (
+            {buka.bertentangan ? (
+              <p className="mt-2 text-xs text-sky-800">
+                Ada baris mutasi bernominal sama, tapi <b>jam DAN nama pengirim</b> di resi
+                bertentangan dengannya — mesin tidak menebak. Cocokkan hanya kalau foto resi
+                membuktikan baris itu memang pembayarannya; kalau tidak, uangnya mungkin belum masuk
+                atau milik nasabah lain.
+              </p>
+            ) : buka.tolakLintasHari ? (
               <div className="mt-2 space-y-1 text-xs">
                 <p className="text-sky-800">
                   Baris bernominal sama <b>ADA dan masih BEBAS</b>

@@ -16,6 +16,9 @@
 //   (27 Sep 2026) NAMA — nama pengirim SAMA PERSIS + nominal, ±1 hari, untuk resi
 //                     tanpa jam; berjalan sebelum pencocokan nominal. Lihat
 //                     cocokNamaTanpaJam di bawah.
+//   (1 Okt 2026) Tebakan NOMINAL tidak lagi mengambil baris yang jam DAN nama
+//                     resinya sendiri membantah — lihat resiBertentangan dan
+//                     pagar (d) di PASS 4 (SJB-2-0056).
 // Pass dijalankan GLOBAL (semua input pass-1 dulu, baru pass-2, baru pass-3) dengan
 // satu claimed-set bersama — supaya input tanpa-ref tidak "menyambar" kredit yang
 // ditunjuk ref input lain.
@@ -214,6 +217,64 @@ export function namaSamaKetat(a: string | null, b: string | null): boolean {
   if (a === b) return true;
   const [pendek, panjang] = a.length <= b.length ? [a, b] : [b, a];
   return pendek.length >= 10 && panjang.startsWith(pendek) && panjang[pendek.length] === " ";
+}
+
+// ── RESI BERTENTANGAN DENGAN BARIS: JAM *DAN* NAMA SAMA-SAMA MEMBANTAH ──
+//
+// 1 Oktober 2026, sesudah uji resi bekas. PASS 4 menebak lewat nominal saja,
+// dan selama ini buta terhadap jam dan nama yang SUDAH dibaca AI dari resi.
+// Contoh hidup (data 60 hari): SJB-2-0056 (LANGSA, 11 Agu, Rp 2.530.000) —
+// resinya a.n. ANDINI SAHPUTRI pukul 12:03 ref FT26223FW5JK; yang diambil
+// baris 12.15 a.n. MUHAMMAD SIDDIQ (ref FT262233KZP0, nasabah Langsa lain).
+// Hijau, tanpa satu pertanyaan pun. Insiden SJB-1-0186 (10 Agu, Rp 460.000)
+// yang mengambil uang SBR-4-0182 lewat PASS 4 berpola sama, hanya saja
+// resinya tanpa nama — ia ditahan pagar (c), bukan pagar ini.
+//
+// DUA-DUANYA wajib menyala; satu saja tidak cukup:
+//   * jam saja: dari 32 cocok NOMINAL kredit yang resinya berjam & bernama,
+//     7 yang sah jamnya meleset >5 menit (SJB-2-0271 12 menit, SBR-1-0407
+//     8 jam — nama sama persis). Jam di resi bisa jam cetak, salah baca.
+//   * nama saja: dari 543 cocok REF (kebenaran pasti) yang resinya bernama
+//     layak, 3 namanya tidak cocok sama sekali ("Rehmen Abdilleh" vs RAHMAN
+//     ABDILLAH, "Ari Kandang" vs DARKASYI) — tapi jamnya tepat; di cocok
+//     NOMINAL ada 2 lagi (resi "POLTEK LHOKSEUMAWE" / "SPBU PT. KANA TAMIT",
+//     jam tepat). Nama baris juga sering kosong/nama dompet.
+//   Gabungannya: 0 dari 543 pasangan REF, 1 dari 32 cocok NOMINAL.
+//
+// Jam dibandingkan sebagai JAM DINDING (memutar lewat tengah malam: 23:58 vs
+// 00:02 = 4 menit), bukan tanggal+jam: tanggal resi kadang hanya tempelan
+// tanggal transaksi (tgl_fallback). Urusan beda hari sudah dijaga pagar
+// lintas hari sendiri.
+//
+// TIDAK untuk klaim DEBET (TFKD-): di baris debet nama "pengirim" adalah
+// PT ACEH GADAI SYARIAH, sedangkan nama di resi transfer keluar adalah
+// PENERIMA — keduanya tidak akan pernah cocok.
+
+/** true = jam resi DAN nama resi sama-sama membantah baris ini sebagai uang
+ *  resi tersebut. Syaratnya: jam terbaca di dua sisi dan berselisih >5 menit
+ *  (jam dinding), nama resi layak (namaResiKetat), nama baris layak
+ *  (namaMutasiKetat — kosong/nama dompet bukan bantahan), dan namaCocok yang
+ *  longgar pun menolak. Murni, tidak pernah melempar (gagal = false =
+ *  perilaku lama). */
+export function resiBertentangan(
+  input: Pick<UserInput, "id" | "jamResi" | "namaPengirimResi">,
+  tx: Pick<PdfTransaction, "waktu" | "namaPengirim">,
+): boolean {
+  try {
+    if (String(input?.id ?? "").startsWith("TFKD-")) return false;
+    const ji = jamToMinutes(input?.jamResi);
+    const jt = jamToMinutes(tx?.waktu);
+    if (ji === null || jt === null) return false;
+    const selisih = Math.abs(ji - jt);
+    if (Math.min(selisih, 24 * 60 - selisih) <= PASS2_JAM_TOLERANSI_MENIT) return false;
+    const nama = namaResiKetat(input?.namaPengirimResi);
+    if (!nama) return false;
+    const namaBaris = namaMutasiKetat(tx?.namaPengirim);
+    if (!namaBaris) return false;
+    return !namaCocok(nama, tx.namaPengirim) && !namaCocok(nama, namaBaris);
+  } catch {
+    return false;
+  }
 }
 
 export type RunMatchingOptions = {
@@ -738,19 +799,6 @@ export function runMatching(
         return a.no - b.no;
       });
 
-      // ── SALAH-COCOK DIAM: JANGAN MENEBAK LINTAS HARI ──────────────
-      // Insiden nyata 23 Juli 2026 (KRUKUH LAMA): tiga input @Rp 100.000,
-      // di mutasi hari itu cuma ada DUA kredit @Rp 100.000. Yang ketiga
-      // dicocokkan ke kredit tanggal 24 Juli — beda hari, TANPA alarm apa pun,
-      // dan statusnya hijau. Salah-cocok yang diam jauh lebih berbahaya
-      // daripada alarm palsu: ia tidak menimbulkan peringatan sama sekali.
-      //
-      // Aturan: kalau kandidatnya LEBIH DARI SATU dan yang terbaik pun BUKAN
-      // hari yang sama, sistem MENOLAK menebak dan melemparkannya ke manusia.
-      // Tebakan lintas hari hanya diterima kalau ia satu-satunya kandidat.
-      const bedaHari = diffDays(input.tanggal, available[0].tanggalDate) !== 0;
-      const sedangDirebutkan = rebutan.has(`${toDateISO(input.tanggal)}|${input.nominal}`);
-
       // ── (c) UANG HARI SENDIRI SUDAH DIAMBIL ORANG LAIN ──
       //
       // Pagar (a) dan (b) hanya melihat KE DALAM SATU SESI. Lintas sesi ia
@@ -770,6 +818,7 @@ export function runMatching(
       // SENDIRI ada, tapi sudah dipegang orang lain". Itu bukan alasan untuk
       // mengambil uang hari berikutnya — itu justru pertanda saya kembar, atau
       // pemegang yang satu itu yang salah. Dua-duanya urusan manusia.
+      // (Dihitung di sini, sebelum pagar (d), karena keduanya memakainya.)
       const adaHariSamaTapiSudahDiambil = transactions.some((tx) => {
         if (!nominalMatches(input.nominal, tx.kredit, rules)) return false;
         if (diffDays(input.tanggal, tx.tanggalDate) !== 0) return false;
@@ -777,15 +826,70 @@ export function runMatching(
         return tx.claimedByOther || claimed.has(txKey(tx));
       });
 
-      if (bedaHari && (available.length > 1 || sedangDirebutkan || adaHariSamaTapiSudahDiambil)) {
-        const datesSet = new Set<string>();
-        for (const c of available) datesSet.add(c.tanggal);
+      // ── (d) JAM DAN NAMA RESI MEMBANTAH BARISNYA (1 Oktober 2026) ──
+      //
+      // Lihat resiBertentangan di atas (SJB-2-0056: resi ANDINI SAHPUTRI
+      // 12:03, baris MUHAMMAD SIDDIQ 12.15). Baris yang dibantah resinya
+      // sendiri bukan calon — ia keluar dari tebakan; urutan sisanya TIDAK
+      // diubah (hari sama tetap duluan).
+      //
+      // Kalau SEMUA baris bebas dibantah, mesin tidak menebak: all_taken +
+      // barisBebas + bertentangan — DITAHAN, bukan UNMATCHED. Uangnya bisa
+      // saja ada di baris lain/berkas lain; yang pasti hanya: bukan baris-baris
+      // ini yang cocok dengan resinya.
+      //
+      // Kalau masih ada calon, pagar lintas hari di bawah tetap menghitung
+      // `available` (SEMUA baris bebas bernominal sama, termasuk yang
+      // dibantah): calon lintas hari yang tersisa sesudah baris hari sendiri
+      // dibantah BUKAN "satu-satunya kandidat", jadi tetap ditolak ditebak.
+      // Klaim yang tidak satu baris pun dibantah berjalan persis seperti dulu.
+      const calon = available.filter((tx) => !resiBertentangan(input, tx));
+      if (calon.length === 0) {
         barisTolak.set(idx, available);
         return {
           ...input,
           match: {
             status: "all_taken",
             conflictCount: available.length,
+            conflictDates: urutTglKronologis([...new Set(available.map((t) => t.tanggal))]),
+            hariSendiriDipegang: adaHariSamaTapiSudahDiambil,
+            barisBebas: true,
+            bertentangan: true,
+            refIssue: pendingRefIssue[idx] ?? undefined,
+          },
+        };
+      }
+
+      // ── SALAH-COCOK DIAM: JANGAN MENEBAK LINTAS HARI ──────────────
+      // Insiden nyata 23 Juli 2026 (KRUKUH LAMA): tiga input @Rp 100.000,
+      // di mutasi hari itu cuma ada DUA kredit @Rp 100.000. Yang ketiga
+      // dicocokkan ke kredit tanggal 24 Juli — beda hari, TANPA alarm apa pun,
+      // dan statusnya hijau. Salah-cocok yang diam jauh lebih berbahaya
+      // daripada alarm palsu: ia tidak menimbulkan peringatan sama sekali.
+      //
+      // Aturan: kalau kandidatnya LEBIH DARI SATU dan yang terbaik pun BUKAN
+      // hari yang sama, sistem MENOLAK menebak dan melemparkannya ke manusia.
+      // Tebakan lintas hari hanya diterima kalau ia satu-satunya kandidat.
+      // "Yang terbaik" = calon pertama yang tidak dibantah resinya (pagar d);
+      // "lebih dari satu" tetap menghitung semua baris bebas (`available`).
+      const bedaHari = diffDays(input.tanggal, calon[0].tanggalDate) !== 0;
+      const sedangDirebutkan = rebutan.has(`${toDateISO(input.tanggal)}|${input.nominal}`);
+
+      if (bedaHari && (available.length > 1 || sedangDirebutkan || adaHariSamaTapiSudahDiambil)) {
+        // Yang disebut "masih bebas" hanya CALON. Baris yang dibantah resinya
+        // tidak ikut: /belum-cocok menjangkar ke tanggal terdekat di daftar ini
+        // dan menandainya "baris bebas yang tidak ditebak (beda hari)" — baris
+        // hari-sama yang dibantah tidak boleh mendapat tanda itu.
+        const datesSet = new Set<string>();
+        for (const c of calon) datesSet.add(c.tanggal);
+        // SEMUA baris bebas dicatat (bukan hanya calon) — pemeriksaan ulang di
+        // akhir jalan memilah lagi mana yang masih calon.
+        barisTolak.set(idx, available);
+        return {
+          ...input,
+          match: {
+            status: "all_taken",
+            conflictCount: calon.length,
             conflictDates: urutTglKronologis(Array.from(datesSet)),
             hariSendiriDipegang: adaHariSamaTapiSudahDiambil,
             // Baris-baris di atas BEBAS — mesin hanya menolak menebaknya.
@@ -798,12 +902,13 @@ export function runMatching(
         };
       }
 
-      const match = buildMatched(input, available[0], "NOMINAL");
+      const match = buildMatched(input, calon[0], "NOMINAL");
       if (pendingRefIssue[idx]) match.refIssue = pendingRefIssue[idx];
       // Fase D: >1 kandidat tersedia = tebakan ambigu — tandai supaya kelihatan
       // di panel & laporan (kandidat lain bisa saja milik nasabah lain).
-      if (available.length > 1 && match.status === "matched") {
-        match.ambiguous = available.length;
+      // Baris yang dibantah resinya bukan pesaing — ia tidak dihitung.
+      if (calon.length > 1 && match.status === "matched") {
+        match.ambiguous = calon.length;
       }
       return { ...input, match };
     }
@@ -837,16 +942,30 @@ export function runMatching(
   // "baris masih BEBAS" untuk baris yang sudah dipegang B (temuan peninjau
   // 27 Sep 2026). Yang tersisa bebas saja yang disebut; kalau habis, ia
   // kembali menjadi bentrok biasa.
+  //
+  // Pagar (d) ikut dipilah ulang (1 Okt 2026): `rows` memuat SEMUA baris bebas
+  // saat penolakan, termasuk yang dibantah resinya. Yang disebut "bebas" hanya
+  // CALON yang tersisa; kalau calonnya habis diambil tapi baris yang dibantah
+  // masih bebas, penolakannya menjadi BERTENTANGAN — bukan "berebut".
   for (const [idx, rows] of barisTolak) {
     const m = resultInputs[idx]?.match as any;
     if (!m || m.status !== "all_taken" || !m.barisBebas) continue;
     const sisa = rows.filter((t) => !claimed.has(txKey(t)));
     if (sisa.length === 0) {
       m.barisBebas = false;
+      // "Dibantah resinya" hanya bermakna selama barisnya bebas. Kalau semua
+      // sudah diambil klaim lain, ini bentrok biasa (BEREBUT) — jangan
+      // tersimpan sebagai BERTENTANGAN untuk baris yang sudah berpemilik.
+      if (m.bertentangan) delete m.bertentangan;
       continue;
     }
-    m.conflictCount = sisa.length;
-    m.conflictDates = urutTglKronologis([...new Set(sisa.map((t) => t.tanggal))]);
+    const inputIni = resultInputs[idx];
+    const calonSisa = sisa.filter((t) => !resiBertentangan(inputIni, t));
+    const disebut = calonSisa.length > 0 ? calonSisa : sisa;
+    if (calonSisa.length > 0) delete m.bertentangan;
+    else m.bertentangan = true;
+    m.conflictCount = disebut.length;
+    m.conflictDates = urutTglKronologis([...new Set(disebut.map((t) => t.tanggal))]);
   }
 
   const matched = resultInputs.filter((i) => i.match?.status === "matched");

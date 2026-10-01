@@ -110,9 +110,18 @@ export async function saveSession(
     // layar riwayat & /belum-cocok bisa menyebutnya; tidak ada yang membaca
     // kolom ini untuk memutuskan apa pun. refIssue di memori sengaja tidak
     // dipakai: ia membuat klaim dikirim ke gadai sebagai UNMATCHED + alarm.
+    //
+    // 'BERTENTANGAN' (1 Okt 2026) = baris bebas ADA, tapi jam DAN nama resi
+    // membantah semuanya (MatchResult.bertentangan; SJB-2-0056). SENGAJA
+    // tidak berawalan 'BEDA_HARI_BEBAS': layar riwayat, PDF sesi, dan
+    // /belum-cocok membaca awalan itu sebagai "baris bebas, BEDA HARI" —
+    // padahal baris yang dibantah bisa saja di hari resi sendiri.
+    // lib/laporan/tolakLintasHari.ts mengenali nilai ini sendiri.
     ref_issue: i.match?.refIssue
       ?? (i.match?.status === "all_taken" && i.match.barisBebas
-        ? (i.match.hariSendiriDipegang ? "BEDA_HARI_BEBAS_HARI_SENDIRI_DIPEGANG" : "BEDA_HARI_BEBAS")
+        ? (i.match.bertentangan
+            ? (i.match.hariSendiriDipegang ? "BERTENTANGAN_HARI_SENDIRI_DIPEGANG" : "BERTENTANGAN")
+            : (i.match.hariSendiriDipegang ? "BEDA_HARI_BEBAS_HARI_SENDIRI_DIPEGANG" : "BEDA_HARI_BEBAS"))
         : null),
     // Simpan id klaim Aceh Gadai. Sebelumnya id ini dibawa saat menarik data
     // lalu HILANG begitu halaman ditutup, sehingga hasil "Cocokkan manual"

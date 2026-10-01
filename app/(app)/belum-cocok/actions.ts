@@ -72,6 +72,9 @@ export interface BarisBelumCocok {
    *  masih BEBAS pada `barisBebasTgl`, cuma beda hari. Diisi dari cek_inputs
    *  terbaru (lib/laporan/tolakLintasHari.ts), bukan dari gadai. */
   tolakLintasHari?: boolean;
+  /** true = baris bernominal sama ada, tapi jam DAN nama di resi bertentangan
+   *  dengannya — mesin menolak menebak (PASS 4, 1 Okt 2026). */
+  bertentangan?: boolean;
   hariSendiriDipegang?: boolean;
   barisBebasTgl?: string | null;
 }

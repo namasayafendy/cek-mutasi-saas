@@ -301,7 +301,9 @@ function drawInputsTable(
     );
 
     const st = inputStatusLabel(i.match_status);
-    let statusText = i.match_status === "all_taken" && String((i as any).ref_issue ?? "").startsWith("BEDA_HARI_BEBAS")
+    let statusText = i.match_status === "all_taken" && String((i as any).ref_issue ?? "").startsWith("BERTENTANGAN")
+      ? "Tidak ditebak (jam & nama resi bertentangan)"
+      : i.match_status === "all_taken" && String((i as any).ref_issue ?? "").startsWith("BEDA_HARI_BEBAS")
       ? "Tidak ditebak (baris bebas, beda hari)"
       : st.text;
     const cat = categoryLabel(i.claim_category);

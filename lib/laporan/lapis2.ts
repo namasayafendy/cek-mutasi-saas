@@ -208,7 +208,11 @@ export interface IsiLapis2 {
    *  ini tahu KENAPA. Dipasangkan lewat klaim_id supaya tiap resi yang belum
    *  cocok punya alasannya — permintaan pemilik 5 September 2026. */
   alasanKlaim?: { id: string; no_faktur: string; outlet: string; tgl: string; nominal: number;
-                  sebab: "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU" }[];
+                  sebab: "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU";
+                  /** true = jam DAN nama resi membantah semua baris bebas
+                   *  bernominal sama (1 Okt 2026, SJB-2-0056). Penanda di
+                   *  atas `sebab`, bukan sebab baru — lihat jalankanPass. */
+                  bertentangan?: boolean }[];
   /** Baris mutasi yang pindah pemilik pada jalan ini — jejak, bukan alarm. */
   disepak?: { olehKlaimId: string; olehNoFaktur: string | null; pemegangKlaimId: string;
               pemegangMatchedBy: string | null; noRef: string | null; tanggal: string; kredit: number;
@@ -297,10 +301,17 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     // (barisnya ADA dan BEBAS, tapi beda hari). SJB-3-0211 disebut "berebut
     // baris mutasi — sudah dipegang klaim lain" padahal baris Neneng Juairiah
     // tidak dipegang siapa pun.
-    const nTolak = (isi.alasanKlaim ?? []).filter((a) => a.sebab === "TOLAK_LINTAS_HARI").length;
-    const nBerebut = Math.max(0, Number(isi.ditahanKonflik ?? 0) - nTolak);
+    //
+    // 1 Okt 2026: yang ketiga, "bertentangan" — baris bebas ADA, tapi jam DAN
+    // nama di resi membantahnya (SJB-2-0056: resi ANDINI SAHPUTRI 12:03,
+    // baris MUHAMMAD SIDDIQ 12.15, dulu dicocokkan diam-diam). Ia dihitung di
+    // ditahanKonflik juga, jadi dikurangkan dari "berebut" seperti tolak.
+    const nBertentangan = (isi.alasanKlaim ?? []).filter((a) => a.bertentangan === true).length;
+    const nTolak = (isi.alasanKlaim ?? []).filter((a) => a.sebab === "TOLAK_LINTAS_HARI" && a.bertentangan !== true).length;
+    const nBerebut = Math.max(0, Number(isi.ditahanKonflik ?? 0) - nTolak - nBertentangan);
     if (nBerebut > 0) awas.push(`${nBerebut} resi belum bisa dinilai (berebut baris mutasi) — lihat "belum dijawab" di bawah`);
     if (nTolak > 0) awas.push(`${nTolak} resi tidak ditebak mesin: baris bernominal sama ADA dan MASIH BEBAS di hari lain — cocokkan manual di /belum-cocok`);
+    if (nBertentangan > 0) awas.push(`${nBertentangan} resi tidak ditebak mesin: baris bernominal sama ada, tapi jam DAN nama di resi bertentangan — periksa di /belum-cocok`);
   }
   if (awas.length) {
     L.push("");
@@ -337,18 +348,28 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   const arahKeluar = (a: string) => ["DEBET", "KELUAR"].includes(String(a).toUpperCase());
   const daftar = Array.isArray(sd?.baruDivonis) ? sd!.baruDivonis! : null;
   const sel0 = { n: 0, rp: 0 };
-  const alasanOleh = new Map<string, "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU">();
-  for (const a of (isi.alasanKlaim ?? [])) alasanOleh.set(String(a.id), a.sebab);
+  // Sebab yang DIUCAPKAN: empat sebab jalankanPass, ditambah dua bentuk
+  // "bertentangan" (dengan/tanpa baris hari resi dipegang klaim lain).
+  type SebabUcap = "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU"
+    | "BERTENTANGAN" | "BERTENTANGAN_KEMBAR";
+  const sebabUcap = (a: { sebab: string; bertentangan?: boolean }): SebabUcap =>
+    a.bertentangan === true
+      ? (a.sebab === "BEREBUT" ? "BERTENTANGAN_KEMBAR" : "BERTENTANGAN")
+      : (a.sebab as SebabUcap);
+  const alasanOleh = new Map<string, SebabUcap>();
+  for (const a of (isi.alasanKlaim ?? [])) alasanOleh.set(String(a.id), sebabUcap(a));
   const teksSebab = (sebab?: string) =>
-    sebab === "BEREBUT" ? "berebut baris mutasi — baris bernominal sama sudah dipegang klaim lain"
+    sebab === "BERTENTANGAN" ? "baris bernominal sama ada, tapi jam DAN nama di resi bertentangan — mesin tidak menebak; periksa di /belum-cocok"
+    : sebab === "BERTENTANGAN_KEMBAR" ? "baris bernominal sama ada, tapi jam DAN nama di resi bertentangan, dan baris di hari resi sudah dipegang klaim lain (resi kembar?) — mesin tidak menebak; periksa di /belum-cocok"
+    : sebab === "BEREBUT" ? "berebut baris mutasi — baris bernominal sama sudah dipegang klaim lain"
     : sebab === "TOLAK_LINTAS_HARI" ? "baris bernominal sama ADA dan MASIH BEBAS, tapi beda hari — mesin tidak menebak; cocokkan manual di /belum-cocok"
     : sebab === "LUAR_PERIODE" ? "di luar periode berkas — menunggu mutasi berikutnya"
     : sebab === "DISEPAK_TAK_KETEMU" ? "salah klaim sebelumnya, disepak oleh resi ber-referensi; pencocokan ulang TIDAK ketemu — cocokkan manual di /belum-cocok"
     : "belum dijawab Lapis 2";
   // Sebab per NOMOR KONTRAK juga — daftar "tidak ada di rekening" dari gadai
   // tidak membawa klaim_id, jadi pemasangannya lewat kontrak+nominal.
-  const alasanOlehFaktur = new Map<string, "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU">();
-  for (const a of (isi.alasanKlaim ?? [])) alasanOlehFaktur.set(`${a.no_faktur}|${Math.round(a.nominal)}`, a.sebab);
+  const alasanOlehFaktur = new Map<string, SebabUcap>();
+  for (const a of (isi.alasanKlaim ?? [])) alasanOlehFaktur.set(`${a.no_faktur}|${Math.round(a.nominal)}`, sebabUcap(a));
   // Kalimat ALARM REF per kontrak+nominal (1 Okt 2026). Gadai memvonisnya
   // UNMATCHED, lalu daftarnya kembali ke sini tanpa klaim_id — dan tanpa peta
   // ini tercetak "tidak ada di rekening" untuk uang yang justru ADA, hanya
@@ -527,7 +548,10 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   const lama = isi.uangLama ?? [];
   if (lama.length) {
     L.push("");
-    L.push(`⚠️ UANG LAMA DIPAKAI TRANSAKSI BARU — konfirmasi bukan resi bekas (${lama.length})`);
+    // TANDA saja — keputusan pemilik 1 Okt 2026: uang lama yang selama itu
+    // belum dipegang kontrak lain itu wajar (bayar di muka) dan tidak perlu
+    // penanganan. Yang sudah dipegang kontrak lain ditolak sebagai resi bekas.
+    L.push(`📌 UANG LAMA (catatan saja — belum pernah dipegang kontrak lain) (${lama.length})`);
     lama.slice(0, 10).forEach((u) =>
       L.push(`   • ${u.no_faktur} · ${u.outlet} · ${rp(u.nominal)} — baris mutasi ${tgl(u.tglBaris)}, ` +
              `${u.hari} hari sebelum transaksi ${tgl(u.tglTransaksi)}`));

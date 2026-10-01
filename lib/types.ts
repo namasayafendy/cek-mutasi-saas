@@ -343,6 +343,15 @@ export type MatchResult = (
        *  saja uang nasabah lain. Layar WAJIB menyebutnya, bukan hanya
        *  "baris bebas" (temuan peninjau 27 Sep 2026). */
       hariSendiriDipegang?: boolean;
+      /** true = SEMUA baris bebas bernominal sama dibantah resinya sendiri:
+       *  jam resi meleset >5 menit DAN nama pengirim resi tidak cocok dengan
+       *  nama baris (resiBertentangan, lib/matching.ts). Selalu bersama
+       *  barisBebas — barisnya bebas, mesin menolak menebaknya. Dicatat
+       *  jalankanPass sebagai DITAHAN (bukan UNMATCHED) dan disimpan ke
+       *  cek_inputs.ref_issue sebagai 'BERTENTANGAN…' (save.ts). Asal:
+       *  SJB-2-0056 (11 Agu 2026) — resi ANDINI SAHPUTRI 12:03 mengambil baris
+       *  MUHAMMAD SIDDIQ 12.15 lewat tebakan nominal. */
+      bertentangan?: boolean;
       /** Hanya untuk refIssue REF_SUDAH_DIKLAIM dari PASS 1: siapa yang
        *  memegang baris yang ditunjuk REF klaim ini, terdekat tanggalnya lebih
        *  dulu. Tidak mengubah arti refIssue; hanya bahan kalimat alarm. */
