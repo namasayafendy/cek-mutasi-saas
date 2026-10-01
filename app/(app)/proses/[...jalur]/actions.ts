@@ -25,6 +25,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { antreLaporan } from "@/lib/telegram/outbox";
 import { hitungCakupan, saranExport, tglID, type BarisCakupan, type HasilCakupan } from "@/lib/coverage/celah";
 import { susunLapis2, sebabAlarmRef, type IsiLapis2 } from "@/lib/laporan/lapis2";
+import { after } from "next/server";
+import { picuPeriksaAi } from "@/lib/periksaAi/pemicu";
 
 export type Balasan = { ok: boolean; error?: string };
 
@@ -936,6 +938,29 @@ export async function tandaiSelesai(
       balasKe,
       jobId,
     });
+  }
+
+  // ── PEMERIKSAAN AI (di aplikasi gadai) ──
+  //
+  // Dipicu SESUDAH laporan Lapis 2 diantre, lewat after(): respons ke
+  // browser tidak menunggu gadai. Hanya untuk akun pemilik gadai
+  // (CEKMUTASI_ACCOUNT_ID) — akun lain tidak punya gadai yang memeriksa.
+  // picuPeriksaAi tidak pernah melempar dan berbunyi sendiri bila gagal;
+  // kalau pemicu ini hilang (fungsi dihentikan), cron cadangan
+  // /api/cron/periksa-ai menjemputnya.
+  if (r.ctx.account.id === String(process.env.CEKMUTASI_ACCOUNT_ID ?? "").trim()) {
+    const picu = () =>
+      picuPeriksaAi({ jobId, sumber: "MUTASI" }).catch((e) => {
+        console.error("[periksa-ai] pemicu melempar (tak terduga):", e);
+      });
+    try {
+      after(picu);
+    } catch (e) {
+      // after() di luar lingkup permintaan melempar. Jangan sampai itu
+      // menggagalkan penutupan job yang sudah sah — jalankan lepas saja.
+      console.error("[periksa-ai] after() tidak tersedia, dijalankan lepas:", e);
+      void picu();
+    }
   }
   return { ok: true, teks };
 }

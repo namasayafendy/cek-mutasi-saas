@@ -187,6 +187,9 @@ const teksBaru = susunLapis2(isi, { nomor: null, sebelumNomor: null, sebelumKapa
 // ── Bandingkan dengan laporan ASLI yang tersimpan ──
 const { data: asli } = await db.from("mutasi_laporan_outbox")
   .select("id, chat_id, balas_ke, teks").eq("job_id", jobId)
+  // Hanya laporan LAPIS 2 — job yang sama kini juga bisa punya baris
+  // "🤖 PEMERIKSAAN AI tidak bisa dimulai ❌" yang lebih baru.
+  .like("teks", "🟢 LAPIS 2%")
   .order("id", { ascending: false }).limit(1).maybeSingle();
 
 if (asli) {
