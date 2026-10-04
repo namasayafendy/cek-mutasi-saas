@@ -117,7 +117,14 @@ export async function saveSession(
     // /belum-cocok membaca awalan itu sebagai "baris bebas, BEDA HARI" —
     // padahal baris yang dibantah bisa saja di hari resi sendiri.
     // lib/laporan/tolakLintasHari.ts mengenali nilai ini sendiri.
+    //
+    // 'SETORAN_TIDAK_DITEBAK' / 'REBUTAN_SETORAN' (5 Okt 2026, SETOR KE
+    // PUSAT) mendahului semuanya, termasuk saat barisnya sudah tidak bebas:
+    // sebabnya perkara setoran, bukan beda hari. Juga tidak berawalan
+    // 'BEDA_HARI_BEBAS' karena alasan yang sama dengan 'BERTENTANGAN'.
     ref_issue: i.match?.refIssue
+      ?? (i.match?.status === "all_taken" && i.match.setoranTidakDitebak ? "SETORAN_TIDAK_DITEBAK"
+        : i.match?.status === "all_taken" && i.match.rebutanSetoran ? "REBUTAN_SETORAN" : null)
       ?? (i.match?.status === "all_taken" && i.match.barisBebas
         ? (i.match.bertentangan
             ? (i.match.hariSendiriDipegang ? "BERTENTANGAN_HARI_SENDIRI_DIPEGANG" : "BERTENTANGAN")

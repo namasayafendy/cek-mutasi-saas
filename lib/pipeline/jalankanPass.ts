@@ -53,6 +53,7 @@ import { loadRefPoolTxs } from "@/lib/sessions/ref-pool";
 import { toDateISO, parseDateISO } from "@/lib/format";
 import { pullGadaiClaims, pushGadaiResults } from "@/app/(app)/check/actions-gadai";
 import type { BankUpload } from "@/lib/pipeline/prosesSatuBank";
+import { SEBAB_SETORAN_BELUM_KETEMU } from "@/lib/laporan/lapis2";
 
 /**
  * Catat satu klaim ke rekap PER TANGGAL.
@@ -229,7 +230,18 @@ export interface HasilPass {
                     *  empat nilai, dan medan ini menumpang utuh sampai
                     *  laporan Lapis 2 (lib/laporan/lapis2.ts) yang
                     *  mengucapkannya. */
-                   bertentangan?: boolean }[];
+                   bertentangan?: boolean;
+                   /** true = klaim SETOR KE PUSAT (5 Okt 2026). Penanda
+                    *  tambahan seperti `bertentangan`: laporan Lapis 2
+                    *  menyebutnya "setoran outlet → rek PT", bukan uang
+                    *  nasabah. */
+                   setoran?: boolean;
+                   /** true = setoran yang TIDAK ditebak lewat nominal
+                    *  (calon tidak tunggal / ada pesaing) → /belum-cocok. */
+                   setoranTidakDitebak?: boolean;
+                   /** true = klaim nasabah yang tidak ditebak karena baris
+                    *  calonnya juga diakui setoran (pagar (e) PASS 4). */
+                   rebutanSetoran?: boolean }[];
   /** Pengusiran yang terjadi pada jalan ini (bukti kuat mengusir bukti lemah),
    *  sudah DIPERSISTENKAN. Dibawa ke laporan sebagai jejak: pemilik berhak
    *  tahu baris bank mana yang pindah pemilik tanpa ia menekan apa pun. */
@@ -546,6 +558,9 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       // matching.ts. Tanggal tak sah = tidak diketahui (null), bukan dibuang:
       // klaimnya tetap dinilai seperti dulu, hanya pagar itu yang diam.
       tanggalTransaksi: i.tanggalTransaksiISO ? parseDateISO(i.tanggalTransaksiISO) : null,
+      // SETOR KE PUSAT (5 Okt 2026): aturan pencocokannya sendiri, lihat
+      // blok SETOR KE PUSAT di lib/matching.ts.
+      setoran: i.setoran === true,
     });
   }
   if (inputs.length === 0) {
@@ -675,7 +690,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     // REF, NAMA_JAM tidak boleh disentuh. Tanpa ini semua pemegang terlihat
     // sama, dan aturannya harus memilih antara mengusir semua atau tidak sama
     // sekali — dua-duanya salah.
-    const pemegangInput = new Map<string, { matchedBy: string | null; manual: boolean; gadaiKlaimId: string | null; noFaktur: string | null }>();
+    const pemegangInput = new Map<string, { matchedBy: string | null; manual: boolean; gadaiKlaimId: string | null; noFaktur: string | null; setoran: boolean }>();
     {
       const idInput = [...new Set([...pemegangBaris.values()].map((p) => p.inputId))];
       for (let i = 0; i < idInput.length; i += 500) {
@@ -710,6 +725,10 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
             // Kontrak pemegang — hanya untuk kalimat alarm REF_SUDAH_DIKLAIM
             // ("sudah dipegang SJB-1-0250 — kemungkinan resi bekas").
             noFaktur: r.gadai_no_faktur ? String(r.gadai_no_faktur) : null,
+            // Pemegang SETOR KE PUSAT dikenali dari nomornya (STP-…) —
+            // cek_inputs tidak menyimpan jenis. Pagar 8 matching.ts: tidak
+            // pernah disepak dan tidak pernah menyepak lintas setoran.
+            setoran: /^STP-/i.test(String(r.gadai_no_faktur ?? "")),
           });
         }
       }
@@ -728,6 +747,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
           manual: pi.manual || pb.manualBaris,
           gadaiKlaimId: pi.gadaiKlaimId,
           noFaktur: pi.noFaktur,
+          setoran: pi.setoran,
         };
       }
     }
@@ -746,11 +766,37 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     for (let i = 0; i < idKlaim.length; i += 500) {
       const { data, error: errTerbukti } = await supabase
         .from("cek_inputs")
-        .select("gadai_klaim_id")
+        .select("id, gadai_klaim_id, matched_tx_id")
         .in("gadai_klaim_id", idKlaim.slice(i, i + 500))
         .not("matched_tx_id", "is", null)
         .is("deleted_at", null);
-      if (errTerbukti) {
+      // ── "SUDAH TERBUKTI" = BARISNYA BENAR-BENAR DIPEGANG INPUT ITU ──
+      //
+      // 5 Oktober 2026 (KEPUTUSAN OWNER #15, anti double claim). matched_tx_id
+      // di cek_inputs hanyalah NIAT: RPC claim_parsed_transactions hanya
+      // mengklaim baris yang claimed_by_input_id-nya masih NULL, jadi baris
+      // yang keburu dipegang input lain membuat cek_inputs berkata "cocok"
+      // sementara barisnya milik orang lain — dan jalur SESI_LAMA lalu
+      // mengirim MATCHED untuk uang yang sudah dipakai transaksi lain.
+      // Dibuktikan ke parsed_transactions: hanya pemegang SUNGGUHAN yang
+      // terhitung. (Data hidup 5 Okt 2026: 2.882 baris gadai, 0 yang tidak
+      // memegang — hasil hari ini sama persis dengan aturan lama.)
+      const terbuktiPegang = new Set<string>();
+      let gagalBacaBaris = false;
+      if (!errTerbukti && (data ?? []).length) {
+        const idBaris = [...new Set(((data ?? []) as { matched_tx_id: string }[]).map((r) => String(r.matched_tx_id)))];
+        for (let a = 0; a < idBaris.length; a += 500) {
+          const { data: brs, error: eBrs } = await supabase
+            .from("parsed_transactions")
+            .select("id, claimed_by_input_id")
+            .in("id", idBaris.slice(a, a + 500));
+          if (eBrs) { gagalBacaBaris = true; break; }
+          for (const b of (brs ?? []) as { id: string; claimed_by_input_id: string | null }[]) {
+            if (b.claimed_by_input_id) terbuktiPegang.add(`${b.id}|${b.claimed_by_input_id}`);
+          }
+        }
+      }
+      if (errTerbukti || gagalBacaBaris) {
         // Daftar ini menjadi pagar 4 aturan sepak ("pengusir yang sudah
         // memegang baris tidak boleh mengusir"). Kueri yang gagal dulu
         // dibiarkan lewat — dan pagar yang gagal terbaca sama dengan pagar
@@ -762,7 +808,13 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
         return hasil;
       }
       for (const r of (data ?? []) as any[]) {
-        if (r.gadai_klaim_id) sudahTerbukti.add(String(r.gadai_klaim_id));
+        if (!r.gadai_klaim_id) continue;
+        if (!terbuktiPegang.has(`${r.matched_tx_id}|${r.id}`)) {
+          console.warn(`[pass] ${r.gadai_klaim_id}: cek_inputs ${r.id} menunjuk baris ${r.matched_tx_id} ` +
+                       `yang TIDAK dipegangnya — tidak dihitung sudah terbukti`);
+          continue;
+        }
+        sudahTerbukti.add(String(r.gadai_klaim_id));
       }
     }
   }
@@ -831,9 +883,73 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     }
   }
 
+  // ── SETOR KE PUSAT: baris TERPEGANG di luar kolam, bernominal setoran ──
+  //
+  // Syarat tebakan nominal setoran (KEPUTUSAN OWNER #14): kredit bernominal
+  // sama dalam jendela harus TEPAT SATU — termasuk yang sudah dipegang
+  // transaksi lain. Kolam hanya memuat berkas + carry-over yang BEBAS, jadi
+  // kembaran yang sudah dipegang di luar berkas harus dimuat di sini. Gagal
+  // memuat = setoran TIDAK ditebak lewat nominal jalan ini (opsi dibiarkan
+  // kosong → matching.ts menahannya untuk /belum-cocok). Berhalaman +
+  // .order('id') supaya tidak pernah terpotong 1000 baris diam-diam.
+  let opsiSetoran: { terpegangLuar: { tanggalDate: Date; kredit: number; bankId: string | null; waktu: string | null }[] } | undefined;
+  if (jenis === "kredit") {
+    const setoranIn = inputs.filter((i) => i.setoran === true && !i.sudahMemegang);
+    if (setoranIn.length) {
+      try {
+        const noms = [...new Set(setoranIn.map((i) => Number(i.nominal)))];
+        let dari = "9999-12-31", sampai = "0000-01-01";
+        for (const i of setoranIn) {
+          const r = gadaiAwareRules(i, rulesById);
+          const iso = toDateISO(i.tanggal);
+          const a = geserHari(iso, -Math.max(0, r.lookback_days));
+          const b = geserHari(iso, Math.max(0, r.forward_window_days));
+          if (a < dari) dari = a;
+          if (b > sampai) sampai = b;
+        }
+        const diKolam = new Set(pool.map((t) => t.parsedTxId).filter(Boolean));
+        const terpegangLuar: { tanggalDate: Date; kredit: number; bankId: string | null; waktu: string | null }[] = [];
+        for (let a = 0; a < noms.length; a += 100) {
+          for (let hal = 0; ; hal += 1000) {
+            const { data, error } = await supabase
+              .from("parsed_transactions")
+              .select("id, tanggal, jam, nominal_kredit, bank_id")
+              .eq("account_id", accountId)
+              .not("claimed_by_input_id", "is", null)
+              .is("deleted_at", null)
+              .gte("tanggal", dari)
+              .lte("tanggal", sampai)
+              .in("nominal_kredit", noms.slice(a, a + 100))
+              .order("id")
+              .range(hal, hal + 999);
+            if (error) throw new Error(error.message);
+            const rows = (data ?? []) as { id: string; tanggal: string; jam: string | null; nominal_kredit: number | null; bank_id: string | null }[];
+            for (const r of rows) {
+              if (diKolam.has(String(r.id))) continue;
+              terpegangLuar.push({
+                tanggalDate: new Date(`${String(r.tanggal).slice(0, 10)}T12:00:00Z`),
+                kredit: Number(r.nominal_kredit ?? 0),
+                bankId: r.bank_id ?? null,
+                waktu: r.jam ? String(r.jam) : null,
+              });
+            }
+            if (rows.length < 1000) break;
+          }
+        }
+        opsiSetoran = { terpegangLuar };
+      } catch (e) {
+        console.error("[pass] baris terpegang untuk setoran gagal dimuat — setoran tidak ditebak lewat nominal:", e);
+        opsiSetoran = undefined;
+      }
+    } else {
+      opsiSetoran = { terpegangLuar: [] };
+    }
+  }
+
   const { inputs: hasilInputs, summary } = runMatching(inputs, pool, outletColors, {
     getRulesForInput: (i) => gadaiAwareRules(i, rulesById),
     nama: opsiNama,
+    setoran: opsiSetoran,
   });
 
   // ── PELEPASAN PEMEGANG LAMA DIPERSISTENKAN DULU, SEBELUM SESI DISIMPAN ──
@@ -1003,6 +1119,12 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       nominal: Number(i.nominal ?? 0),
       sebab,
       ...(bertentangan ? { bertentangan: true } : {}),
+      // Penanda SETOR KE PUSAT (5 Okt 2026) — dibaca dari klaim & hasilnya
+      // sendiri, supaya SEMUA jalur tahan (berebut / luar periode / disepak)
+      // ikut menyebut setoran dengan namanya.
+      ...(i.setoran === true ? { setoran: true } : {}),
+      ...(i.match?.setoranTidakDitebak ? { setoranTidakDitebak: true } : {}),
+      ...(i.match?.rebutanSetoran ? { rebutanSetoran: true } : {}),
     });
   };
   // Kalau mutasi ini TIDAK NYAMBUNG dengan catatan terakhir, ada transaksi
@@ -1140,8 +1262,15 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       // ke gadai, menunggu pemilik di /belum-cocok. Sebabnya tetap salah satu
       // dari dua di atas (tipe sebab di actions.ts tidak diperlebar); penanda
       // `bertentangan` yang membuat laporan Lapis 2 mengucapkannya sendiri.
-      catatDitahan(i, m.barisBebas && !m.hariSendiriDipegang ? "TOLAK_LINTAS_HARI" : "BEREBUT",
-                   !!m.barisBebas && !!m.bertentangan);
+      //
+      // SETOR KE PUSAT (5 Okt 2026): setoran yang tidak ditebak (calon tidak
+      // tunggal / ada pesaing) dan klaim nasabah yang tidak ditebak karena
+      // barisnya juga diakui setoran (pagar (e)) — DITAHAN juga, tidak
+      // dikirim. Sebab dasarnya BEREBUT (bukan TOLAK_LINTAS_HARI: yang itu
+      // diucapkan "baris bebas beda hari"); penandanya yang diucapkan laporan.
+      const perkaraSetoran = !!m.setoranTidakDitebak || !!m.rebutanSetoran;
+      catatDitahan(i, m.barisBebas && !m.hariSendiriDipegang && !perkaraSetoran ? "TOLAK_LINTAS_HARI" : "BEREBUT",
+                   !!m.barisBebas && !!m.bertentangan && !perkaraSetoran);
       continue;
     }
 
@@ -1239,7 +1368,9 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
         nominal:   Number((i as any).nominal ?? 0),
         // Yang ber-ref_issue sudah keluar lewat cabang ALARM REF di atas
         // dengan kalimatnya sendiri; yang sampai di sini memang tanpa ref.
-        sebab:     "tidak ada di rekening",
+        // SETOR KE PUSAT: bukan vonis "uang hilang" — kreditnya belum ketemu
+        // di jendela, owner yang mencocokkan (5 Okt 2026, KEPUTUSAN #14/#15).
+        sebab:     i.setoran === true ? SEBAB_SETORAN_BELUM_KETEMU : "tidak ada di rekening",
       });
     }
     laporan.push({
@@ -1363,6 +1494,73 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
         kode: "GAGAL_SEPAK",
         pesan: `${tanpaPemegang.length} baris yang dilepas tidak berakhir di tangan klaim ber-ref` +
                (eCek ? ` (${eCek.message})` : ePb ? ` (${ePb.message})` : "") + " — pelepasan dibalik, vonis TIDAK dikirim.",
+      };
+      return hasil;
+    }
+  }
+
+  // ── ANTI DOUBLE CLAIM: SETIAP VONIS "COCOK" WAJIB MEMEGANG BARISNYA ──
+  //
+  // 5 Oktober 2026, KEPUTUSAN OWNER #15 (fitur SETOR KE PUSAT): satu baris
+  // mutasi tidak boleh diakui dua klaim — setoran, nasabah, maupun pusat.
+  // Basis data menjaga sisi barisnya (claimed_by_input_id satu pemegang,
+  // trigger jaga_pemilik_baris_mutasi, indeks unik
+  // uq_cek_inputs_satu_baris_satu_klaim_gadai, RPC hanya mengklaim baris
+  // NULL). Yang TIDAK dijaga siapa pun adalah VONIS-nya: save.ts hanya
+  // console.error kalau insert cek_inputs gagal (mis. ditolak indeks unik
+  // karena sesi lain keburu memegang barisnya), dan RPC diam-diam melewati
+  // baris yang sudah dipegang — sementara `laporan` di atas tetap berkata
+  // "cocok". Gadai lalu mencatat MATCHED untuk uang yang dipegang klaim lain.
+  //
+  // Maka sebelum apa pun dikirim: setiap klaim yang divonis cocok pada jalan
+  // ini (bukan SESI_LAMA — itu sudah dibuktikan di atas) harus punya baris
+  // cek_inputs hidup yang BENAR-BENAR memegang baris mutasinya. Satu saja
+  // yang tidak → seluruh vonis jalan ini TIDAK dikirim (sama seperti sesi
+  // gagal tersimpan). Klaim yang sudah terkunci akan terkirim pada jalan
+  // berikutnya lewat jalur SESI_LAMA; yang tidak terkunci dicocokkan ulang.
+  // Data hidup 5 Okt 2026: 0 dari 2.882 baris gadai melanggar ini, jadi pada
+  // keadaan normal penjaga ini diam.
+  {
+    const idCocok = [...new Set(laporan.filter((r) => r.matched && r.matched_by !== "SESI_LAMA").map((r) => String(r.id)))];
+    const terkunci = new Set<string>();
+    let gagalBaca: string | null = null;
+    for (let a = 0; a < idCocok.length && !gagalBaca; a += 200) {
+      const { data: ci, error: eCi } = await supabase
+        .from("cek_inputs")
+        .select("id, gadai_klaim_id, matched_tx_id")
+        .eq("account_id", accountId)
+        .in("gadai_klaim_id", idCocok.slice(a, a + 200))
+        .not("matched_tx_id", "is", null)
+        .is("deleted_at", null);
+      if (eCi) { gagalBaca = eCi.message; break; }
+      const barisKe = [...new Set(((ci ?? []) as { matched_tx_id: string }[]).map((r) => String(r.matched_tx_id)))];
+      const pemegang = new Map<string, string>();
+      for (let b = 0; b < barisKe.length; b += 200) {
+        const { data: brs, error: eBrs } = await supabase
+          .from("parsed_transactions")
+          .select("id, claimed_by_input_id")
+          .in("id", barisKe.slice(b, b + 200));
+        if (eBrs) { gagalBaca = eBrs.message; break; }
+        for (const r of (brs ?? []) as { id: string; claimed_by_input_id: string | null }[]) {
+          if (r.claimed_by_input_id) pemegang.set(String(r.id), String(r.claimed_by_input_id));
+        }
+      }
+      for (const r of (ci ?? []) as { id: string; gadai_klaim_id: string; matched_tx_id: string }[]) {
+        if (pemegang.get(String(r.matched_tx_id)) === String(r.id)) terkunci.add(String(r.gadai_klaim_id));
+      }
+    }
+    const tidakTerkunci = gagalBaca ? idCocok : idCocok.filter((id) => !terkunci.has(id));
+    if (tidakTerkunci.length) {
+      console.error("[pass] vonis cocok tanpa baris terkunci:", tidakTerkunci.slice(0, 20), gagalBaca ?? "");
+      if (dilepas.length) await batalkanPelepasan();
+      hasil.batal = {
+        kode: "GAGAL_SIMPAN_SESI",
+        pesan: gagalBaca
+          ? `Tidak bisa memastikan baris mutasi terkunci atas nama klaimnya (${gagalBaca}) — vonis TIDAK dikirim supaya satu baris tidak dipakai dua klaim.`
+          : `${tidakTerkunci.length} klaim divonis cocok tetapi baris mutasinya TIDAK terkunci atas namanya ` +
+            `(sudah dipegang input lain / gagal tersimpan), mis. ${tidakTerkunci.slice(0, 3).join(", ")} — ` +
+            `vonis TIDAK dikirim supaya satu baris tidak dipakai dua klaim. Ulangi prosesnya; yang sudah terkunci ` +
+            `akan terkirim lewat jalur sesi lama.`,
       };
       return hasil;
     }

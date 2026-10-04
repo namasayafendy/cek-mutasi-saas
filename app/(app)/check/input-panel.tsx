@@ -59,6 +59,10 @@ export function InputPanel({
             refFt: i.refFt,
             jamResi: i.jamResi,
             namaPengirimResi: i.namaPengirimResi,
+            // Setoran ke pusat ikut dikenali di layar ini juga, supaya ia
+            // tidak pernah ditebak lewat nominal saja (layar ini tidak memuat
+            // baris terpegang di luar kolam, jadi PASS 4 setoran selalu menolak).
+            setoran: i.setoran === true,
           } as UserInput;
         })
         .filter((x): x is UserInput => x !== null);

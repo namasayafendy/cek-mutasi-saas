@@ -45,6 +45,26 @@ export interface GadaiPullInput {
    *  jauh lebih tua daripada transaksinya. Kosong = gadai versi lama /
    *  tanggal tak terbaca → pagar itu diam (tidak diketahui ≠ baru). */
   tanggalTransaksiISO?: string | null;
+  /** Jenis transaksi gadai apa adanya (PERPANJANG / TEBUS / SETOR_PUSAT …).
+   *  Hanya untuk mengenali setoran & laporan; tidak dipakai mencocokkan. */
+  jenis?: string | null;
+  /** true = klaim SETOR KE PUSAT (sejak 5 Okt 2026): uang kas tunai outlet
+   *  yang disetor ke rekening PT, nomor STP-…. Dikenali dari medan `setoran`
+   *  gadai, jenis SETOR_PUSAT, trx_table tb_setor_pusat, ATAU nomor STP- —
+   *  salah satu cukup, supaya gadai versi mana pun tetap terbaca. Pencocokan
+   *  setoran jauh lebih ketat (lib/matching.ts, SETOR KE PUSAT). */
+  setoran?: boolean;
+}
+
+/** Kenali klaim SETOR KE PUSAT dari muatan gadai. Murni, tidak melempar.
+ *  SENGAJA tidak diekspor: berkas "use server" hanya boleh mengekspor fungsi
+ *  async (Next menolak build kalau tidak). */
+function klaimSetoran(cl: any): boolean {
+  if (!cl) return false;
+  if (cl.setoran === true) return true;
+  if (String(cl.jenis ?? "").toUpperCase() === "SETOR_PUSAT") return true;
+  if (String(cl.trx_table ?? "") === "tb_setor_pusat") return true;
+  return /^STP-/i.test(String(cl.no_faktur ?? cl.trx_id ?? ""));
 }
 
 /** Yang gadai TAHAN di Lapis 1 dan tidak pernah sampai ke sini. */
@@ -179,6 +199,8 @@ export async function pullGadaiClaims(
       outletNama: cl.outlet ? String(cl.outlet) : null,
       sumber: cl.sumber ? String(cl.sumber) : null,
       tanggalTransaksiISO: isoTransaksi(cl.tgl_transaksi),
+      jenis: cl.jenis ? String(cl.jenis) : null,
+      setoran: klaimSetoran(cl),
     });
   }
 
@@ -204,6 +226,10 @@ export async function pullGadaiClaims(
       sumber: cl.sumber ? String(cl.sumber) : null,
       sudahMemegang: true,
       tanggalTransaksiISO: isoTransaksi(cl.tgl_transaksi),
+      jenis: cl.jenis ? String(cl.jenis) : null,
+      // Pemegang setoran tidak pernah disepak (pagar 8 matching.ts) — ia
+      // tetap dibawa supaya penandanya sampai ke sana.
+      setoran: klaimSetoran(cl),
     });
   }
 

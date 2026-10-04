@@ -301,7 +301,12 @@ function drawInputsTable(
     );
 
     const st = inputStatusLabel(i.match_status);
-    let statusText = i.match_status === "all_taken" && String((i as any).ref_issue ?? "").startsWith("BERTENTANGAN")
+    // Teks PDF sengaja ASCII (font standar pdf-lib tidak memuat panah).
+    let statusText = i.match_status === "all_taken" && String((i as any).ref_issue ?? "") === "SETORAN_TIDAK_DITEBAK"
+      ? "Setoran outlet tidak ditebak (calon tidak tunggal)"
+      : i.match_status === "all_taken" && String((i as any).ref_issue ?? "") === "REBUTAN_SETORAN"
+      ? "Tidak ditebak (baris juga diakui setoran outlet)"
+      : i.match_status === "all_taken" && String((i as any).ref_issue ?? "").startsWith("BERTENTANGAN")
       ? "Tidak ditebak (jam & nama resi bertentangan)"
       : i.match_status === "all_taken" && String((i as any).ref_issue ?? "").startsWith("BEDA_HARI_BEBAS")
       ? "Tidak ditebak (baris bebas, beda hari)"

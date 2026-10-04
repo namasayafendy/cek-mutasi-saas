@@ -210,6 +210,10 @@ export type PdfTransaction = {
      *  perlu tahu kontrak mana yang dibuka untuk menilai resi bekas atau bukan
      *  (uji resi bekas, 1 Okt 2026). Tidak dipakai mencocokkan. */
     noFaktur?: string | null;
+    /** true = pemegangnya klaim SETOR KE PUSAT (nomor STP-…). Aturan sepak
+     *  tidak pernah melintasi garis setoran ↔ transaksi lain (KEPUTUSAN
+     *  OWNER #15, 4 Okt 2026): tabrakan semacam itu urusan manusia. */
+    setoran?: boolean;
   };
 };
 
@@ -262,6 +266,14 @@ export type UserInput = {
    *  undefined = tidak diketahui (layar /check lama tidak membawanya) —
    *  pagar yang memakainya DIAM, bukan menganggap "baru". */
   tanggalTransaksi?: Date | null;
+
+  /** true = klaim SETOR KE PUSAT: uang kas TUNAI outlet yang disetor ke
+   *  rekening PT (teller / CRM / agen BSI / m-banking), nomor STP-…. Sejak
+   *  5 Okt 2026. Setoran teller tidak punya nama pengirim di mutasi, jadi
+   *  pencocokannya HANYA lewat REF, NOMINAL+JAM (calon tunggal), atau
+   *  NOMINAL saja bila kreditnya tepat satu tanpa pesaing — selain itu
+   *  ditahan untuk /belum-cocok (setoranTidakDitebak). Lihat lib/matching.ts. */
+  setoran?: boolean;
 };
 
 /** Fase B: bagaimana sebuah input ter-match (label keyakinan) */
@@ -352,6 +364,19 @@ export type MatchResult = (
        *  SJB-2-0056 (11 Agu 2026) — resi ANDINI SAHPUTRI 12:03 mengambil baris
        *  MUHAMMAD SIDDIQ 12.15 lewat tebakan nominal. */
       bertentangan?: boolean;
+      /** true = klaim SETOR KE PUSAT yang TIDAK ditebak mesin (5 Okt 2026,
+       *  KEPUTUSAN OWNER #14): kredit bernominal sama ADA dalam jendela, tapi
+       *  tidak tepat satu, atau ada pesaing (klaim lain bernominal sama), atau
+       *  baris satu-satunya sudah dipegang / dibantah resinya. Dicatat
+       *  jalankanPass sebagai DITAHAN (bukan UNMATCHED) dan disimpan ke
+       *  cek_inputs.ref_issue sebagai 'SETORAN_TIDAK_DITEBAK' (save.ts) →
+       *  /belum-cocok. */
+      setoranTidakDitebak?: boolean;
+      /** true = klaim BUKAN setoran yang tidak ditebak karena baris
+       *  satu-satunya calonnya juga diakui klaim SETOR KE PUSAT pada jalan
+       *  yang sama (pagar (e) PASS 4, 5 Okt 2026). Selalu bersama barisBebas.
+       *  Disimpan ke cek_inputs.ref_issue sebagai 'REBUTAN_SETORAN'. */
+      rebutanSetoran?: boolean;
       /** Hanya untuk refIssue REF_SUDAH_DIKLAIM dari PASS 1: siapa yang
        *  memegang baris yang ditunjuk REF klaim ini, terdekat tanggalnya lebih
        *  dulu. Tidak mengubah arti refIssue; hanya bahan kalimat alarm. */

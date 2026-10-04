@@ -236,6 +236,13 @@ export function BelumCocokClient() {
                           : it.tolakLintasHari ? "baris bebas, beda hari" : "belum divonis"}
                       </span>
                     )}
+                    {/* SETOR KE PUSAT (5 Okt 2026): uang kas outlet ke rek PT,
+                        bukan uang nasabah — disebut dengan namanya sendiri. */}
+                    {(String(it.jenis ?? "").toUpperCase() === "SETOR_PUSAT" || /^STP-/i.test(String(it.no_faktur ?? ""))) && (
+                      <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800">
+                        setoran outlet → rek PT
+                      </span>
+                    )}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
                     {it.outlet} · {tglID(it.tgl)} · {it.umur} hari menggantung
@@ -384,6 +391,15 @@ export function BelumCocokClient() {
               {(buka.arah ?? "KREDIT") === "DEBET" ? "uang KELUAR" : "uang MASUK"}
             </div>
             <div className="mt-2 text-lg font-semibold text-slate-900">{rp(buka.nominal)}</div>
+            {(String(buka.jenis ?? "").toUpperCase() === "SETOR_PUSAT" || /^STP-/i.test(String(buka.no_faktur ?? ""))) && (
+              <p className="mt-2 text-xs text-emerald-800">
+                Ini slip <b>SETOR KE PUSAT</b> (kas tunai outlet ke rekening PT), bukan uang nasabah.
+                Setoran teller di mutasi biasanya berbunyi &quot;SETR&quot; / &quot;Setoran&quot; / &quot;SETOR TUNAI&quot;,
+                nama pengirimnya kosong, dan nomor referensinya berekor &quot;/52&quot;; lewat agen BSI
+                berbunyi &quot;LKP…CASH&quot;. Cocokkan hanya ke baris yang <b>jam atau nomor referensinya</b> sama
+                dengan slip, dan jangan ke baris yang sudah dipegang transaksi lain.
+              </p>
+            )}
             {buka.bertentangan ? (
               <p className="mt-2 text-xs text-sky-800">
                 Ada baris mutasi bernominal sama, tapi <b>jam DAN nama pengirim</b> di resi

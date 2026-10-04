@@ -35,6 +35,24 @@ export function sebabAlarmRef(sebab: unknown): boolean {
   return /resi bekas|\bREF\b/.test(t) || /nominal beda/i.test(t);
 }
 
+// ── SETOR KE PUSAT (5 Oktober 2026) ──
+//
+// Slip setoran kas tunai outlet ke rekening PT. KEPUTUSAN OWNER #14/#15:
+// yang tidak cocok BUKAN vonis "tidak ada di rekening" (tuduhan uang hilang)
+// — kreditnya belum ketemu / tidak bisa ditebak, owner mencocokkan sendiri
+// di /belum-cocok. Kalimat ini dipakai jalankanPass (daftar tidak ketemu)
+// dan laporan ini; SENGAJA tanpa kata "REF" / "resi bekas" / "nominal beda"
+// supaya sebabAlarmRef tidak salah mengenalinya sebagai alarm nomor resi.
+export const SEBAB_SETORAN_BELUM_KETEMU =
+  "setoran outlet → rek PT: kreditnya belum ketemu di mutasi — cocokkan manual di /belum-cocok";
+export const SEBAB_SETORAN_TIDAK_DITEBAK =
+  "setoran outlet → rek PT: tidak ditebak mesin — kredit bernominal sama tidak tunggal, ada klaim lain yang bersaing, atau barisnya sudah dipegang; cocokkan manual di /belum-cocok";
+export const SEBAB_REBUTAN_SETORAN =
+  "baris calonnya juga diakui SETORAN OUTLET bernominal sama — mesin tidak menebak; periksa di /belum-cocok";
+
+/** true = nomor transaksi milik SETOR KE PUSAT (STP-…). */
+const nomorSetoran = (no: unknown) => /^STP-/i.test(String(no ?? ""));
+
 const BULAN = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
 
 /** Tanggal kalender diperlakukan sebagai tanggal polos — diurai UTC, dibaca
@@ -200,6 +218,17 @@ export interface IsiLapis2 {
               tak: { n: number; rp: number }; menggantung: { n: number; rp: number };
               tertahan: { n: number; rp: number }; mati: { n: number; rp: number };
               daftar: { no_faktur: string; jenis: string; nominal: number; ket: string }[] }[];
+    /** SETORAN OUTLET → REK PT (sejak 5 Okt 2026): slip Setor ke Pusat, per
+     *  tanggal transaksi + per outlet ASAL. SUDAH termasuk di `tanggal` (pola
+     *  `pusat`) — hanya dipisah supaya laporan menyebutnya dengan namanya
+     *  sendiri; JANGAN dijumlah dua kali. undefined = gadai versi lama. */
+    setoran?: { tgl: string;
+                lahir: { n: number; rp: number }; cocok: { n: number; rp: number };
+                tak: { n: number; rp: number }; menggantung: { n: number; rp: number };
+                tertahan: { n: number; rp: number }; mati: { n: number; rp: number };
+                perOutlet?: Record<string, { lahir: { n: number; rp: number }; cocok: { n: number; rp: number };
+                                             tak: { n: number; rp: number } }>;
+                daftar: { klaim_id?: string; no_faktur: string; outlet: string; nominal: number; ket: string }[] }[];
   } | null;
   /** Sebab kenapa sandingan tidak bisa diambil. */
   sandinganGagal?: string | null;
@@ -212,7 +241,12 @@ export interface IsiLapis2 {
                   /** true = jam DAN nama resi membantah semua baris bebas
                    *  bernominal sama (1 Okt 2026, SJB-2-0056). Penanda di
                    *  atas `sebab`, bukan sebab baru — lihat jalankanPass. */
-                  bertentangan?: boolean }[];
+                  bertentangan?: boolean;
+                  /** SETOR KE PUSAT (5 Okt 2026) — penanda di atas `sebab`,
+                   *  sama seperti `bertentangan`. */
+                  setoran?: boolean;
+                  setoranTidakDitebak?: boolean;
+                  rebutanSetoran?: boolean }[];
   /** Baris mutasi yang pindah pemilik pada jalan ini — jejak, bukan alarm. */
   disepak?: { olehKlaimId: string; olehNoFaktur: string | null; pemegangKlaimId: string;
               pemegangMatchedBy: string | null; noRef: string | null; tanggal: string; kredit: number;
@@ -306,12 +340,22 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     // nama di resi membantahnya (SJB-2-0056: resi ANDINI SAHPUTRI 12:03,
     // baris MUHAMMAD SIDDIQ 12.15, dulu dicocokkan diam-diam). Ia dihitung di
     // ditahanKonflik juga, jadi dikurangkan dari "berebut" seperti tolak.
-    const nBertentangan = (isi.alasanKlaim ?? []).filter((a) => a.bertentangan === true).length;
-    const nTolak = (isi.alasanKlaim ?? []).filter((a) => a.sebab === "TOLAK_LINTAS_HARI" && a.bertentangan !== true).length;
-    const nBerebut = Math.max(0, Number(isi.ditahanKonflik ?? 0) - nTolak - nBertentangan);
+    // 5 Okt 2026 (SETOR KE PUSAT): dua lagi, juga bagian ditahanKonflik dan
+    // dikurangkan dari "berebut" — setoran yang tidak ditebak lewat nominal,
+    // dan resi nasabah yang barisnya juga diakui setoran. Sebab dasarnya
+    // BEREBUT (jalankanPass), penandanya yang membedakan.
+    const alasan = isi.alasanKlaim ?? [];
+    const perkaraSetoran = (a: (typeof alasan)[number]) => a.setoranTidakDitebak === true || a.rebutanSetoran === true;
+    const nSetoranTahan = alasan.filter((a) => a.setoranTidakDitebak === true).length;
+    const nRebutanSetoran = alasan.filter((a) => a.rebutanSetoran === true && a.setoranTidakDitebak !== true).length;
+    const nBertentangan = alasan.filter((a) => a.bertentangan === true && !perkaraSetoran(a)).length;
+    const nTolak = alasan.filter((a) => a.sebab === "TOLAK_LINTAS_HARI" && a.bertentangan !== true && !perkaraSetoran(a)).length;
+    const nBerebut = Math.max(0, Number(isi.ditahanKonflik ?? 0) - nTolak - nBertentangan - nSetoranTahan - nRebutanSetoran);
     if (nBerebut > 0) awas.push(`${nBerebut} resi belum bisa dinilai (berebut baris mutasi) — lihat "belum dijawab" di bawah`);
     if (nTolak > 0) awas.push(`${nTolak} resi tidak ditebak mesin: baris bernominal sama ADA dan MASIH BEBAS di hari lain — cocokkan manual di /belum-cocok`);
     if (nBertentangan > 0) awas.push(`${nBertentangan} resi tidak ditebak mesin: baris bernominal sama ada, tapi jam DAN nama di resi bertentangan — periksa di /belum-cocok`);
+    if (nSetoranTahan > 0) awas.push(`${nSetoranTahan} slip SETORAN OUTLET → rek PT tidak ditebak mesin (kredit bernominal sama tidak tunggal / ada pesaing / sudah dipegang) — cocokkan manual di /belum-cocok`);
+    if (nRebutanSetoran > 0) awas.push(`${nRebutanSetoran} resi tidak ditebak mesin: baris calonnya juga diakui SETORAN OUTLET bernominal sama — periksa di /belum-cocok`);
   }
   if (awas.length) {
     L.push("");
@@ -351,9 +395,11 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   // Sebab yang DIUCAPKAN: empat sebab jalankanPass, ditambah dua bentuk
   // "bertentangan" (dengan/tanpa baris hari resi dipegang klaim lain).
   type SebabUcap = "BEREBUT" | "TOLAK_LINTAS_HARI" | "LUAR_PERIODE" | "DISEPAK_TAK_KETEMU"
-    | "BERTENTANGAN" | "BERTENTANGAN_KEMBAR";
-  const sebabUcap = (a: { sebab: string; bertentangan?: boolean }): SebabUcap =>
-    a.bertentangan === true
+    | "BERTENTANGAN" | "BERTENTANGAN_KEMBAR" | "SETORAN_TIDAK_DITEBAK" | "REBUTAN_SETORAN";
+  const sebabUcap = (a: { sebab: string; bertentangan?: boolean; setoranTidakDitebak?: boolean; rebutanSetoran?: boolean }): SebabUcap =>
+    a.setoranTidakDitebak === true ? "SETORAN_TIDAK_DITEBAK"
+    : a.rebutanSetoran === true ? "REBUTAN_SETORAN"
+    : a.bertentangan === true
       ? (a.sebab === "BEREBUT" ? "BERTENTANGAN_KEMBAR" : "BERTENTANGAN")
       : (a.sebab as SebabUcap);
   const alasanOleh = new Map<string, SebabUcap>();
@@ -365,6 +411,8 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     : sebab === "TOLAK_LINTAS_HARI" ? "baris bernominal sama ADA dan MASIH BEBAS, tapi beda hari — mesin tidak menebak; cocokkan manual di /belum-cocok"
     : sebab === "LUAR_PERIODE" ? "di luar periode berkas — menunggu mutasi berikutnya"
     : sebab === "DISEPAK_TAK_KETEMU" ? "salah klaim sebelumnya, disepak oleh resi ber-referensi; pencocokan ulang TIDAK ketemu — cocokkan manual di /belum-cocok"
+    : sebab === "SETORAN_TIDAK_DITEBAK" ? SEBAB_SETORAN_TIDAK_DITEBAK
+    : sebab === "REBUTAN_SETORAN" ? SEBAB_REBUTAN_SETORAN
     : "belum dijawab Lapis 2";
   // Sebab per NOMOR KONTRAK juga — daftar "tidak ada di rekening" dari gadai
   // tidak membawa klaim_id, jadi pemasangannya lewat kontrak+nominal.
@@ -396,12 +444,21 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
              (x.sebab && x.sebab !== "tidak ada di rekening" ? ` — ${x.sebab}` : "")));
   } else {
     // Satu tanggal = dua arah. Digabung per tanggal supaya dibaca sekali duduk.
+    // takSetoran (5 Okt 2026): bagian UNMATCHED milik slip SETOR KE PUSAT.
+    // Dipisah dari "tidak ada di rekening" (KEPUTUSAN OWNER #14/#15: bukan
+    // vonis uang hilang — kreditnya belum ketemu, owner yang mencocokkan),
+    // tapi tetap ikut penjumlahan yang harus tutup.
     type Sisi = { total: { n: number; rp: number }; cocok: { n: number; rp: number };
-                  tak: { n: number; rp: number }; gantung: { n: number; rp: number };
+                  tak: { n: number; rp: number }; takSetoran: { n: number; rp: number };
+                  gantung: { n: number; rp: number };
                   tahan: { n: number; rp: number }; mati: { n: number; rp: number };
                   susulan: { n: number; rp: number }; ada: boolean };
-    const kosong = (): Sisi => ({ total: { ...sel0 }, cocok: { ...sel0 }, tak: { ...sel0 },
+    const kosong = (): Sisi => ({ total: { ...sel0 }, cocok: { ...sel0 }, tak: { ...sel0 }, takSetoran: { ...sel0 },
       gantung: { ...sel0 }, tahan: { ...sel0 }, mati: { ...sel0 }, susulan: { ...sel0 }, ada: false });
+    const setoranPerTgl = new Map<string, { n: number; rp: number }>();
+    for (const s of (Array.isArray(sd.setoran) ? sd.setoran : [])) {
+      if (s?.tgl && s.tak) setoranPerTgl.set(String(s.tgl), { n: Number(s.tak.n || 0), rp: Number(s.tak.rp || 0) });
+    }
     const perTgl = new Map<string, { masuk: Sisi; keluar: Sisi; baru: boolean }>();
     for (const t of sd.tanggal) {
       const g = perTgl.get(t.tgl) ?? { masuk: kosong(), keluar: kosong(), baru: false };
@@ -413,7 +470,12 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       x.ada = true;
       x.total = { n: lahir.n - D.n - Bt.n, rp: lahir.rp - D.rp - Bt.rp };
       x.cocok = { n: M.n, rp: M.rp };
-      x.tak = { n: U.n, rp: U.rp };
+      // Setoran selalu arah MASUK. Dibatasi U supaya data gadai yang aneh
+      // tidak pernah membuat "tidak ada di rekening" negatif.
+      const tS = arahKeluar(t.arah) ? sel0 : (setoranPerTgl.get(t.tgl) ?? sel0);
+      const nS = Math.min(U.n, tS.n), rpS = Math.min(U.rp, tS.rp);
+      x.takSetoran = { n: nS, rp: rpS };
+      x.tak = { n: U.n - nS, rp: U.rp - rpS };
       x.gantung = { n: t.menggantung.n, rp: t.menggantung.rp };
       x.tahan = { n: t.tertahan.n, rp: t.tertahan.rp };
       x.mati = { n: D.n + Bt.n, rp: D.rp + Bt.rp };
@@ -427,18 +489,29 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     // sudah pernah dibaca pemilik di laporan sebelumnya — cukup satu baris.
     const semuaTgl = [...perTgl.keys()].sort((a, b) => (a < b ? 1 : -1));
     const perlu = (g: { masuk: Sisi; keluar: Sisi; baru: boolean }) =>
-      g.baru || [g.masuk, g.keluar].some((x) => x.gantung.n > 0 || x.tak.n > 0 || x.tahan.n > 0);
+      g.baru || [g.masuk, g.keluar].some((x) => x.gantung.n > 0 || x.tak.n > 0 || x.takSetoran.n > 0 || x.tahan.n > 0);
     const penting = semuaTgl.filter((t) => perlu(perTgl.get(t)!));
     const tenang = semuaTgl.filter((t) => !perlu(perTgl.get(t)!));
 
     const cetakSisi = (label: string, x: Sisi, t: string, keluar: boolean) => {
       if (!x.ada || (x.total.n === 0 && x.mati.n === 0)) return;
       L.push(`   ${label.padEnd(7)}${String(x.total.n).padStart(3)} resi · ${rp(x.total.rp)}`);
-      const semuaCocok = x.tak.n === 0 && x.gantung.n === 0 && x.tahan.n === 0;
+      const semuaCocok = x.tak.n === 0 && x.takSetoran.n === 0 && x.gantung.n === 0 && x.tahan.n === 0;
       L.push(`      ✅ cocok di rekening  ${String(x.cocok.n).padStart(3)} · ${rp(x.cocok.rp)}` + (semuaCocok ? " — semua cocok" : ""));
+      if (x.takSetoran.n > 0) {
+        // Bukan "tidak ada di rekening": slip setoran outlet yang kreditnya
+        // belum ketemu — owner yang mencocokkan (KEPUTUSAN OWNER #14/#15).
+        L.push(`      🔎 setoran outlet belum ketemu kreditnya ${x.takSetoran.n} · ${rp(x.takSetoran.rp)} — cocokkan manual di /belum-cocok`);
+        const namaS = (sd.baruTakKetemu ?? []).filter((k) => k.tgl === t && !arahKeluar(k.arah) && nomorSetoran(k.no_faktur));
+        namaS.slice(0, 10).forEach((k) => {
+          const alarm = alarmOlehFaktur.get(`${k.no_faktur}|${Math.round(k.nominal)}`);
+          L.push(`         • ${k.no_faktur} · ${k.outlet} · ${rp(k.nominal)}` + (alarm ? ` — ${alarm}` : ""));
+        });
+      }
       if (x.tak.n > 0) {
         L.push(`      ⛔ tidak ada di rekening ${String(x.tak.n).padStart(2)} · ${rp(x.tak.rp)}`);
-        const nama = (sd.baruTakKetemu ?? []).filter((k) => k.tgl === t && arahKeluar(k.arah) === keluar);
+        const nama = (sd.baruTakKetemu ?? []).filter((k) => k.tgl === t && arahKeluar(k.arah) === keluar
+          && !(x.takSetoran.n > 0 && nomorSetoran(k.no_faktur)));
         nama.slice(0, 10).forEach((k) => {
           const kunci = `${k.no_faktur}|${Math.round(k.nominal)}`;
           const alarm = alarmOlehFaktur.get(kunci);
@@ -460,9 +533,10 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       if (x.mati.n > 0) L.push(`      ➖ dobel / dibatalkan ${x.mati.n} · ${rp(x.mati.rp)} — tidak dihitung, sama seperti Lapis 1`);
       // Penjumlahan ditutup di depan mata. Kalau tidak tutup, itu cacat laporan
       // ini sendiri dan harus berbunyi — bukan didiamkan.
-      const bagian = x.cocok.n + x.tak.n + x.gantung.n + x.tahan.n;
+      const bagian = x.cocok.n + x.tak.n + x.takSetoran.n + x.gantung.n + x.tahan.n;
       if (bagian !== x.total.n) {
-        L.push(`      🚨 jumlahnya TIDAK tutup: ${x.cocok.n}+${x.tak.n}+${x.gantung.n}+${x.tahan.n} = ${bagian}, bukan ${x.total.n}`);
+        const takTeks = x.takSetoran.n > 0 ? `${x.tak.n}+${x.takSetoran.n}` : `${x.tak.n}`;
+        L.push(`      🚨 jumlahnya TIDAK tutup: ${x.cocok.n}+${takTeks}+${x.gantung.n}+${x.tahan.n} = ${bagian}, bukan ${x.total.n}`);
       }
     };
 
@@ -517,6 +591,55 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       if (p.tertahan.n > 0) L.push(`      🚧 tertahan gerbang Lapis 1 ${p.tertahan.n} · ${rp(p.tertahan.rp)}`);
       (p.daftar ?? []).slice(0, 6).forEach((d) =>
         L.push(`         • ${d.no_faktur} · ${labelJenis(d.jenis)} · ${rp(d.nominal)} — ${d.ket}`));
+    }
+    if (bermasalah.length > 6) L.push(`   …dan ${bermasalah.length - 6} tanggal bermasalah lagi`);
+  }
+
+  // ── SETORAN OUTLET → REK PT (sejak 5 Oktober 2026) ──
+  //
+  // Slip "Setor ke Pusat": kas TUNAI outlet yang disetor kasir ke rekening PT
+  // (teller / CRM / agen BSI / m-banking). SUDAH ikut dihitung di blok per
+  // tanggal di atas (totalnya tetap tutup dengan Lapis 1); di sini hanya
+  // disebut terpisah, per tanggal dan per outlet ASAL, dengan namanya sendiri
+  // — bukan sebagai uang nasabah. Yang kreditnya belum ketemu BUKAN "tidak
+  // ada di rekening" (KEPUTUSAN OWNER #14/#15): owner mencocokkannya di
+  // /belum-cocok. Hanya dicetak kalau ada.
+  const setorSd = (sd && Array.isArray(sd.setoran)) ? sd.setoran.filter((p) => p.lahir.n - p.mati.n > 0) : [];
+  if (setorSd.length) {
+    // Kalimat gadai lama untuk UNMATCHED setoran ("tidak ada di rekening PT")
+    // diganti di sini juga — supaya gadai versi mana pun berbunyi sama.
+    const ketSetor = (ket: string) => /tidak ada di rekening/i.test(ket) ? SEBAB_SETORAN_BELUM_KETEMU.replace(/^setoran outlet → rek PT: /, "") : ket;
+    L.push("");
+    L.push(`🏦 SETORAN OUTLET → REK PT (sudah termasuk di atas)`);
+    const beres = setorSd.filter((p) => p.tak.n === 0 && p.menggantung.n === 0 && p.tertahan.n === 0);
+    const bermasalah = setorSd.filter((p) => !(p.tak.n === 0 && p.menggantung.n === 0 && p.tertahan.n === 0));
+    if (beres.length) {
+      const nB = beres.reduce((t, p) => t + (p.lahir.n - p.mati.n), 0);
+      const rpB = beres.reduce((t, p) => t + (p.lahir.rp - p.mati.rp), 0);
+      L.push(`   ✅ ${beres.length} tanggal semua ada di rekening PT: ${nB} setoran · ${rp(rpB)}` +
+             (beres.length <= 3 ? ` (${beres.map((p) => tgl(p.tgl)).join(", ")})` : ""));
+    }
+    for (const p of bermasalah.slice(0, 6)) {
+      const n = p.lahir.n - p.mati.n;
+      const rpN = p.lahir.rp - p.mati.rp;
+      L.push(`   ${tgl(p.tgl)}  ${n} setoran · ${rp(rpN)}`);
+      const per = Object.entries(p.perOutlet ?? {})
+        .filter(([, v]) => (v?.lahir?.n ?? 0) > 0)
+        .sort(([a], [b]) => (a < b ? -1 : 1));
+      if (per.length) {
+        L.push(`      ` + per.map(([o, v]) =>
+          `${o} ${v.lahir.n}·${rp(v.lahir.rp)}` + (v.tak.n > 0 ? ` (🔎${v.tak.n})` : v.cocok.n === v.lahir.n ? " ✅" : "")).join(" · "));
+      }
+      L.push(`      ✅ ada di rekening PT ${p.cocok.n} · ${rp(p.cocok.rp)}`);
+      if (p.tak.n > 0) L.push(`      🔎 kreditnya belum ketemu ${p.tak.n} · ${rp(p.tak.rp)} — cocokkan manual di /belum-cocok`);
+      if (p.menggantung.n > 0) L.push(`      ⏳ belum dijawab ${p.menggantung.n} · ${rp(p.menggantung.rp)}`);
+      if (p.tertahan.n > 0) L.push(`      🚧 tertahan gerbang Lapis 1 ${p.tertahan.n} · ${rp(p.tertahan.rp)}`);
+      (p.daftar ?? []).slice(0, 6).forEach((d) => {
+        // Yang ditahan pass INI disebut dengan sebab Lapis 2-nya sendiri.
+        const sb = d.klaim_id ? alasanOleh.get(String(d.klaim_id)) : undefined;
+        const ket = sb && /belum dijawab/i.test(d.ket) ? teksSebab(sb).replace(/^setoran outlet → rek PT: /, "") : ketSetor(d.ket);
+        L.push(`         • ${d.no_faktur} · ${d.outlet} · ${rp(d.nominal)} — ${ket}`);
+      });
     }
     if (bermasalah.length > 6) L.push(`   …dan ${bermasalah.length - 6} tanggal bermasalah lagi`);
   }

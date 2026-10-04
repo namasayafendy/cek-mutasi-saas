@@ -45,6 +45,9 @@ export interface TandaTolak {
    *  bernominal sama (ref_issue 'BERTENTANGAN…'). Belum dibaca layar mana
    *  pun; sebabnya sudah diucapkan lewat `sebab`. */
   bertentangan?: boolean;
+  /** true = klaim SETOR KE PUSAT yang tidak ditebak mesin (ref_issue
+   *  'SETORAN_TIDAK_DITEBAK', 5 Okt 2026). */
+  setoran?: boolean;
   sebab?: string;
 }
 
@@ -76,6 +79,20 @@ export async function tandaiTolakLintasHari(
       const r = terbaru.get(String(it.klaim_id));
       const ri = String(r?.ref_issue ?? "");
       if (!r || r.match_status !== "all_taken") continue;
+      // SETOR KE PUSAT (5 Okt 2026): perkara setoran, bukan beda hari — tidak
+      // ditandai tolakLintasHari (layar akan menyorot baris "bebas, beda
+      // hari" yang belum tentu milik setoran ini). Kalimat sebabnya saja.
+      if (ri === "SETORAN_TIDAK_DITEBAK" || ri === "REBUTAN_SETORAN") {
+        const tglS = (Array.isArray(r.conflict_dates) ? r.conflict_dates : []) as string[];
+        it.setoran = ri === "SETORAN_TIDAK_DITEBAK";
+        it.sebab = ri === "SETORAN_TIDAK_DITEBAK"
+          ? "setoran outlet → rek PT tidak ditebak mesin — kredit bernominal sama" +
+            (tglS.length ? ` (tgl ${tglS.join(", ")})` : "") +
+            " tidak tunggal, ada klaim lain yang bersaing, atau barisnya sudah dipegang; cocokkan hanya kalau jam/ref slip setoran sesuai"
+          : "tidak ditebak mesin — baris calonnya" + (tglS.length ? ` (tgl ${tglS.join(", ")})` : "") +
+            " juga diakui SETORAN OUTLET bernominal sama; periksa slip setorannya dulu";
+        continue;
+      }
       if (ri.startsWith("BERTENTANGAN")) {
         const tglB = (Array.isArray(r.conflict_dates) ? r.conflict_dates : []) as string[];
         it.bertentangan = true;
