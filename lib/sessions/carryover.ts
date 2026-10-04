@@ -55,6 +55,12 @@ export async function loadCarryoverPdfTxs(
     jenis: Jenis;
     fromDate: string;
     beforeDate: string;
+    /** Dipanggil kalau kolam TIDAK lengkap (kueri gagal / rem darurat).
+     *  Opsional — pemanggil lama tetap mendapat perilaku lama (daftar kosong
+     *  / terpotong tanpa lemparan). jalankanPass memakainya supaya tebakan
+     *  nominal SETOR KE PUSAT ("kredit tepat satu") tidak dinilai pada kolam
+     *  yang bolong (perbaikan tinjauan S7, 5 Okt 2026). */
+    onTidakLengkap?: (sebab: string) => void;
   },
 ): Promise<PdfTransaction[]> {
   const kumpul: any[] = [];
@@ -78,12 +84,16 @@ export async function loadCarryoverPdfTxs(
     const b = (r.data ?? []) as any[];
     kumpul.push(...b);
     if (b.length < HAL) break;
-    if (kumpul.length >= 20000) break;   // rem darurat
+    if (kumpul.length >= 20000) {         // rem darurat
+      args.onTidakLengkap?.("rem darurat 20.000 baris");
+      break;
+    }
   }
   const data = kumpul;
 
   if (error) {
     console.error("loadCarryoverPdfTxs error:", error.message);
+    args.onTidakLengkap?.(error.message);
     return [];
   }
 

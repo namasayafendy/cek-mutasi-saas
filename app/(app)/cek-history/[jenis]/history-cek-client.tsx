@@ -12,7 +12,7 @@ import type {
   Jenis,
   MatchRulePreset,
 } from "@/lib/types";
-import { runMatching, type MatchRules, DEFAULT_RULES } from "@/lib/matching";
+import { runMatching, adalahSetoran, type MatchRules, DEFAULT_RULES } from "@/lib/matching";
 import { createClient } from "@/lib/supabase/client";
 import { toDateISO, formatRupiah } from "@/lib/format";
 import {
@@ -235,9 +235,16 @@ export default function HistoryCekClient({
     setKirimBusy(true);
     try {
       const prefix = jenis === "debet" ? "TFKD-" : "TFK-";
-      const gadaiInputs = matchedInputs.filter((i) => String(i.id).startsWith(prefix));
+      // SETOR KE PUSAT (perbaikan tinjauan S7, KEPUTUSAN OWNER #15): vonis
+      // setoran TIDAK dikirim dari layar ini — kolamnya hanya baris bebas dan
+      // pengirimannya mendahului penguncian baris; penjaga anti double claim
+      // hanya ada di /proses. Setorannya tetap PENDING di gadai.
+      const nSetoran = matchedInputs.filter((i) => String(i.id).startsWith(prefix) && adalahSetoran(i)).length;
+      const gadaiInputs = matchedInputs.filter((i) => String(i.id).startsWith(prefix) && !adalahSetoran(i));
       if (gadaiInputs.length === 0) {
-        setKirimMsg("Tidak ada transfer dari Aceh Gadai di daftar ini.");
+        setKirimMsg(nSetoran > 0
+          ? `Tidak ada yang dikirim: ${nSetoran} setoran ke pusat hanya dinilai lewat /proses.`
+          : "Tidak ada transfer dari Aceh Gadai di daftar ini.");
         return;
       }
       const results = gadaiInputs.map((i) => ({
@@ -251,6 +258,7 @@ export default function HistoryCekClient({
       }
       setKirimMsg(
         `✅ Terkirim. ${res.updated} cocok, ${res.unmatched} belum ketemu.` +
+          (nSetoran > 0 ? ` (${nSetoran} setoran ke pusat tidak dikirim — dinilai lewat /proses)` : "") +
           (res.alertSent ? " Alert Telegram terkirim." : " (alert gagal terkirim)"),
       );
     } catch (e) {

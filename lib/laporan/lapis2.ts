@@ -46,7 +46,7 @@ export function sebabAlarmRef(sebab: unknown): boolean {
 export const SEBAB_SETORAN_BELUM_KETEMU =
   "setoran outlet → rek PT: kreditnya belum ketemu di mutasi — cocokkan manual di /belum-cocok";
 export const SEBAB_SETORAN_TIDAK_DITEBAK =
-  "setoran outlet → rek PT: tidak ditebak mesin — kredit bernominal sama tidak tunggal, ada klaim lain yang bersaing, atau barisnya sudah dipegang; cocokkan manual di /belum-cocok";
+  "setoran outlet → rek PT: tidak ditebak mesin — kredit bernominal sama tidak tunggal, ada klaim lain yang bersaing, dibantah jam slip, mutasinya belum lengkap, atau barisnya sudah dipegang; cocokkan manual di /belum-cocok";
 export const SEBAB_REBUTAN_SETORAN =
   "baris calonnya juga diakui SETORAN OUTLET bernominal sama — mesin tidak menebak; periksa di /belum-cocok";
 
@@ -354,7 +354,7 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     if (nBerebut > 0) awas.push(`${nBerebut} resi belum bisa dinilai (berebut baris mutasi) — lihat "belum dijawab" di bawah`);
     if (nTolak > 0) awas.push(`${nTolak} resi tidak ditebak mesin: baris bernominal sama ADA dan MASIH BEBAS di hari lain — cocokkan manual di /belum-cocok`);
     if (nBertentangan > 0) awas.push(`${nBertentangan} resi tidak ditebak mesin: baris bernominal sama ada, tapi jam DAN nama di resi bertentangan — periksa di /belum-cocok`);
-    if (nSetoranTahan > 0) awas.push(`${nSetoranTahan} slip SETORAN OUTLET → rek PT tidak ditebak mesin (kredit bernominal sama tidak tunggal / ada pesaing / sudah dipegang) — cocokkan manual di /belum-cocok`);
+    if (nSetoranTahan > 0) awas.push(`${nSetoranTahan} slip SETORAN OUTLET → rek PT tidak ditebak mesin (kredit bernominal sama tidak tunggal / ada pesaing / dibantah jam slip / mutasi belum lengkap / sudah dipegang) — cocokkan manual di /belum-cocok`);
     if (nRebutanSetoran > 0) awas.push(`${nRebutanSetoran} resi tidak ditebak mesin: baris calonnya juga diakui SETORAN OUTLET bernominal sama — periksa di /belum-cocok`);
   }
   if (awas.length) {
@@ -432,16 +432,29 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     // Tanpa angka gadai, yang bisa dikatakan hanya hitungan sisi ini — dan itu
     // dikatakan apa adanya, bukan disamarkan sebagai sandingan.
     L.push(`   ➖ angka dari Aceh Gadai tidak bisa diambil — di bawah ini hitungan Lapis 2 saja.`);
-    const nGagal = isi.tidakKetemu.length;
-    const rpGagal = isi.tidakKetemu.reduce((s, x) => s + (Number(x.nominal) || 0), 0);
+    // SETOR KE PUSAT (5 Okt 2026, KEPUTUSAN OWNER #14/#15): slip setoran yang
+    // kreditnya belum ketemu BUKAN "tidak ada di rekening" — dipisah ke baris
+    // sendiri, sama seperti cabang sandingan di bawah. Alarm REF milik setoran
+    // tetap di daftar "tidak ada di rekening" (kalimatnya sendiri yang keras).
+    const takSetoran = isi.tidakKetemu.filter((x) => x.sebab === SEBAB_SETORAN_BELUM_KETEMU);
+    const takLain = isi.tidakKetemu.filter((x) => x.sebab !== SEBAB_SETORAN_BELUM_KETEMU);
+    const nGagal = takLain.length;
+    const rpGagal = takLain.reduce((s, x) => s + (Number(x.nominal) || 0), 0);
+    const nSetor = takSetoran.length;
+    const rpSetor = takSetoran.reduce((s, x) => s + (Number(x.nominal) || 0), 0);
     L.push(`   diuji ${isi.nDiuji} resi · ${rp(isi.rpDiuji)}`);
-    L.push(`   ✅ cocok di rekening   ${isi.nDiuji - nGagal} · ${rp(isi.rpDiuji - rpGagal)}`);
+    L.push(`   ✅ cocok di rekening   ${isi.nDiuji - nGagal - nSetor} · ${rp(isi.rpDiuji - rpGagal - rpSetor)}`);
     L.push(`   ${nGagal > 0 ? "⛔" : "✅"} tidak ada di rekening ${nGagal} · ${rp(rpGagal)}`);
     // Sebabnya ikut kalau bukan kalimat baku — alarm REF ("kemungkinan resi
     // bekas") tidak boleh tercetak sama dengan uang yang memang tidak ada.
-    isi.tidakKetemu.slice(0, 15).forEach((x) =>
+    takLain.slice(0, 15).forEach((x) =>
       L.push(`      • ${x.no_faktur} · ${x.outlet} · ${tgl(x.tgl)} · ${rp(x.nominal)}` +
              (x.sebab && x.sebab !== "tidak ada di rekening" ? ` — ${x.sebab}` : "")));
+    if (nSetor > 0) {
+      L.push(`   🔎 setoran outlet belum ketemu kreditnya ${nSetor} · ${rp(rpSetor)} — cocokkan manual di /belum-cocok`);
+      takSetoran.slice(0, 10).forEach((x) =>
+        L.push(`      • ${x.no_faktur} · ${x.outlet} · ${tgl(x.tgl)} · ${rp(x.nominal)}`));
+    }
   } else {
     // Satu tanggal = dua arah. Digabung per tanggal supaya dibaca sekali duduk.
     // takSetoran (5 Okt 2026): bagian UNMATCHED milik slip SETOR KE PUSAT.

@@ -583,6 +583,11 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
 
   const maxLookback = Math.max(...rules.map((r) => r.lookback_days), 30);
   const awalBerkas = parseDateISO(periodStart);
+  // true = kolam carry-over TIDAK lengkap (gagal dimuat / terpotong). Vonis
+  // lama tetap berjalan seperti dulu; hanya tebakan nominal SETOR KE PUSAT
+  // ("kredit tepat satu") yang dimatikan — kembaran bebas di database bisa
+  // tidak terlihat (perbaikan tinjauan S7).
+  let kolamBolong = !awalBerkas;
   if (awalBerkas) {
     const dariTgl = new Date(awalBerkas);
     dariTgl.setUTCDate(dariTgl.getUTCDate() - maxLookback * 3);
@@ -601,6 +606,10 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
         accountId, bankId, jenis,
         fromDate: toDateISO(dariTgl),
         beforeDate: geserHari(akhirBerkas, 1),
+        onTidakLengkap: (sebab) => {
+          kolamBolong = true;
+          console.error("[pass] carry-over tidak lengkap — setoran tidak ditebak lewat nominal:", sebab);
+        },
       });
       // Saringan ganda. Kunci memakai tanggal+jam+nominal+ref, BUKAN nomor
       // baris — nomor baris hanya berarti di dalam satu berkas, jadi transaksi
@@ -620,6 +629,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       }
       if (ditambah > 0) console.info(`[pass] kolam ditambah ${ditambah} baris dari database`);
     } catch (e) {
+      kolamBolong = true;
       console.error("[pass] carry-over gagal dimuat:", e);
     }
   }
@@ -892,17 +902,35 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   // memuat = setoran TIDAK ditebak lewat nominal jalan ini (opsi dibiarkan
   // kosong → matching.ts menahannya untuk /belum-cocok). Berhalaman +
   // .order('id') supaya tidak pernah terpotong 1000 baris diam-diam.
-  let opsiSetoran: { terpegangLuar: { tanggalDate: Date; kredit: number; bankId: string | null; waktu: string | null }[] } | undefined;
+  //
+  // Perbaikan tinjauan S7:
+  //   * jendela muat = jendela SETORAN [tgl slip, tgl slip + maju] (tidak
+  //     mundur — dalamJendelaSetoran di matching.ts);
+  //   * cakupan berkas ikut dikirim: tebakan "kredit tepat satu" hanya sah
+  //     kalau seluruh jendela setoran ada di [batas bawah, akhir berkas] —
+  //     batas bawahnya SAMA PERSIS dengan saringan P3 di bawah (dinaikkan
+  //     kalau mutasi ini tidak nyambung dengan catatan terakhir);
+  //   * kolam carry-over yang bolong → setoran tidak ditebak lewat nominal.
+  let opsiSetoran: { terpegangLuar: { tanggalDate: Date; kredit: number; bankId: string | null; waktu: string | null }[];
+                     cakupan: { dari: Date; sampai: Date } | null } | undefined;
+  const batasBawahSetoran = ig?.connected === false ? geserHari(periodStart, maxLookback) : periodStart;
+  const cakupanSetoran = (() => {
+    const d = parseDateISO(batasBawahSetoran), s = parseDateISO(periodEnd);
+    return d && s ? { dari: d, sampai: s } : null;
+  })();
   if (jenis === "kredit") {
     const setoranIn = inputs.filter((i) => i.setoran === true && !i.sudahMemegang);
-    if (setoranIn.length) {
+    if (setoranIn.length && kolamBolong) {
+      console.error("[pass] kolam carry-over tidak lengkap — setoran tidak ditebak lewat nominal jalan ini");
+      opsiSetoran = undefined;
+    } else if (setoranIn.length) {
       try {
         const noms = [...new Set(setoranIn.map((i) => Number(i.nominal)))];
         let dari = "9999-12-31", sampai = "0000-01-01";
         for (const i of setoranIn) {
           const r = gadaiAwareRules(i, rulesById);
           const iso = toDateISO(i.tanggal);
-          const a = geserHari(iso, -Math.max(0, r.lookback_days));
+          const a = iso;
           const b = geserHari(iso, Math.max(0, r.forward_window_days));
           if (a < dari) dari = a;
           if (b > sampai) sampai = b;
@@ -936,13 +964,13 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
             if (rows.length < 1000) break;
           }
         }
-        opsiSetoran = { terpegangLuar };
+        opsiSetoran = { terpegangLuar, cakupan: cakupanSetoran };
       } catch (e) {
         console.error("[pass] baris terpegang untuk setoran gagal dimuat — setoran tidak ditebak lewat nominal:", e);
         opsiSetoran = undefined;
       }
     } else {
-      opsiSetoran = { terpegangLuar: [] };
+      opsiSetoran = { terpegangLuar: [], cakupan: cakupanSetoran };
     }
   }
 
@@ -1552,7 +1580,16 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     const tidakTerkunci = gagalBaca ? idCocok : idCocok.filter((id) => !terkunci.has(id));
     if (tidakTerkunci.length) {
       console.error("[pass] vonis cocok tanpa baris terkunci:", tidakTerkunci.slice(0, 20), gagalBaca ?? "");
-      if (dilepas.length) await batalkanPelepasan();
+      // Pelepasan (sepak) TIDAK dibalik di sini (perbaikan tinjauan S7).
+      // Sampai titik ini sesi sudah tersimpan dan verifikasi di atas sudah
+      // membuktikan setiap baris yang dilepas dipegang cek_inputs BARU milik
+      // pengusirnya. batalkanPelepasan() dirancang untuk keadaan SEBELUM itu:
+      // langkah klaim-ulangnya (CAS null / pemegang lama) gagal karena baris
+      // dipegang pengusir, sehingga baris tertinggal atas nama input yang
+      // sudah dihapus-lunak dan korban hidup lagi tanpa memegang apa pun.
+      // Sama seperti KIRIM_GAGAL: keadaan basis data dibiarkan apa adanya
+      // (konsisten — satu baris satu pemegang hidup), vonis tidak dikirim,
+      // dan jalan berikutnya mengirim yang sudah terkunci lewat SESI_LAMA.
       hasil.batal = {
         kode: "GAGAL_SIMPAN_SESI",
         pesan: gagalBaca

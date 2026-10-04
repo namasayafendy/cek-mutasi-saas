@@ -309,8 +309,29 @@ export type RunMatchingOptions = {
    */
   setoran?: {
     terpegangLuar: { tanggalDate: Date; kredit: number; bankId?: string | null; waktu?: string | null }[];
+    /** Rentang tanggal yang kolamnya LENGKAP (perbaikan tinjauan S7): batas
+     *  bawah = awal berkas (dinaikkan kalau mutasinya tidak nyambung dengan
+     *  catatan terakhir), batas atas = akhir berkas. Syarat "kredit tepat
+     *  satu" hanya bermakna kalau SELURUH jendela setoran ada di dalamnya —
+     *  kredit yang baru dibukukan sesudah akhir berkas belum terlihat.
+     *  Kosong = tidak diketahui → setoran TIDAK ditebak lewat nominal saja. */
+    cakupan?: { dari: Date; sampai: Date } | null;
   };
 };
+
+/** Jendela tanggal BARIS untuk klaim SETOR KE PUSAT (perbaikan tinjauan S7):
+ *  [tanggal slip, tanggal slip + maju]. Tidak pernah mundur: tanggal setoran
+ *  di cek-mutasi adalah tanggal SLIP (gerbang Lapis 1 menahan slip yang
+ *  tanggalnya tak terbaca / di luar [tgl−1, tgl]), dan kredit yang dibukukan
+ *  SEBELUM uangnya disetor mustahil milik setoran itu — tanpa batas ini uang
+ *  lama tak bertuan atau uang nasabah yang klaimnya belum lahir bisa
+ *  "membuktikan" kas outlet −N yang tidak pernah disetor. Maju mengikuti
+ *  aturan klaimnya (TFK- 1 hari: setoran sore / agen akhir pekan dibukukan
+ *  esoknya). `days` = diffDays(tanggal klaim, tanggal baris). */
+export function dalamJendelaSetoran(days: number, rules: Pick<MatchRules, "forward_window_days">): boolean {
+  const maju = Math.max(0, Number(rules.forward_window_days ?? 0) || 0);
+  return days === 0 || (days < 0 && Math.abs(days) <= maju);
+}
 
 // ── SETOR KE PUSAT (5 Oktober 2026) ─────────────────────────────────────
 //
@@ -331,16 +352,23 @@ export type RunMatchingOptions = {
 //                      yang tanggalnya wajib [tgl−1, tgl]); hari yang sama
 //                      tetap tertangkap PASS 3;
 //   PASS 3 NOMINAL+JAM — hanya bila di hari itu dalam ±5 menit ada TEPAT
-//                      SATU kredit bernominal sama (terpegang atau tidak) dan
-//                      tidak ada klaim lain yang bisa mengakuinya;
+//                      SATU kredit bernominal sama (terpegang atau tidak),
+//                      tidak ada klaim lain yang bisa mengakuinya, pemanggil
+//                      memuat baris terpegang di luar kolam, dan REF slip
+//                      tidak menunjuk baris bernominal beda;
 //   PASS 3b NAMA     — dilewati (nama baris teller kosong; nama agen = nama
 //                      penyetor, bukan bukti tujuan);
-//   PASS 4 NOMINAL   — hanya bila dalam jendela aturan ada TEPAT SATU kredit
-//                      bernominal sama (dihitung SEMUA: bebas, terpegang di
-//                      kolam, terpegang di luar kolam), bebas, tidak dibantah
-//                      jam+nama resinya, dan tidak ada klaim lain di jalan ini
-//                      yang jendelanya juga mencakup baris itu. Selain itu
-//                      all_taken + setoranTidakDitebak (DITAHAN → /belum-cocok).
+//   PASS 4 NOMINAL   — hanya bila dalam jendela SETORAN [tgl slip, tgl slip
+//                      + maju] (tidak mundur — dalamJendelaSetoran) ada TEPAT
+//                      SATU kredit bernominal sama (dihitung SEMUA: bebas,
+//                      terpegang di kolam, terpegang di luar kolam), bebas,
+//                      tidak dibantah (REF_NOMINAL_BEDA, jam slip meleset >5
+//                      menit di hari yang sama, jam+nama resi), jendelanya
+//                      seluruhnya di dalam cakupan berkas, dan tidak ada klaim
+//                      lain di jalan ini yang jendelanya juga mencakup baris
+//                      itu. Selain itu all_taken + setoranTidakDitebak
+//                      (DITAHAN → /belum-cocok; yang membawa REF_NOMINAL_BEDA
+//                      dikirim sebagai alarm REF).
 // Setoran TETAP dihitung di `rebutan` seperti klaim lain, supaya penjaga
 // anti-tebak-lintas-hari klaim nasabah tidak melonggar karena kehadirannya.
 
@@ -449,7 +477,10 @@ export function runMatching(
       if (!lewatiBank && j.bankId && tx.bankId && j.bankId !== tx.bankId) return false;
       if (!nominalMatches(j.nominal, tx.kredit, rj)) return false;
       const days = diffDays(j.tanggal, tx.tanggalDate);
-      const dalam = (days >= 0 && days <= rj.lookback_days) || (days < 0 && Math.abs(days) <= rj.forward_window_days);
+      // Pesaing SETORAN dinilai dengan jendela setoran sendiri (tidak mundur).
+      const dalam = adalahSetoran(j)
+        ? dalamJendelaSetoran(days, rj)
+        : (days >= 0 && days <= rj.lookback_days) || (days < 0 && Math.abs(days) <= rj.forward_window_days);
       if (!dalam) return false;
       if (pakaiJam) {
         const jj = jamToMinutes(j.jamResi);
@@ -755,6 +786,13 @@ export function runMatching(
     // baris itu. Ragu = diam; PASS 4 setoran yang memutuskan (dan pada
     // keadaan yang sama ia juga menolak menebak → /belum-cocok).
     if (adalahSetoran(input)) {
+      // Perbaikan tinjauan S7: pemanggil yang tidak memuat baris terpegang di
+      // luar kolam (layar /check lama, Riwayat Cek) tidak pernah menebak
+      // setoran — sama seperti PASS 4. Dan REF slip yang sudah menunjuk baris
+      // bernominal LAIN (REF_NOMINAL_BEDA: AI salah baca angka di slip kertas,
+      // atau kasir menyetor kurang) adalah bantahan — jangan ambil kredit
+      // bernominal sama milik orang lain; PASS 4 menahannya sebagai alarm.
+      if (setoranLuar === null || pendingRefIssue[idx]) return;
       const sejam = (jt: number | null) => jt === null || Math.abs(jt - jamInput) <= PASS3_JAM_TOLERANSI_MENIT;
       const semuaSejam = transactions.filter((tx) => {
         if (!skipBankFilter && input.bankId && tx.bankId && input.bankId !== tx.bankId) return false;
@@ -904,11 +942,12 @@ export function runMatching(
     // ganda tetap ditebak (urutan baris PDF) dan hanya ditandai `ambiguous`.
     // Untuk setoran, kredit kembar = tidak ada yang tahu mana miliknya.
     if (adalahSetoran(input)) {
+      // Jendela SETORAN: [tgl slip, tgl slip + maju] — tidak mundur (lihat
+      // dalamJendelaSetoran).
       const dalamJendela = (t: { tanggalDate: Date; kredit: number; bankId?: string | null }) => {
         if (!skipBankFilter && input.bankId && t.bankId && input.bankId !== t.bankId) return false;
         if (!nominalMatches(input.nominal, t.kredit, rules)) return false;
-        const days = diffDays(input.tanggal, t.tanggalDate);
-        return (days >= 0 && days <= rules.lookback_days) || (days < 0 && Math.abs(days) <= rules.forward_window_days);
+        return dalamJendelaSetoran(diffDays(input.tanggal, t.tanggalDate), rules);
       };
       // SEMUA kredit bernominal sama di jendela: bebas, terpegang di kolam,
       // diambil klaim lain pada jalan ini, dan terpegang di luar kolam.
@@ -922,10 +961,37 @@ export function runMatching(
         diffDays(input.tanggal, tx.tanggalDate) === 0 && (tx.claimedByOther || claimed.has(txKey(tx))))
         || luar.some((t) => diffDays(input.tanggal, t.tanggalDate) === 0);
       const tunggal = setoranLuar !== null && semua.length === 1 && luar.length === 0 && bebas.length === 1;
-      if (tunggal && !resiBertentangan(input, bebas[0]) && !pesaingSetoran(idx, bebas[0], false)) {
-        const match = buildMatched(input, bebas[0], "NOMINAL");
-        if (pendingRefIssue[idx]) match.refIssue = pendingRefIssue[idx];
-        return { ...input, match };
+      // ── Bukti yang MEMBANTAH tebakan (perbaikan tinjauan S7) ──
+      // resiBertentangan() mensyaratkan nama di dua sisi, sedangkan baris
+      // teller tidak punya nama — jadi untuk setoran ia praktis tidak pernah
+      // menyala. Bantahan setoran dinilai sendiri, masing-masing cukup untuk
+      // menahan (→ /belum-cocok, bukan menebak):
+      //   (1) REF slip sudah menunjuk baris bernominal BEDA (REF_NOMINAL_BEDA)
+      //       — bukti terkuatnya berkata uangnya di baris lain;
+      //   (2) jam slip DAN jam baris terbaca di HARI YANG SAMA dan berselisih
+      //       >5 menit — sama dengan pagar (e): jam meleset = bukan baris
+      //       setoran ini (beda hari tidak dinilai jamnya: pembukuan esok hari);
+      //   (3) jendela setoran tidak seluruhnya di dalam cakupan berkas — kredit
+      //       kembarnya bisa saja belum terlihat (dibukukan sesudah akhir
+      //       berkas / jatuh di lubang sebelum awal berkas).
+      const jamSlip = jamToMinutes(input.jamResi);
+      const jamDibantah = (tx: PdfTransaction) => {
+        if (jamSlip === null || diffDays(input.tanggal, tx.tanggalDate) !== 0) return false;
+        const jt = jamToMinutes(tx.waktu);
+        return jt !== null && Math.abs(jt - jamSlip) > PASS3_JAM_TOLERANSI_MENIT;
+      };
+      const cakupan = options?.setoran?.cakupan ?? null;
+      const tercakup = (() => {
+        if (!cakupan) return false;
+        const maju = Math.max(0, Number(rules.forward_window_days ?? 0) || 0);
+        const ujung = new Date(input.tanggal.getTime());
+        ujung.setUTCDate(ujung.getUTCDate() + maju);
+        // diffDays dipakai supaya jam di dalam Date tidak ikut menentukan.
+        return diffDays(input.tanggal, cakupan.dari) >= 0 && diffDays(ujung, cakupan.sampai) <= 0;
+      })();
+      if (tunggal && !pendingRefIssue[idx] && tercakup && !jamDibantah(bebas[0]) &&
+          !resiBertentangan(input, bebas[0]) && !pesaingSetoran(idx, bebas[0], false)) {
+        return { ...input, match: buildMatched(input, bebas[0], "NOMINAL") };
       }
       // DITAHAN → /belum-cocok. Yang disebut "masih bebas" hanya baris bebas;
       // kalau tidak ada satu pun, ini bentrok biasa (semua sudah dipegang).

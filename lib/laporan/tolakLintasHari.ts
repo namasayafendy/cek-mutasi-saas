@@ -88,7 +88,7 @@ export async function tandaiTolakLintasHari(
         it.sebab = ri === "SETORAN_TIDAK_DITEBAK"
           ? "setoran outlet → rek PT tidak ditebak mesin — kredit bernominal sama" +
             (tglS.length ? ` (tgl ${tglS.join(", ")})` : "") +
-            " tidak tunggal, ada klaim lain yang bersaing, atau barisnya sudah dipegang; cocokkan hanya kalau jam/ref slip setoran sesuai"
+            " tidak tunggal, ada klaim lain yang bersaing, jam slip membantah, mutasinya belum lengkap, atau barisnya sudah dipegang; cocokkan hanya kalau jam/ref slip setoran sesuai"
           : "tidak ditebak mesin — baris calonnya" + (tglS.length ? ` (tgl ${tglS.join(", ")})` : "") +
             " juga diakui SETORAN OUTLET bernominal sama; periksa slip setorannya dulu";
         continue;

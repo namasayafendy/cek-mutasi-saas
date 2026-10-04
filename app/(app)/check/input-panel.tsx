@@ -45,7 +45,13 @@ export function InputPanel({
         setPullMsg("❌ " + res.error);
         return;
       }
+      // Pemegang lemah (sudahMemegang: sudah MATCHED di gadai, dibawa tarikan
+      // hanya sebagai kandidat korban aturan sepak di /proses) BUKAN klaim
+      // untuk dinilai ulang di layar ini — tanpa saringan ini ia dicocokkan
+      // ulang sebagai klaim biasa dan bisa memegang baris kedua (perbaikan
+      // tinjauan S7).
       const conv: UserInput[] = res.inputs
+        .filter((i) => i.sudahMemegang !== true)
         .map((i) => {
           const dt = parseDateISO(i.tanggalISO);
           if (!dt || !i.nominal) return null;
@@ -60,9 +66,11 @@ export function InputPanel({
             jamResi: i.jamResi,
             namaPengirimResi: i.namaPengirimResi,
             // Setoran ke pusat ikut dikenali di layar ini juga, supaya ia
-            // tidak pernah ditebak lewat nominal saja (layar ini tidak memuat
-            // baris terpegang di luar kolam, jadi PASS 4 setoran selalu menolak).
+            // tidak pernah ditebak lewat nominal (layar ini tidak memuat baris
+            // terpegang di luar kolam, jadi PASS 3/PASS 4 setoran selalu
+            // menolak) dan vonisnya tidak dikirim dari layar ini (hanya /proses).
             setoran: i.setoran === true,
+            noFaktur: i.noFaktur ?? null,
           } as UserInput;
         })
         .filter((x): x is UserInput => x !== null);

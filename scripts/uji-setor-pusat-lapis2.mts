@@ -50,7 +50,9 @@ const harap = (label: string, ok: boolean, rinci = "") => {
   if (ok) lulus++; else gagal++;
   console.log(`${ok ? "✅" : "❌"} ${label}${rinci ? "  — " + rinci : ""}`);
 };
-const OPSI_SETORAN = { terpegangLuar: [] as any[] };
+// Cakupan berkas lebar — kasus yang menguji cakupan memberikannya sendiri.
+const CAKUPAN_LEBAR = { dari: new Date("2026-01-01T12:00:00Z"), sampai: new Date("2026-12-31T12:00:00Z") };
+const OPSI_SETORAN = { terpegangLuar: [] as any[], cakupan: CAKUPAN_LEBAR };
 const jalan = (inputs: UserInput[], txs: PdfTransaction[], setoran: any = OPSI_SETORAN) =>
   runMatching(inputs, txs, new Map(), { getRulesForInput: () => ATURAN, nama: { terpegangLuar: [] }, setoran });
 const hasil = (out: UserInput[], id: string) => out.find((x) => x.id === id)!.match as any;
@@ -122,17 +124,17 @@ console.log("── 1. matcher setoran (data tiruan) ──");
   harap("E. tanpa opsi setoran (layar /check lama) → DITAHAN, bukan tebakan", m.status === "all_taken" && m.setoranTidakDitebak === true, ringkas(m));
 }
 {
-  // F. Kredit bulat KEMBAR di jendela (20 jt tgl 7 & 8 Jul — data nyata) → DITAHAN.
+  // F. Kredit bulat KEMBAR di jendela setoran (20 jt tgl 7 & 8 Jul — data nyata) → DITAHAN.
   const t1 = tx("2026-07-07", "17.24", 20_000_000, "EFENDY");
   const t2 = tx("2026-07-08", "15.49", 20_000_000, "SULAIMAN T");
-  const o = jalan([stp("TFK-1-F", "2026-07-08", 20_000_000)], [t1, t2]).inputs;
+  const o = jalan([stp("TFK-1-F", "2026-07-07", 20_000_000)], [t1, t2]).inputs;
   const m = hasil(o, "TFK-1-F");
   harap("F. dua kredit 20 jt dalam jendela → DITAHAN, tidak menebak yang hari sama", m.status === "all_taken" && m.setoranTidakDitebak && m.conflictCount === 2, ringkas(m));
 }
 {
   // G. Kredit tunggal di kolam, tapi kembarannya sudah DIPEGANG di luar kolam → DITAHAN.
   const t = tx("2026-09-08", "14.45", 25_000_000, "");
-  const luar = { terpegangLuar: [{ tanggalDate: new Date("2026-09-06T12:00:00Z"), kredit: 25_000_000, bankId: "bank-1", waktu: "10.00" }] };
+  const luar = { terpegangLuar: [{ tanggalDate: new Date("2026-09-09T12:00:00Z"), kredit: 25_000_000, bankId: "bank-1", waktu: "10.00" }], cakupan: CAKUPAN_LEBAR };
   const o = jalan([stp("TFK-1-G", "2026-09-08", 25_000_000)], [t], luar).inputs;
   const m = hasil(o, "TFK-1-G");
   harap("G. kembaran terpegang di luar kolam ikut dihitung → DITAHAN", m.status === "all_taken" && m.setoranTidakDitebak === true, ringkas(m));
@@ -281,13 +283,90 @@ console.log("── 1. matcher setoran (data tiruan) ──");
         tanpaKlaimGanda(r.inputs, txs, r.summary.disepak) ?? "");
   const ms = (id: string) => hasil(r.inputs, id);
   harap("P. P1 25 jt tunggal → NOMINAL", ms("TFK-1-P1").matchedBy === "NOMINAL", ringkas(ms("TFK-1-P1")));
-  harap("P. P2 20 jt (kembar 14 Sep dalam jendela? tidak — jendela 6-10 Sep) → NOMINAL", ms("TFK-1-P2").matchedBy === "NOMINAL", ringkas(ms("TFK-1-P2")));
+  harap("P. P2 20 jt (kembar 14 Sep dalam jendela? tidak — jendela setoran 9-10 Sep) → NOMINAL", ms("TFK-1-P2").matchedBy === "NOMINAL", ringkas(ms("TFK-1-P2")));
   harap("P. P3 berjam → NOMINAL_JAM", ms("TFK-1-P3").matchedBy === "NOMINAL_JAM", ringkas(ms("TFK-1-P3")));
   harap("P. P4 10 jt kembar di hari itu → DITAHAN", ms("TFK-1-P4").setoranTidakDitebak === true, ringkas(ms("TFK-1-P4")));
   harap("P. P6 14 jt tunggal → NOMINAL", ms("TFK-1-P6").matchedBy === "NOMINAL", ringkas(ms("TFK-1-P6")));
   harap("P. P7 20 jt satu-satunya sudah dipegang → tidak diambil", ms("TFK-1-P7").status === "all_taken", ringkas(ms("TFK-1-P7")));
   harap("P. P8 nasabah nama+jam → NAMA_JAM (setoran tidak mengganggu bukti kuat)", ms("TFK-2-P8").matchedBy === "NAMA_JAM", ringkas(ms("TFK-2-P8")));
   harap("P. adalahSetoran mengenali nomor STP- tanpa medan setoran", adalahSetoran({ noFaktur: "STP-20261005-ABCDE" } as any) && !adalahSetoran({ noFaktur: "SBR-1-0001" } as any));
+}
+
+// ── Perbaikan tinjauan S7: bantahan, jendela setoran, cakupan berkas ──
+{
+  // Q. REF slip menunjuk baris bernominal BEDA (AI salah baca angka di slip
+  //    kertas / kasir menyetor kurang) → JANGAN ambil kredit bernominal sama
+  //    milik orang lain; tahan dengan refIssue (dikirim sebagai alarm REF).
+  no = 0;
+  const tRef = tx("2026-10-04", "10.05", 15_000_000, "", { noRef: "FT26278ABCDE\P28/52" });
+  const tBudi = tx("2026-10-04", "13.00", 10_000_000, "BUDI");
+  const o = jalan([stp("TFK-1-Q", "2026-10-04", 10_000_000, { refFt: "FT26278ABCDE" })], [tRef, tBudi]).inputs;
+  const m = hasil(o, "TFK-1-Q");
+  harap("Q. REF_NOMINAL_BEDA + satu kredit 10 jt lain → TIDAK ditebak (all_taken, refIssue terbawa)",
+        m.status === "all_taken" && m.refIssue === "REF_NOMINAL_BEDA" && m.setoranTidakDitebak === true, ringkas(m));
+  // Q2. Varian berjam (jam slip = jam baris BUDI) → tidak lewat NOMINAL_JAM juga.
+  const o2 = jalan([stp("TFK-1-Q2", "2026-10-04", 10_000_000, { refFt: "FT26278ABCDE", jamResi: "13:00" })],
+    [tx("2026-10-04", "10.05", 15_000_000, "", { noRef: "FT26278ABCDE\P28/52" }), tx("2026-10-04", "13.00", 10_000_000, "BUDI")]).inputs;
+  const m2 = hasil(o2, "TFK-1-Q2");
+  harap("Q2. REF_NOMINAL_BEDA berjam → TIDAK lewat NOMINAL_JAM", m2.status !== "matched" && m2.refIssue === "REF_NOMINAL_BEDA", ringkas(m2));
+  // Q3. REF_NOMINAL_BEDA tanpa kredit bernominal sama → no_candidate + refIssue.
+  const o3 = jalan([stp("TFK-1-Q3", "2026-10-04", 11_000_000, { refFt: "FT26278ABCDE" })],
+    [tx("2026-10-04", "10.05", 15_000_000, "", { noRef: "FT26278ABCDE\P28/52" })]).inputs;
+  const m3 = hasil(o3, "TFK-1-Q3");
+  harap("Q3. REF_NOMINAL_BEDA tanpa kredit sama → no_candidate + refIssue", m3.status === "no_candidate" && m3.refIssue === "REF_NOMINAL_BEDA", ringkas(m3));
+}
+{
+  // R. Jam slip terbaca, satu-satunya kredit di hari yang sama jamnya meleset jauh → DITAHAN.
+  const o = jalan([stp("TFK-1-R", "2026-10-04", 10_000_000, { jamResi: "10:00" })],
+    [tx("2026-10-04", "15.40", 10_000_000, "SITI AMINAH")]).inputs;
+  const m = hasil(o, "TFK-1-R");
+  harap("R. jam slip 10:00 vs kredit tunggal 15.40 hari sama → DITAHAN (jam membantah)",
+        m.status === "all_taken" && m.setoranTidakDitebak === true && m.barisBebas === true, ringkas(m));
+  // R2. Jam slip sore, kredit tunggal ESOK hari (pembukuan esok) → jam tidak dinilai, NOMINAL.
+  const o2 = jalan([stp("TFK-1-R2", "2026-10-04", 10_000_000, { jamResi: "16:00" })],
+    [tx("2026-10-05", "08.10", 10_000_000, "")]).inputs;
+  harap("R2. kredit tunggal esok hari → NOMINAL (jam beda hari tidak membantah)", hasil(o2, "TFK-1-R2").matchedBy === "NOMINAL", ringkas(hasil(o2, "TFK-1-R2")));
+}
+{
+  // S. Kredit bernominal sama SEBELUM tanggal slip → mustahil milik setoran.
+  const o = jalan([stp("TFK-1-S", "2026-10-02", 55_000_000, { jamResi: "10:00" })],
+    [tx("2026-09-29", "10.08", 55_000_000, "", { noRef: "FT262721W46G\P28/52", deskripsi: "SETR" })]).inputs;
+  const m = hasil(o, "TFK-1-S");
+  harap("S. satu-satunya kredit 3 hari SEBELUM slip → tidak diambil (no_candidate)", m.status === "no_candidate", ringkas(m));
+  // S2. Kredit H-1 + kredit hari slip → hanya hari slip yang dihitung → NOMINAL ke hari slip.
+  const o2 = jalan([stp("TFK-1-S2", "2026-10-02", 20_000_000)],
+    [tx("2026-10-01", "15.00", 20_000_000, "ANDI"), tx("2026-10-02", "11.00", 20_000_000, "")]).inputs;
+  const m2 = hasil(o2, "TFK-1-S2");
+  harap("S2. kredit H-1 tidak masuk jendela setoran → NOMINAL ke baris hari slip", m2.matchedBy === "NOMINAL" && tglOf(m2) === "2026-10-02", ringkas(m2));
+  // S3. Pesaing setoran juga memakai jendela setoran: setoran tgl 3 Okt BUKAN
+  //     pesaing nasabah atas baris 2 Okt (setoran tidak mundur).
+  const o3 = jalan([inp("TFK-2-S3", "2026-10-02", 7_000_000), stp("TFK-1-S3", "2026-10-03", 7_000_000)],
+    [tx("2026-10-02", "09.00", 7_000_000, "")]).inputs;
+  harap("S3. setoran 3 Okt bukan pesaing baris 2 Okt → nasabah cocok, setoran no_candidate",
+        hasil(o3, "TFK-2-S3").status === "matched" && hasil(o3, "TFK-1-S3").status === "no_candidate",
+        `${ringkas(hasil(o3, "TFK-2-S3"))} | ${ringkas(hasil(o3, "TFK-1-S3"))}`);
+}
+{
+  // T. Cakupan berkas: jendela setoran [tgl, tgl+1] harus seluruhnya di dalam berkas.
+  const cak = { dari: new Date("2026-10-01T12:00:00Z"), sampai: new Date("2026-10-05T12:00:00Z") };
+  const mk = (iso: string) => [tx(iso, "11.00", 20_000_000, "")];
+  const ok = jalan([stp("TFK-1-T1", "2026-10-04", 20_000_000)], mk("2026-10-04"), { terpegangLuar: [], cakupan: cak }).inputs;
+  harap("T1. tgl 4 Okt, berkas 1-5 Okt (jendela 4-5 tercakup) → NOMINAL", hasil(ok, "TFK-1-T1").matchedBy === "NOMINAL", ringkas(hasil(ok, "TFK-1-T1")));
+  const ujung = jalan([stp("TFK-1-T2", "2026-10-05", 20_000_000)], mk("2026-10-05"), { terpegangLuar: [], cakupan: cak }).inputs;
+  harap("T2. tgl 5 Okt = akhir berkas (kredit 6 Okt belum terlihat) → DITAHAN",
+        hasil(ujung, "TFK-1-T2").status === "all_taken" && hasil(ujung, "TFK-1-T2").setoranTidakDitebak === true, ringkas(hasil(ujung, "TFK-1-T2")));
+  const awal = jalan([stp("TFK-1-T3", "2026-09-30", 20_000_000)], mk("2026-10-01"), { terpegangLuar: [], cakupan: cak }).inputs;
+  harap("T3. tgl sebelum awal berkas → DITAHAN", hasil(awal, "TFK-1-T3").status === "all_taken", ringkas(hasil(awal, "TFK-1-T3")));
+  const tanpa = jalan([stp("TFK-1-T4", "2026-10-04", 20_000_000)], mk("2026-10-04"), { terpegangLuar: [] }).inputs;
+  harap("T4. cakupan tidak diketahui → DITAHAN", hasil(tanpa, "TFK-1-T4").status === "all_taken", ringkas(hasil(tanpa, "TFK-1-T4")));
+}
+{
+  // U. Pemanggil tanpa baris terpegang luar kolam (layar /check, Riwayat Cek)
+  //    → PASS 3 setoran juga diam (dulu hanya PASS 4).
+  const o = runMatching([stp("TFK-1-U", "2026-10-04", 20_000_000, { jamResi: "10:08" })], [tx("2026-10-04", "10.08", 20_000_000, "")], new Map(),
+    { getRulesForInput: () => ATURAN }).inputs;
+  const m = hasil(o, "TFK-1-U");
+  harap("U. tanpa opsi setoran, jam cocok → TIDAK lewat NOMINAL_JAM (DITAHAN)", m.status === "all_taken" && m.setoranTidakDitebak === true, ringkas(m));
 }
 
 // ═══════════ 2. PEMBANDING ACAK: tanpa setoran = matcher lama ═══════════
@@ -341,7 +420,7 @@ if (lama) {
       return { txs: tandaiAwal(txs), ins };
     };
     const opsi = (stp: boolean) => ({ getRulesForInput: () => ATURAN, nama: { terpegangLuar: [] },
-                                      ...(stp ? { setoran: { terpegangLuar: [] } } : {}) });
+                                      ...(stp ? { setoran: { terpegangLuar: [], cakupan: CAKUPAN_LEBAR } } : {}) });
     // (a) tanpa setoran: baru vs lama, dengan & tanpa opsi setoran.
     const a = bangun(new Set());
     const b = bangun(new Set());
@@ -370,7 +449,7 @@ if (lama) {
         if (!ids.has(String(x.id)) || x.match?.status !== "matched" || x.match.matchedBy !== "NOMINAL") return false;
         const sama = d.txs.filter((t) => t.kredit === x.nominal && (() => {
           const dd = Math.round((x.tanggal.getTime() - t.tanggalDate.getTime()) / 86_400_000);
-          return (dd >= 0 && dd <= 3) || (dd < 0 && dd >= -1);
+          return dd === 0 || dd === -1;   // jendela setoran [tgl slip, +1]
         })());
         return sama.length !== 1;
       });
@@ -462,6 +541,23 @@ const isiDasar = (): IsiLapis2 => ({
   if (gagal) console.log(teks);
 }
 
+// 3c. Laporan CADANGAN (sandingan gadai gagal diambil): setoran yang kreditnya
+//     belum ketemu TIDAK dihitung di "⛔ tidak ada di rekening" (perbaikan tinjauan S7).
+{
+  const isi = isiDasar();
+  isi.sandingan = null;
+  isi.tidakKetemu = [
+    { no_faktur: "SBR-1-0001", outlet: "BIREUEN", tgl: "2026-10-04", nominal: 100_000, sebab: "tidak ada di rekening" },
+    { no_faktur: "STP-20261004-AB12C", outlet: "BIREUEN", tgl: "2026-10-04", nominal: 25_000_000, sebab: SEBAB_SETORAN_BELUM_KETEMU },
+  ];
+  const teks = susunLapis2(isi, { nomor: 9, sebelumNomor: 8, sebelumKapan: null });
+  const baris = teks.split("\n");
+  harap("3c. cadangan: ⛔ tidak ada di rekening hanya 1 (tanpa setoran)", teks.includes("⛔ tidak ada di rekening 1 ·"), baris.filter((b) => /rekening|setoran/.test(b)).join(" | "));
+  harap("3c. cadangan: 🔎 setoran outlet belum ketemu kreditnya 1, STP tidak di bawah ⛔",
+        teks.includes("🔎 setoran outlet belum ketemu kreditnya 1") &&
+        baris.findIndex((b) => b.includes("STP-")) > baris.findIndex((b) => b.includes("🔎 setoran outlet")));
+}
+
 // ═══════════════════════ 4. tolakLintasHari ═══════════════════════
 console.log("── 4. /belum-cocok: sebab setoran ──");
 {
@@ -527,7 +623,7 @@ if (process.argv.includes("--hidup")) {
   const kolam = () => tandaiAwal(kolamRaw.map(keTx));
   const dalam = (iso: string, t: PdfTransaction) => {
     const d = Math.round((Date.parse(`${iso}T12:00:00Z`) - t.tanggalDate.getTime()) / 86_400_000);
-    return (d >= 0 && d <= 3) || (d < 0 && d >= -1);
+    return d === 0 || d === -1;   // jendela setoran [tgl slip, +1]
   };
   const menit = (j: string) => { const m = String(j).replace(".", ":").match(/^(\d{1,2}):(\d{2})/); return m ? +m[1] * 60 + +m[2] : null; };
   let nKembar = 0, nDipegang = 0, nCocokNominal = 0, nSalahNominal = 0, nJam = 0, nSalahJam = 0, nRef = 0, nSalahRef = 0, nAmbilDipegang = 0;

@@ -11,7 +11,7 @@ import type {
   Jenis,
   MatchRulePreset,
 } from "@/lib/types";
-import { runMatching, type MatchRules, DEFAULT_RULES } from "@/lib/matching";
+import { runMatching, adalahSetoran, type MatchRules, DEFAULT_RULES } from "@/lib/matching";
 import { createClient } from "@/lib/supabase/client";
 import { toDateISO, formatRupiah } from "@/lib/format";
 import { loadCarryoverPdfTxs } from "@/lib/sessions/carryover";
@@ -303,9 +303,17 @@ export function CheckClient({
     setKirimBusy(true);
     try {
       const prefix = jenis === "debet" ? "TFKD-" : "TFK-";
-      const gadaiInputs = matchedInputs.filter((i) => String(i.id).startsWith(prefix));
+      // SETOR KE PUSAT (perbaikan tinjauan S7, KEPUTUSAN OWNER #15): vonis
+      // setoran TIDAK dikirim dari layar ini. Layar ini tidak menandai baris
+      // yang sudah dipegang klaim lain di database dan mengirim SEBELUM baris
+      // dikunci — penjaga anti double claim hanya ada di /proses. Setorannya
+      // tetap PENDING di gadai dan dinilai /proses pada jalan berikutnya.
+      const nSetoran = matchedInputs.filter((i) => String(i.id).startsWith(prefix) && adalahSetoran(i)).length;
+      const gadaiInputs = matchedInputs.filter((i) => String(i.id).startsWith(prefix) && !adalahSetoran(i));
       if (gadaiInputs.length === 0) {
-        setKirimMsg("Tidak ada transfer dari Aceh Gadai di daftar ini.");
+        setKirimMsg(nSetoran > 0
+          ? `Tidak ada yang dikirim: ${nSetoran} setoran ke pusat hanya dinilai lewat /proses.`
+          : "Tidak ada transfer dari Aceh Gadai di daftar ini.");
         return;
       }
       const results = gadaiInputs.map((i) => ({
@@ -358,6 +366,7 @@ export function CheckClient({
       const extra: string[] = [];
       if (res.alarm > 0) extra.push(`🚨 ${res.alarm} alarm ref`);
       if (res.recheck > 0) extra.push(`${res.recheck} menunggu mutasi berikutnya`);
+      if (nSetoran > 0) extra.push(`${nSetoran} setoran ke pusat tidak dikirim — dinilai lewat /proses`);
       setKirimMsg(
         `✅ Terkirim. ${res.updated} cocok, ${res.unmatched} belum ketemu.` +
           (extra.length ? ` (${extra.join(", ")})` : "") +
