@@ -25,6 +25,7 @@
 import { getAccountContext } from "@/lib/supabase/context";
 import { createClient } from "@/lib/supabase/server";
 import { tandaiTolakLintasHari } from "@/lib/laporan/tolakLintasHari";
+import { bacaTercakupAkun, paramTercakup } from "@/lib/coverage/tercakup";
 
 /** Keputusan pemilik 28 Juli 2026: apa pun sebelum tanggal ini sudah beres. */
 const LANTAI = "2026-07-22";
@@ -113,34 +114,21 @@ export async function ambilBelumCocok(): Promise<
     // Menagih yang sedang menunggu = alarm palsu tiap hari, dan alarm palsu
     // adalah cara paling pasti membuat layar ini berhenti dibuka.
     //
-    // Diambil MAX(tgl_akhir) seluruh rekening. Dengan satu rekening ini tepat;
-    // kalau nanti ada rekening kedua yang tertinggal jauh, batas ini terlalu
-    // maju untuk rekening itu — saat itu ia perlu dipisah per bank.
-    let tercakup: string | null = null;
-    try {
-      const ctx = await getAccountContext();
-      if (ctx) {
-        const db = await createClient();
-        const { data } = await db
-          .from("mutasi_coverage")
-          .select("tgl_akhir")
-          .eq("account_id", ctx.account.id)
-          .order("tgl_akhir", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        const t = (data as any)?.tgl_akhir;
-        if (t) tercakup = String(t).slice(0, 10);
-      }
-    } catch (e) {
-      // Gagal membaca cakupan bukan alasan menggagalkan daftarnya. Tanpa
-      // `tercakup`, gadai hanya mengirim UNMATCHED + DUPLIKAT — perilaku lama
-      // yang aman, bukan diam.
-      console.error("[belum-cocok] gagal baca cakupan mutasi:", e);
-    }
+    // `tercakup_at` (5 Okt 2026) = jam unggahan yang mencakup tanggal itu.
+    // Tanpanya tanggal TERAKHIR dianggap tercakup penuh, padahal export siang
+    // hari hanya memuat separuhnya: 41 resi 4 Okt ditagih sebagai menggantung
+    // padahal hanya menunggu mutasi (unggahan 4 Okt 12:15, klaimnya lahir
+    // 5 Okt dini hari).
+    //
+    // Sumbernya SATU dengan laporan Lapis 2 & laporan web
+    // (lib/coverage/tercakup.ts) — supaya layar ini dan pesan Telegram tidak
+    // pernah menyebut isi "menggantung" yang berbeda. Gagal dibaca = tanpa
+    // `tercakup`: gadai hanya mengirim UNMATCHED + DUPLIKAT — perilaku lama
+    // yang aman, bukan diam; daftarnya tidak digagalkan karenanya.
+    const tercakup = await bacaTercakupAkun(k.db, k.ctx.account.id);
 
     const res = await fetch(
-      `${k.base}/api/transfer-klaim/tunggakan?sejak=${LANTAI}` +
-      (tercakup ? `&tercakup=${tercakup}` : ""), {
+      `${k.base}/api/transfer-klaim/tunggakan?sejak=${LANTAI}` + paramTercakup(tercakup), {
       headers: { Authorization: `Bearer ${k.key}` },
       cache: "no-store",
       signal: AbortSignal.timeout(15000),

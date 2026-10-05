@@ -24,9 +24,11 @@ import { getAccountContext } from "@/lib/supabase/context";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { antreLaporan } from "@/lib/telegram/outbox";
 import { hitungCakupan, saranExport, tglID, type BarisCakupan, type HasilCakupan } from "@/lib/coverage/celah";
-import { susunLapis2, sebabAlarmRef, type IsiLapis2 } from "@/lib/laporan/lapis2";
+import { susunLapis2Lengkap, sebabAlarmRef, type IsiLapis2, type RingkasLapis2 } from "@/lib/laporan/lapis2";
 import { after } from "next/server";
-import { picuPeriksaAi } from "@/lib/periksaAi/pemicu";
+import { picuPeriksaAi, bacaKonfigGadai } from "@/lib/periksaAi/pemicu";
+import { bacaTercakupAkun, paramTercakup, type Tercakup } from "@/lib/coverage/tercakup";
+import { buatLembarLapis2, sisipkanBarisLembar, BATAS_LEMBAR } from "@/lib/laporan/lembarWeb";
 
 export type Balasan = { ok: boolean; error?: string };
 
@@ -370,7 +372,9 @@ async function susunLaporanLapis2(
   pass: RingkasPass[],
   dariDb: { namaFile: string; bankLabel: string },
   cakupan: HasilCakupan | null,
-): Promise<string> {
+  /** Patokan cakupan dari bacaTercakupAkun — lihat tandaiSelesai. */
+  tercakup: Tercakup | null,
+): Promise<{ teks: string; ringkas: RingkasLapis2; dari: string | null; sampai: string | null }> {
   const kredit = pass.find((p) => p.jenis === "kredit");
   const debet = pass.find((p) => p.jenis === "debet");
 
@@ -507,13 +511,22 @@ async function susunLaporanLapis2(
         sandinganGagal = "periode berkas tidak terbaca";
       }
 
-      // `tercakup` = tanggal terakhir yang mutasinya ADA di berkas ini. Dengan
+      // `tercakup` = tanggal terakhir yang mutasinya SUDAH ADA di sini. Dengan
       // itu gadai bisa ikut menyertakan resi yang MENGGANTUNG (kalah berebut
       // baris, di luar periode) dan resi DOBEL — bukan cuma yang sudah divonis
       // "tidak ada di rekening". Tanpanya ia mengirim daftar lama yang aman.
+      //
+      // `tercakup_at` = jam unggahan itu (5 Okt 2026). Tanpanya tanggal
+      // TERAKHIR dianggap tercakup penuh, padahal export siang hari hanya
+      // memuat separuhnya — dan resi hari itu (klaimnya bahkan lahir sesudah
+      // unggahan) ditagih sebagai menggantung: 41 resi 4 Okt.
+      //
+      // Keduanya dari lib/coverage/tercakup.ts, SAMA dengan /belum-cocok dan
+      // POST laporan web — bukan tanggal akhir berkas ini. Berkas rentang lama,
+      // unggahan ulang rentang identik, dan berkas tak utuh dulu membuat
+      // ketiganya menyebut isi "menggantung" yang berbeda.
       const res = await fetch(
-        `${base}/api/transfer-klaim/tunggakan?sejak=${LANTAI_LAPIS2}` +
-        (sSampai ? `&tercakup=${sSampai}` : ""), {
+        `${base}/api/transfer-klaim/tunggakan?sejak=${LANTAI_LAPIS2}` + paramTercakup(tercakup), {
         headers: { Authorization: `Bearer ${c.gadai_api_key}` },
         cache: "no-store",
         signal: AbortSignal.timeout(BATAS_ANGKA_GADAI),
@@ -698,7 +711,8 @@ async function susunLaporanLapis2(
     gagal,
   };
 
-  return susunLapis2(isi, { nomor: null, sebelumNomor: null, sebelumKapan: null });
+  const { teks, ringkas } = susunLapis2Lengkap(isi, { nomor: null, sebelumNomor: null, sebelumKapan: null });
+  return { teks, ringkas, dari: isi.berkasDari, sampai: isi.berkasSampai };
 }
 
 function susunLaporan(
@@ -847,6 +861,7 @@ export async function tandaiSelesai(
   berkas: RingkasBerkas,
   pass: RingkasPass[],
 ): Promise<Balasan & { teks?: string }> {
+  const mulai = Date.now();
   const r = await jobMilikku(jobId);
   if ("error" in r) return { ok: false, error: r.error };
 
@@ -882,8 +897,24 @@ export async function tandaiSelesai(
     if (rows && rows.length > 0) cakupan = hitungCakupan(rows as BarisCakupan[]);
   }
 
+  // ── PATOKAN CAKUPAN UNTUK GADAI (`tercakup` + `tercakup_at`) ──
+  //
+  // Gadai menyebut resi PENDING "menggantung" hanya kalau tanggalnya sudah
+  // tercakup PENUH oleh unggahan dan klaimnya lahir sebelum unggahan itu.
+  // Satu nilai, dibaca SEKALI di sini, dikirim ke /tunggakan DAN ke POST
+  // laporan web — dan sumbernya sama dengan layar /belum-cocok
+  // (lib/coverage/tercakup.ts), supaya ketiganya menghitung kurungan yang sama.
+  //
+  // Baris cakupan berkas ini SUDAH tercatat: auto-runner menunggu
+  // catatCakupan selesai sebelum pass mana pun (jauh sebelum tandaiSelesai).
+  // Berkas tak utuh / rantai putus memang tidak dicatat — MAX lalu datang dari
+  // unggahan sah sebelumnya, dan itu yang benar. null = tidak dikirim.
+  const tercakup = await bacaTercakupAkun(r.db, r.ctx.account.id);
+
   const adaBatal = pass.some((p) => p.batal);
-  const teks = await susunLaporanLapis2(r, berkas, pass, dariDb, cakupan);
+  const lap = await susunLaporanLapis2(r, berkas, pass, dariDb, cakupan, tercakup);
+  let teks = lap.teks;
+  const akunGadai = r.ctx.account.id === String(process.env.CEKMUTASI_ACCOUNT_ID ?? "").trim();
 
   // Penutupan ini adalah COMPARE-AND-SET, bukan update biasa.
   //
@@ -908,6 +939,29 @@ export async function tandaiSelesai(
   if (!ditutup || ditutup.length === 0) {
     // Sudah ditutup pihak lain. Laporannya sudah (atau sedang) dikirim di sana.
     return { ok: true, teks };
+  }
+
+  // ── LAPORAN WEB (lembar L2-n di aplikasi gadai) ──
+  //
+  // SESUDAH penutupan (penutup kedua tidak boleh membuat lembar kedua) dan
+  // SEBELUM diantre (tautannya harus ikut di pesan yang sama). Hanya akun
+  // pemilik gadai — akun lain tidak punya gadai yang menyimpan lembarnya.
+  //
+  // Barisnya ke-3, tepat di bawah dua baris kepala: baris pertama WAJIB tetap
+  // diawali "🟢 LAPIS 2" (jangkar LIKE untuk patokan "sejak" di atas dan cron
+  // periksa-ai), dan pesan yang terpotong 4000 karakter tetap membawa
+  // tautannya.
+  //
+  // Batas tunggunya dipendekkan kalau sebagian besar waktu sudah habis untuk
+  // sandingan & tunggakan (masing-masing sampai 25 dtk): job SUDAH ditutup di
+  // sini, jadi fungsi yang mati karena waktu habis = laporan Lapis 2 hilang.
+  if (akunGadai) {
+    const sisaMs = 55_000 - (Date.now() - mulai);
+    const baris = await buatLembarLapis2(await bacaKonfigGadai(r.db, r.ctx.account.id), {
+      jobId, dari: lap.dari, sampai: lap.sampai, tercakup,
+      bankLabel: dariDb.bankLabel, ringkas: lap.ringkas,
+    }, Math.min(BATAS_LEMBAR, Math.max(5_000, sisaMs)));
+    teks = sisipkanBarisLembar(teks, baris);
   }
 
   // ── TUJUAN LAPORAN ──
@@ -948,7 +1002,7 @@ export async function tandaiSelesai(
   // picuPeriksaAi tidak pernah melempar dan berbunyi sendiri bila gagal;
   // kalau pemicu ini hilang (fungsi dihentikan), cron cadangan
   // /api/cron/periksa-ai menjemputnya.
-  if (r.ctx.account.id === String(process.env.CEKMUTASI_ACCOUNT_ID ?? "").trim()) {
+  if (akunGadai) {
     const picu = () =>
       picuPeriksaAi({ jobId, sumber: "MUTASI" }).catch((e) => {
         console.error("[periksa-ai] pemicu melempar (tak terduga):", e);

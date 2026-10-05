@@ -19,8 +19,10 @@ for (const b of readFileSync(".env.local", "utf8").split(/\r?\n/)) {
 }
 
 import { createClient } from "@supabase/supabase-js";
-import { susunLapis2, type IsiLapis2 } from "../lib/laporan/lapis2.ts";
+import { susunLapis2Lengkap, type IsiLapis2 } from "../lib/laporan/lapis2.ts";
 import { hitungCakupan, type BarisCakupan } from "../lib/coverage/celah.ts";
+import { bacaTercakupAkun, paramTercakup } from "../lib/coverage/tercakup.ts";
+import { buatLembarLapis2, sisipkanBarisLembar } from "../lib/laporan/lembarWeb.ts";
 
 const LANTAI = "2026-07-22";
 const jobId = process.argv[2];
@@ -93,6 +95,11 @@ for (const p of pass) if (p.batal) gagal.push(`${p.jenis}: ${p.batal.pesan}`);
 
 const sDari = kredit?.periodStart ?? debet?.periodStart ?? null;
 const sSampai = kredit?.periodEnd ?? debet?.periodEnd ?? null;
+// Patokan cakupan HIDUP — sumber yang sama dengan /belum-cocok dan
+// tandaiSelesai (lib/coverage/tercakup.ts), BUKAN tanggal akhir berkas job
+// lama ini: tunggakan & lembar di bawah dibaca hidup, dan POST lembar
+// menyimpan patokan ini di gadai — patokan job lama akan memundurkannya.
+const tercakup = await bacaTercakupAkun(db, (job as any).account_id);
 if (c?.gadai_sync_enabled && c.gadai_api_url && c.gadai_api_key) {
   const base = String(c.gadai_api_url).replace(/\/+$/, "");
   const H = { Authorization: `Bearer ${c.gadai_api_key}` };
@@ -105,8 +112,8 @@ if (c?.gadai_sync_enabled && c.gadai_api_url && c.gadai_api_key) {
     } catch (e) { sandinganGagal = e instanceof Error ? e.message : String(e); }
   }
   try {
-    const res = await fetch(`${base}/api/transfer-klaim/tunggakan?sejak=${LANTAI}` +
-      (sSampai ? `&tercakup=${sSampai}` : ""), { headers: H, cache: "no-store" });
+    const res = await fetch(`${base}/api/transfer-klaim/tunggakan?sejak=${LANTAI}` + paramTercakup(tercakup),
+      { headers: H, cache: "no-store" });
     const j = await res.json();
     if (res.ok && j?.ok) {
       tunggakan = (j.items ?? []);
@@ -182,7 +189,9 @@ const isi: IsiLapis2 = {
   sandingan, sandinganGagal, tunggakan, gagal,
 };
 
-const teksBaru = susunLapis2(isi, { nomor: null, sebelumNomor: null, sebelumKapan: null });
+const { teks: teksBaru, ringkas } = susunLapis2Lengkap(isi, { nomor: null, sebelumNomor: null, sebelumKapan: null });
+/** Baris tautan laporan web — URL-nya selalu baru, jadi tidak ikut dibandingkan. */
+const barisTautan = (l: string) => l.startsWith("📊 Laporan web");
 
 // ── Bandingkan dengan laporan ASLI yang tersimpan ──
 const { data: asli } = await db.from("mutasi_laporan_outbox")
@@ -196,8 +205,8 @@ if (asli) {
   const a = String((asli as any).teks).split("\n");
   const b = teksBaru.split("\n");
   const setA = new Set(a), setB = new Set(b);
-  const hilang = a.filter((l) => !setB.has(l) && l.trim());
-  const tambah = b.filter((l) => !setA.has(l) && l.trim());
+  const hilang = a.filter((l) => !setB.has(l) && l.trim() && !barisTautan(l));
+  const tambah = b.filter((l) => !setA.has(l) && l.trim() && !barisTautan(l));
   console.log(`\n=== BEDA vs laporan asli (outbox #${(asli as any).id}) ===`);
   console.log(`baris HILANG dari laporan lama: ${hilang.length}`);
   hilang.forEach((l) => console.log(`  - ${l}`));
@@ -213,13 +222,42 @@ const kepala = [
   "ada vonis yang berubah; angkanya sama, bentuknya yang diperbaiki.",
   "",
 ];
-const teksKirim = kepala.join("\n") + teksBaru;
-console.log(teksKirim);
-
-if (!kirim) { console.log("\n(dry-run — tambahkan --kirim untuk mengantre ke Telegram)"); process.exit(0); }
+if (!kirim) {
+  console.log(kepala.join("\n") + teksBaru);
+  // POST lembar MENULIS ke DB gadai (dan mengganti token lembar job ini), jadi
+  // tidak pernah dipanggil di dry-run.
+  console.log("\n(tautan web dibuat saat --kirim)");
+  console.log("(dry-run — tambahkan --kirim untuk mengantre ke Telegram)");
+  process.exit(0);
+}
 
 const tujuan = String((asli as any)?.chat_id ?? (job as any).tg_chat_id ?? "");
 if (!tujuan) { console.error("tujuan chat tidak diketahui"); process.exit(1); }
+
+// ── LAPORAN WEB — sama dengan tandaiSelesai: baris ke-3 laporan Lapis 2 ──
+//
+// jobId yang SAMA: rute gadai tidak membuat lembar kedua, tokennya diganti
+// dan URL baru dikembalikan — tautan di pesan ASLI ikut mati, yang hidup
+// tinggal tautan di kiriman ulang ini. Dipanggil SESUDAH tujuan pasti ada,
+// supaya tautan lama tidak dimatikan untuk pesan yang tidak jadi diantre.
+// Hanya akun pemilik gadai (CEKMUTASI_ACCOUNT_ID, kalau diisi di .env.local).
+const akunGadaiEnv = String(process.env.CEKMUTASI_ACCOUNT_ID ?? "").trim();
+let teksLapis2 = teksBaru;
+if (akunGadaiEnv && akunGadaiEnv !== String((job as any).account_id)) {
+  console.log("(akun job ini bukan akun pemilik gadai — tanpa tautan web)");
+} else {
+  const konfigGadai = c?.gadai_sync_enabled && c.gadai_api_url && c.gadai_api_key
+    ? { base: String(c.gadai_api_url).replace(/\/+$/, ""), key: String(c.gadai_api_key) }
+    : !c?.gadai_sync_enabled
+      ? "sinkron Aceh Gadai tidak aktif di pengaturan cektransfer"
+      : "alamat / kunci Aceh Gadai belum diisi di pengaturan cektransfer";
+  const barisWeb = await buatLembarLapis2(konfigGadai, {
+    jobId, dari: sDari, sampai: sSampai, tercakup, bankLabel, ringkas,
+  });
+  teksLapis2 = sisipkanBarisLembar(teksBaru, barisWeb);
+}
+const teksKirim = kepala.join("\n") + teksLapis2;
+console.log(teksKirim);
 const { data: baris, error } = await db.from("mutasi_laporan_outbox").insert({
   account_id: (job as any).account_id,
   chat_id: tujuan,

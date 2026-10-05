@@ -280,6 +280,74 @@ export interface IsiLapis2 {
 }
 
 /**
+ * Angka ringkas laporan ini untuk HALAMAN WEB (lembar L2-n di aplikasi gadai,
+ * 5 Oktober 2026).
+ *
+ * Lahir di fungsi yang SAMA yang mencetak teksnya, dari variabel yang SAMA —
+ * bukan dihitung ulang di pemanggil. Dua penghitung untuk satu laporan akan
+ * menyimpang, dan halaman web yang berselisih satu angka dengan pesan
+ * Telegram-nya terbaca seperti kebocoran.
+ *
+ * null = angka itu TIDAK dicetak / tidak diketahui (mis. sandingan gadai
+ * gagal diambil, atau pemeriksaan uang tanpa pemilik tidak jalan) — BUKAN nol.
+ *
+ * HARUS TUTUP, sama dengan cek tutup di blok per tanggal: per arah,
+ *   diterima = ada + tidak + setoran + gantung + tahan
+ * (setoran hanya arah masuk). Bagian yang tidak dikirim membuat halaman web
+ * menampilkan angka yang tidak bisa dijumlah ke totalnya — persis kebingungan
+ * "di mana selisihnya" yang melahirkan bentuk laporan ini (5 Sep 2026).
+ */
+export interface RingkasLapis2 {
+  /** Jumlah "masuk/keluar N resi" di blok DITERIMA DARI LAPIS 1, semua tanggal
+   *  (yang dirinci + yang dilipat "semua cocok"). Dobel/dibatalkan tidak ikut. */
+  diterimaMasuk: number | null;
+  diterimaKeluar: number | null;
+  /** "✅ cocok di rekening", dijumlah semua tanggal. */
+  adaMasuk: number | null;
+  adaKeluar: number | null;
+  /** "⛔ tidak ada di rekening", dijumlah semua tanggal. Setoran outlet yang
+   *  kreditnya belum ketemu TIDAK termasuk — teksnya juga memisahkannya. */
+  tidakMasuk: number | null;
+  tidakKeluar: number | null;
+  /** "🔎 setoran outlet belum ketemu kreditnya" — BUKAN "tidak ada di
+   *  rekening" (KEPUTUSAN OWNER #14/#15). Setoran selalu arah masuk. */
+  setoranMasuk: number | null;
+  /** "⏳ belum dijawab". */
+  gantungMasuk: number | null;
+  gantungKeluar: number | null;
+  /** "🚧 tertahan gerbang Lapis 1". */
+  tahanMasuk: number | null;
+  tahanKeluar: number | null;
+  /** Rincian per TANGGAL TRANSAKSI dari peta yang SAMA dengan yang dicetak —
+   *  termasuk tanggal yang dilipat jadi "N tanggal lain … semua cocok"
+   *  (`dilipat: true`). Urutan = urutan cetak (tanggal terbaru dulu). */
+  perTanggal: { tgl: string; dilipat: boolean; masuk: SisiRingkas; keluar: SisiRingkas }[] | null;
+  /** Blok UANG DI MUTASI TANPA PEMILIK — cacah & rupiah persis yang dicetak. */
+  tanpaPemilikMasuk: { n: number; rp: number } | null;
+  tanpaPemilikKeluar: { n: number; rp: number } | null;
+  /** Butir blok "🚨 JANGAN PAKAI LAPORAN INI MENUTUP HARI", urutan yang sama. */
+  peringatan: string[];
+}
+
+/** Satu arah satu tanggal di RingkasLapis2.perTanggal — salinan Sisi yang
+ *  dicetak. total = cocok + tak + takSetoran + gantung + tahan; `mati`
+ *  (dobel / dibatalkan) sudah DIKELUARKAN dari total, seperti di Lapis 1. */
+export interface SisiRingkas {
+  total: { n: number; rp: number };
+  cocok: { n: number; rp: number };
+  tak: { n: number; rp: number };
+  takSetoran: { n: number; rp: number };
+  gantung: { n: number; rp: number };
+  tahan: { n: number; rp: number };
+  mati: { n: number; rp: number };
+}
+
+/** Teks laporan saja — dipertahankan untuk skrip uji & kirim ulang. */
+export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
+  return susunLapis2Lengkap(isi, kepala).teks;
+}
+
+/**
  * Susun laporan LAPIS 2.
  *
  * DIPERPENDEK TOTAL 5 Agustus 2026 atas perintah pemilik: "ini masih sangat
@@ -305,8 +373,11 @@ export interface IsiLapis2 {
  * membuat laporan ini tidak boleh dipercaya tetap dicetak, di satu tempat, di
  * paling atas — supaya yang hilang dari halaman berarti "tidak ada masalah",
  * bukan "tidak diperiksa".
+ *
+ * Mengembalikan teksnya BESERTA angka ringkasnya (RingkasLapis2) — keduanya
+ * dari jalan yang sama.
  */
-export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
+export function susunLapis2Lengkap(isi: IsiLapis2, kepala: KepalaLapis2): { teks: string; ringkas: RingkasLapis2 } {
   const L: string[] = [];
   const periode = isi.berkasDari && isi.berkasSampai
     ? `${tgl(isi.berkasDari)}-${tgl(isi.berkasSampai)}`
@@ -428,6 +499,14 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   L.push("");
   L.push(`DITERIMA DARI LAPIS 1`);
 
+  // Jumlah per arah untuk RingkasLapis2. Tetap null di cabang tanpa angka
+  // gadai: di sana teksnya hanya mencetak hitungan GABUNGAN dua arah dengan
+  // dasar tanggal resi — memecahnya per arah berarti mengarang angka yang
+  // tidak pernah tercetak.
+  type JumlahArah = { diterima: number; ada: number; tidak: number; setoran: number; gantung: number; tahan: number };
+  let perArah: { masuk: JumlahArah; keluar: JumlahArah } | null = null;
+  let perTanggalRingkas: RingkasLapis2["perTanggal"] = null;
+
   if (!sd || !Array.isArray(sd.tanggal)) {
     // Tanpa angka gadai, yang bisa dikatakan hanya hitungan sisi ini — dan itu
     // dikatakan apa adanya, bukan disamarkan sebagai sandingan.
@@ -497,6 +576,16 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       perTgl.set(t.tgl, g);
     }
 
+    // Dari Sisi yang SAMA yang dicetak di bawah — tanggal yang dirinci dan
+    // yang dilipat jadi "N tanggal lain … semua cocok" sama-sama ikut.
+    const jumlahArah = (pilih: (g: { masuk: Sisi; keluar: Sisi }) => Sisi) =>
+      [...perTgl.values()].reduce((s, g) => {
+        const x = pilih(g);
+        return { diterima: s.diterima + x.total.n, ada: s.ada + x.cocok.n, tidak: s.tidak + x.tak.n,
+                 setoran: s.setoran + x.takSetoran.n, gantung: s.gantung + x.gantung.n, tahan: s.tahan + x.tahan.n };
+      }, { diterima: 0, ada: 0, tidak: 0, setoran: 0, gantung: 0, tahan: 0 });
+    perArah = { masuk: jumlahArah((g) => g.masuk), keluar: jumlahArah((g) => g.keluar) };
+
     // Yang dicetak penuh: tanggal yang vonisnya BERUBAH di sesi ini, atau yang
     // masih punya pertanyaan (belum dijawab / tidak ketemu / tertahan). Sisanya
     // sudah pernah dibaca pemilik di laporan sebelumnya — cukup satu baris.
@@ -505,6 +594,17 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
       g.baru || [g.masuk, g.keluar].some((x) => x.gantung.n > 0 || x.tak.n > 0 || x.takSetoran.n > 0 || x.tahan.n > 0);
     const penting = semuaTgl.filter((t) => perlu(perTgl.get(t)!));
     const tenang = semuaTgl.filter((t) => !perlu(perTgl.get(t)!));
+
+    // Rincian per tanggal untuk halaman web — Sisi yang SAMA, disalin apa
+    // adanya (bukan dihitung ulang di gadai dengan penghitung kedua).
+    const salinSisi = (x: Sisi): SisiRingkas => ({
+      total: { ...x.total }, cocok: { ...x.cocok }, tak: { ...x.tak }, takSetoran: { ...x.takSetoran },
+      gantung: { ...x.gantung }, tahan: { ...x.tahan }, mati: { ...x.mati },
+    });
+    perTanggalRingkas = semuaTgl.map((t) => {
+      const g = perTgl.get(t)!;
+      return { tgl: t, dilipat: !perlu(g), masuk: salinSisi(g.masuk), keluar: salinSisi(g.keluar) };
+    });
 
     const cetakSisi = (label: string, x: Sisi, t: string, keluar: boolean) => {
       if (!x.ada || (x.total.n === 0 && x.mati.n === 0)) return;
@@ -785,5 +885,27 @@ export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
     L.push(`   ℹ️ diperiksa sampai ${tgl(isi.nganggurBatas)} saja — sesudah itu klaimnya belum lahir.`);
   }
 
-  return L.join("\n");
+  // Pemeriksaan yang tidak jalan menghasilkan nol baris — dan nol itu BUKAN
+  // "tidak ada". Halaman web menerima null, sama seperti teks di atas yang
+  // menyebutnya di blok peringatan.
+  const nganggurJalan = isi.nganggurDiperiksa !== false;
+  const ringkas: RingkasLapis2 = {
+    diterimaMasuk: perArah?.masuk.diterima ?? null,
+    diterimaKeluar: perArah?.keluar.diterima ?? null,
+    adaMasuk: perArah?.masuk.ada ?? null,
+    adaKeluar: perArah?.keluar.ada ?? null,
+    tidakMasuk: perArah?.masuk.tidak ?? null,
+    tidakKeluar: perArah?.keluar.tidak ?? null,
+    setoranMasuk: perArah?.masuk.setoran ?? null,
+    gantungMasuk: perArah?.masuk.gantung ?? null,
+    gantungKeluar: perArah?.keluar.gantung ?? null,
+    tahanMasuk: perArah?.masuk.tahan ?? null,
+    tahanKeluar: perArah?.keluar.tahan ?? null,
+    perTanggal: perTanggalRingkas,
+    tanpaPemilikMasuk: nganggurJalan ? { n: nK, rp: Math.round(Number(isi.rpKreditNganggur) || 0) } : null,
+    tanpaPemilikKeluar: nganggurJalan ? { n: nD, rp: Math.round(Number(isi.rpDebetNganggur) || 0) } : null,
+    peringatan: [...awas],
+  };
+
+  return { teks: L.join("\n"), ringkas };
 }
