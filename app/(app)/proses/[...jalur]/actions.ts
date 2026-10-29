@@ -125,15 +125,56 @@ function jinak(s: unknown, maks = 120): string {
 export async function catatLangkah(jobId: string, langkah: string): Promise<Balasan> {
   const r = await jobMilikku(jobId);
   if ("error" in r) return { ok: false, error: r.error };
+  // GAGAL dibuka lagi seperti ANTRI. tandaiGagal hanya memberi GAGAL bila
+  // BELUM ada yang terkirim (selain itu SELESAI_RAGU), jadi menjalankannya
+  // ulang aman. Tanpa ini, menuruti saran gerbang rekening ("unggah ulang ke
+  // rekening X") lewat tombol rekening lain di pesan yang sama mengirim
+  // vonis ke Aceh Gadai sementara tugasnya tetap GAGAL dan laporan Lapis 2
+  // tidak pernah terkirim (tandaiSelesai menolak menutup tugas GAGAL).
+  const buka = r.job.status === "ANTRI" || r.job.status === "GAGAL";
   await r.db
     .from("mutasi_jobs")
     .update({
       langkah: String(langkah).slice(0, 200),
-      status: r.job.status === "ANTRI" ? "DIBUKA" : r.job.status,
-      dibuka_at: r.job.status === "ANTRI" ? new Date().toISOString() : undefined,
+      status: buka ? "DIBUKA" : r.job.status,
+      dibuka_at: buka ? new Date().toISOString() : undefined,
+      ...(r.job.status === "GAGAL" ? { error_text: null, selesai_at: null } : {}),
     })
     .eq("id", jobId)
-    .eq("account_id", r.ctx.account.id);
+    .eq("account_id", r.ctx.account.id)
+    .eq("status", r.job.status);
+  return { ok: true };
+}
+
+/**
+ * Tulis rekening ke tugas bila masih kosong (Tahap 1, Okt 2026).
+ *
+ * Rekening yang dipilih lewat tautan /proses/<token>/<bankId> dulu tidak
+ * pernah ditulis ke mutasi_jobs.bank_id, sehingga tandaiSelesai memberi label
+ * "Rekening" dan cakupan untuk laporan bernilai null. Dipanggil SESUDAH
+ * gerbang rekening meloloskan PDF (nomor di kepala PDF = nomor rekening ini),
+ * jadi yang ditulis sudah terbukti. Bank yang SUDAH terisi tidak pernah
+ * ditimpa — compare-and-set `bank_id IS NULL`.
+ */
+export async function pastikanBankTugas(jobId: string, bankId: string): Promise<Balasan> {
+  const r = await jobMilikku(jobId);
+  if ("error" in r) return { ok: false, error: r.error };
+  if (!/^[0-9a-f-]{36}$/i.test(String(bankId))) return { ok: false, error: "Bank tidak sah." };
+  if (r.job.bank_id) return { ok: true };
+  const { data: bank } = await r.db
+    .from("banks")
+    .select("id")
+    .eq("id", bankId)
+    .eq("account_id", r.ctx.account.id)
+    .maybeSingle();
+  if (!bank) return { ok: false, error: "Bank tidak ditemukan di akun ini." };
+  const { error } = await r.db
+    .from("mutasi_jobs")
+    .update({ bank_id: bankId })
+    .eq("id", jobId)
+    .eq("account_id", r.ctx.account.id)
+    .is("bank_id", null);
+  if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
 

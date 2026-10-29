@@ -60,11 +60,40 @@ async function detectColumnXs(
   };
 }
 
-// Ekstrak ringkasan header (total tercetak + saldo awal/akhir) dari halaman 1.
+type MetaKepala = Pick<
+  StatementMeta,
+  | "printedKredit"
+  | "printedDebet"
+  | "saldoAwal"
+  | "saldoAkhir"
+  | "nomorRekening"
+  | "mataUang"
+  | "produk"
+  | "periodeAwal"
+  | "periodeAkhir"
+>;
+
+/** "YYYY-MM-DD" bila tanggal itu benar-benar ada di kalender, selain itu null. */
+function tanggalSah(y: string, m: string, d: string): string | null {
+  const iso = `${y}-${m}-${d}`;
+  const t = new Date(`${iso}T00:00:00Z`);
+  return !isNaN(t.getTime()) && t.toISOString().slice(0, 10) === iso ? iso : null;
+}
+
+// Ekstrak ringkasan header (total tercetak + saldo awal/akhir + identitas
+// rekening + periode) dari halaman 1.
 // Nilai dari header = eksak (bukan hasil pembulatan per-baris).
+//
+// IDENTITAS REKENING: kepala PDF BSINet mencetak
+//   "REKENING : IDR 1999881994 - BSI TABUNGAN BISNIS"
+//   "Periode" ": 27/04/2026 s/d 30/04/2026"   (dua potongan teks, y sama)
+// Nama pemilik TIDAK dicetak, jadi nomor inilah satu-satunya cara tahu PDF
+// ini milik rekening mana. Dibaca per BARIS (potongan dengan y sama digabung
+// urut x), bukan per potongan, supaya tetap terbaca kalau suatu hari BSI
+// memecah teksnya jadi beberapa potongan.
 async function extractStatementMeta(
   pdf: { getPage: (n: number) => Promise<{ getTextContent: () => Promise<{ items: unknown[] }> }> },
-): Promise<Pick<StatementMeta, "printedKredit" | "printedDebet" | "saldoAwal" | "saldoAkhir">> {
+): Promise<MetaKepala> {
   const tc = await (await pdf.getPage(1)).getTextContent();
   const items: { s: string; x: number; y: number }[] = [];
   for (const it of tc.items) {
@@ -89,11 +118,57 @@ async function extractStatementMeta(
   const saldoLines = items.filter((it) => it.s.includes("Saldo riil")).sort((a, b) => b.y - a.y);
   const saldoNum = (line?: { s: string; x: number; y: number }): number | null =>
     line ? (num(line.s) ?? valNear(line)) : null;
+
+  // Teks satu baris utuh di ketinggian y (potongan berdekatan digabung urut x).
+  const barisDi = (y: number): string =>
+    items
+      .filter((it) => Math.abs(it.y - y) < 3)
+      .sort((a, b) => a.x - b.x)
+      .map((it) => it.s)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  let nomorRekening: string | null = null;
+  let mataUang: string | null = null;
+  let produk: string | null = null;
+  const labRek = items.find((it) => /REKENING\s*:/i.test(it.s));
+  if (labRek) {
+    const m = barisDi(labRek.y).match(/REKENING\s*:\s*([A-Z]{3})\s+(\d{6,20})\s*(?:-\s*(.+))?$/i);
+    if (m) {
+      mataUang = m[1].toUpperCase();
+      nomorRekening = m[2];
+      produk = m[3]?.trim() || null;
+    }
+  }
+
+  // Periode: baris PERTAMA (paling atas) yang berpola "dd/mm/yyyy s/d dd/mm/yyyy".
+  // Sengaja tidak mencari kata "Periode" — kata itu juga ada di
+  // "Total Debet (Dalam Periode)".
+  let periodeAwal: string | null = null;
+  let periodeAkhir: string | null = null;
+  const ySemua = [...new Set(items.map((it) => Math.round(it.y)))].sort((a, b) => b - a);
+  for (const y of ySemua) {
+    const m = barisDi(y).match(/(\d{2})\/(\d{2})\/(\d{4})\s*s\/d\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+    if (m) {
+      // Tanggal yang tidak ada di kalender (mis. 31/02) → null, bukan string
+      // yang membuat penyimpanan catatan unggahan gagal di database.
+      periodeAwal = tanggalSah(m[3], m[2], m[1]);
+      periodeAkhir = tanggalSah(m[6], m[5], m[4]);
+      break;
+    }
+  }
+
   return {
     printedKredit: labeled("Total Kredit"),
     printedDebet: labeled("Total Debet"),
     saldoAwal: saldoNum(saldoLines[0]),
     saldoAkhir: saldoNum(saldoLines[1]),
+    nomorRekening,
+    mataUang,
+    produk,
+    periodeAwal,
+    periodeAkhir,
   };
 }
 
@@ -105,7 +180,21 @@ export async function parseBsiBsinet(
   const fileBuffer = new Uint8Array(ab);
   const { getDocument } = await import("../pdf/pdf-loader");
   const pdf = await getDocument(fileBuffer);
+  return parseBsiBsinetDari(pdf, fileBuffer);
+}
 
+/**
+ * Inti parser, menerima dokumen pdfjs yang SUDAH dibuka.
+ *
+ * Dipisah dari parseBsiBsinet hanya supaya bisa dijalankan di Node (skrip uji
+ * memakai pdfjs-dist/legacy) terhadap PDF arsip sungguhan — tanpa browser dan
+ * tanpa menulis apa pun ke database. Perilakunya identik.
+ */
+export async function parseBsiBsinetDari(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  pdf: any,
+  fileBuffer: Uint8Array,
+): Promise<ParsedDocument> {
   const { waktuX, kreditX, debetX, kodeX } = await detectColumnXs(pdf);
 
   const rows: ParsedTxRow[] = [];

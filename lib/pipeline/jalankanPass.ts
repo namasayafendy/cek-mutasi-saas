@@ -20,8 +20,9 @@
 // penjaganya adalah MATA MANUSIA yang melihat layar sebelum menekan "Kirim".
 // Otomatisasi menghapus mata itu, jadi penjaganya harus ditulis:
 //
-//   P1. Mutasi terbukti tidak utuh (complete === false, chainBreaks > 0, atau
-//       ada baris yang gagal masuk DB) → JANGAN kirim sama sekali.
+//   P1. Mutasi terbukti tidak utuh (complete === false, chainBreaks > 0, ada
+//       baris yang gagal masuk DB, atau ISI DATABASE tidak sama dengan PDF —
+//       baris hilang/ganda, Tahap 1 Okt 2026) → JANGAN kirim sama sekali.
 //   P2. periodEnd null → JANGAN kirim. Di sisi gadai, period_end kosong
 //       membuat SEMUA klaim tak-cocok divonis terminal seketika
 //       (result/route.ts:119) — jalur RECHECK tidak pernah terpakai.
@@ -139,6 +140,7 @@ export interface AlasanBatal {
     | "MUTASI_TIDAK_UTUH"
     | "RANTAI_PUTUS"
     | "GAGAL_SIMPAN_BARIS"
+    | "ISI_DB_TIDAK_SAMA"
     | "GAGAL_SIMPAN_SESI"
     | "PERIODE_KOSONG"
     | "TIDAK_ADA_KLAIM"
@@ -498,6 +500,23 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     };
     return hasil;
   }
+  const barisHilang = Number(ig?.barisHilang ?? 0);
+  const barisGanda = Number(ig?.barisGanda ?? 0);
+  if (barisHilang > 0 || barisGanda > 0) {
+    // Parse bisa utuh sementara DATABASE tidak — penyaring duplikat pernah
+    // membuang debet retur BI-FAST tanpa satu peringatan. Pencocokan membaca
+    // database, jadi baris yang hilang di sana tampak "transfer tidak
+    // ditemukan", dan baris ganda bisa membuktikan dua klaim sekaligus.
+    hasil.batal = {
+      kode: "ISI_DB_TIDAK_SAMA",
+      pesan:
+        `Isi database tidak sama dengan PDF: ${barisHilang} baris tidak tersimpan, ` +
+        `${barisGanda} baris tercatat ganda.` +
+        (ig?.contohDb?.length ? ` Contoh — ${ig.contohDb.join("; ")}.` : "") +
+        ` Perlu perbaikan data sebelum tanggal ini bisa divonis.`,
+    };
+    return hasil;
+  }
 
   // ── P2: tanpa periodEnd, sisi gadai memvonis semuanya terminal ──
   if (!periodEnd || !periodStart) {
@@ -661,7 +680,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   // yang sama akan masuk berkali-kali. persistTransactions memang men-dedup, dan
   // carry-over sudah menyaring yang belum ter-claim — tapi baris dari BERKAS YANG
   // SEDANG DIPROSES tidak pernah diperiksa status klaimnya sama sekali
-  // (lookupParsedTxIds hanya membaca id + no_ref). Akibatnya satu kredit bank yang
+  // (pemetaan id hanya membaca identitas baris). Akibatnya satu kredit bank yang
   // sudah dipakai membuktikan transaksi A bisa dipakai LAGI untuk membuktikan
   // transaksi B — dua transaksi, satu uang, dua-duanya berstatus "cocok".
   // Itu persis bentuk penipuan resi-kembar yang sistem ini dibangun untuk menangkap.

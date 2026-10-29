@@ -297,11 +297,33 @@ export function CheckClient({
 
   const matchedInputs = matchResult.inputs;
 
+  // Isi database tidak sama dengan PDF (Tahap 1) → tidak ada vonis DAN tidak
+  // ada sesi/klaim yang disimpan. Sama dengan penahanan Lapis 2 di /proses
+  // (ISI_DB_TIDAK_SAMA): pencocokan membaca database, jadi baris yang hilang
+  // di sana tampak "transfer tidak ditemukan", dan baris ganda bisa
+  // membuktikan dua klaim. Sesi yang tersimpan juga TIDAK aman: klaimnya
+  // akan dikirim belakangan oleh /proses sebagai sesi lama.
+  function pesanDbBeda(): string | null {
+    const beda = uploads.filter(
+      (u) => (u.integrity?.barisHilang ?? 0) > 0 || (u.integrity?.barisGanda ?? 0) > 0,
+    );
+    if (beda.length === 0) return null;
+    return (
+      `Isi database ${beda.map((u) => u.bank.label || u.bank.kode).join(", ")} tidak sama dengan PDF ` +
+      `(ada baris tidak tersimpan / ganda). Hasil cek tidak dikirim dan tidak disimpan — datanya perlu diperbaiki dulu.`
+    );
+  }
+
   // Phase 2-E: kirim hasil match transfer Aceh Gadai (id klaim diawali "TFK-")
   async function handleKirimGadai() {
     setKirimMsg(null);
     setKirimBusy(true);
     try {
+      const dbBeda = pesanDbBeda();
+      if (dbBeda) {
+        setKirimMsg("❌ " + dbBeda);
+        return;
+      }
       const prefix = jenis === "debet" ? "TFKD-" : "TFK-";
       // SETOR KE PUSAT (perbaikan tinjauan S7, KEPUTUSAN OWNER #15): vonis
       // setoran TIDAK dikirim dari layar ini. Layar ini tidak menandai baris
@@ -539,6 +561,11 @@ export function CheckClient({
 
   async function handleLanjut() {
     if (uploads.length === 0 || matchedInputs.length === 0 || switching) return;
+    const dbBeda = pesanDbBeda();
+    if (dbBeda) {
+      setDownloadError(dbBeda);
+      return;
+    }
     setSwitching(true);
     setDownloadError(null);
     try {
@@ -574,6 +601,11 @@ export function CheckClient({
 
   async function handleDownload() {
     if (uploads.length === 0) return;
+    const dbBeda = pesanDbBeda();
+    if (dbBeda) {
+      setDownloadError(dbBeda);
+      return;
+    }
     setGenerating(true);
     setDownloadError(null);
     try {

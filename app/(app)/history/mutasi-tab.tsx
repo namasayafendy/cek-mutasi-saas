@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
   Filter,
@@ -21,6 +22,7 @@ import { TransactionDetailModal } from "./transaction-detail-modal";
 import { ManualClaimModal, type UnclaimedTx } from "./manual-claim-modal";
 import { downloadMutasiPdf } from "./generate-mutasi-pdf";
 import { DeleteConfirmModal } from "./delete-confirm-modal";
+import { UnggahanPanel } from "./unggahan-panel";
 
 type OutletLite = { id: string; nama: string; warna_hex: string };
 type BankLite = { id: string; kode: string; label: string | null; is_active?: boolean };
@@ -107,6 +109,7 @@ export default function MutasiTab({
   userId: string;
   brandName: string;
 }) {
+  const router = useRouter();
   const [view, setView] = useState<"cards" | "detail">("cards");
   const [activeBankId, setActiveBankId] = useState<string>("");
   const [bankStats, setBankStats] = useState<BankCardStats[]>([]);
@@ -121,6 +124,8 @@ export default function MutasiTab({
   const [claimingTx, setClaimingTx] = useState<UnclaimedTx | null>(null);
   const [printing, setPrinting] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
+  // Dinaikkan sesudah "Batalkan unggahan" berhasil → baris dimuat ulang.
+  const [muatUlang, setMuatUlang] = useState(0);
 
   const outletMap = useMemo(() => new Map(outlets.map((o) => [o.id, o])), [outlets]);
   const bankMap = useMemo(() => new Map(banks.map((b) => [b.id, b])), [banks]);
@@ -254,7 +259,7 @@ export default function MutasiTab({
     return () => {
       cancelled = true;
     };
-  }, [view, activeBankId, filter]);
+  }, [view, activeBankId, filter, muatUlang]);
 
   function openBankDetail(bankId: string) {
     setActiveBankId(bankId);
@@ -536,6 +541,19 @@ export default function MutasiTab({
         <div className="card p-4 border-red-200 bg-red-50 text-red-800 text-sm">
           Gagal memuat: {error}
         </div>
+      )}
+
+      {activeBankId && (
+        <UnggahanPanel
+          key={activeBankId}
+          bankId={activeBankId}
+          onBerubah={() => {
+            // Baris dihapus fungsi database: muat ulang tabel ini, dan segarkan
+            // data server (tab "Belum match", kartu rekening) yang juga memuatnya.
+            setMuatUlang((n) => n + 1);
+            router.refresh();
+          }}
+        />
       )}
 
       <div className="card overflow-hidden">

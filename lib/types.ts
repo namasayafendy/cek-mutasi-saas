@@ -87,6 +87,15 @@ export type Bank = {
   created_at: string;
   recon_last_saldo?: number | null; // saldo akhir mutasi terakhir yg diupload (deteksi bolong)
   recon_last_date?: string | null;  // tanggal transaksi terakhir mutasi terakhir
+  /** Nomor rekening (hanya digit). Kalau terisi, setiap PDF yang diunggah ke
+   *  bank ini WAJIB memuat nomor yang sama di kepalanya — PDF rekening lain
+   *  ditolak sebelum satu baris pun tersimpan (lib/pipeline/gerbangRekening.ts).
+   *  Kosong = perilaku lama (tanpa pemeriksaan), supaya akun lain tak terdampak. */
+  nomor_rekening?: string | null;
+  /** Peran rekening: MASUK (uang nasabah) / KELUAR (rekening kirim admin). */
+  peran?: "MASUK" | "KELUAR" | null;
+  /** Tanggal rekening mulai dipakai untuk perannya (rekening KELUAR). */
+  mulai_tgl?: string | null;
 };
 
 export type Outlet = {

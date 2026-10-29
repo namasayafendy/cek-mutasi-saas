@@ -114,6 +114,7 @@ export function UploadStep({
       renderHalaman: true,
       gagalKalauJenisKosong: true,
       onLangkah: (teks) => updateRow(row.id, { progress: teks }),
+      sumber: "manual",
     });
 
     // Catat cakupan juga dari jalur MANUAL, bukan hanya jalur Telegram.
@@ -138,6 +139,9 @@ export function UploadStep({
             chainBreaks: igGagal.chainBreaks,
             connected: igGagal.connected,
             sumber: "manual",
+            barisHilang: igGagal.barisHilang,
+            barisGanda: igGagal.barisGanda,
+            unggahId: hasil.unggahId ?? null,
           });
         } catch (e) {
           console.error("[cakupan] manual (jenis kosong) gagal:", e);
@@ -161,6 +165,9 @@ export function UploadStep({
           chainBreaks: ig.chainBreaks,
           connected: ig.connected,
           sumber: "manual",
+          barisHilang: ig.barisHilang,
+          barisGanda: ig.barisGanda,
+          unggahId: hasil.upload.unggahId,
         });
         // Kegagalannya TIDAK boleh menggagalkan upload — barisnya sudah masuk
         // dan itu yang penting. Tapi juga tidak boleh ditelan: cakupan yang
@@ -173,9 +180,12 @@ export function UploadStep({
     }
     if (peringatanCakupan) console.warn("[cakupan] manual tidak tercatat:", peringatanCakupan);
 
+    // Anggota tim memang tidak mencatat cakupan (hanya pemilik) — itu bukan
+    // peringatan yang perlu dibaca mereka di setiap unggahan.
+    const tampilkan = peringatanCakupan && peringatanCakupan !== "Hanya pemilik." ? peringatanCakupan : undefined;
     updateRow(row.id, {
       status: "ready",
-      progress: peringatanCakupan ? `⚠️ Cakupan tidak tercatat: ${peringatanCakupan}` : undefined,
+      progress: tampilkan ? `⚠️ Cakupan tidak tercatat: ${tampilkan}` : undefined,
       result: hasil.upload,
     });
   }
@@ -281,11 +291,15 @@ export function UploadStep({
               </div>
 
               {row.result?.integrity &&
-                (row.result.integrity.complete !== null || row.result.integrity.connected !== null) &&
+                (row.result.integrity.complete !== null ||
+                  row.result.integrity.connected !== null ||
+                  row.result.integrity.barisHilang > 0 ||
+                  row.result.integrity.barisGanda > 0) &&
                 (() => {
                   const ig = row.result.integrity!;
                   const rp = (n: number) => "Rp " + Math.round(Math.abs(n)).toLocaleString("id-ID");
-                  const danger = ig.complete === false || ig.connected === false;
+                  const dbBeda = ig.barisHilang > 0 || ig.barisGanda > 0;
+                  const danger = ig.complete === false || ig.connected === false || dbBeda;
                   return (
                     <div
                       className="rounded-md border p-2.5 text-xs space-y-1"
@@ -294,9 +308,20 @@ export function UploadStep({
                         background: danger ? "#fef2f2" : ig.complete ? "#f0fdf4" : "#f8fafc",
                       }}
                     >
-                      {ig.complete === true && (
+                      {ig.complete === true && !dbBeda && (
                         <div className="font-medium text-emerald-700">
                           ✅ Mutasi UTUH — semua transaksi terbaca (cocok total bank).
+                        </div>
+                      )}
+                      {dbBeda && (
+                        <div className="font-medium text-red-700">
+                          ⛔ Isi database TIDAK sama dengan PDF
+                          {ig.barisHilang > 0 ? ` · ${ig.barisHilang} baris tidak tersimpan` : ""}
+                          {ig.barisGanda > 0 ? ` · ${ig.barisGanda} baris tercatat ganda` : ""}
+                          {" "}— hasil cek berkas ini tidak dikirim ke Aceh Gadai sampai datanya diperbaiki.
+                          {ig.contohDb?.length ? (
+                            <div className="font-normal text-red-600">Contoh: {ig.contohDb.join("; ")}</div>
+                          ) : null}
                         </div>
                       )}
                       {ig.complete === false && (
@@ -383,7 +408,12 @@ export function UploadStep({
                     }}
                     type="file"
                     accept={fileAccept}
-                    onChange={(e) => handleFileChange(row.id, e.target.files?.[0] ?? null)}
+                    onChange={(e) => {
+                      handleFileChange(row.id, e.target.files?.[0] ?? null);
+                      // Dikosongkan supaya berkas YANG SAMA bisa dipilih lagi
+                      // sesudah gagal (mis. "unggahan lain masih diproses").
+                      e.target.value = "";
+                    }}
                     className="hidden"
                   />
                   <div className="flex items-center gap-2">
@@ -427,6 +457,13 @@ export function UploadStep({
                 </div>
               )}
 
+              {row.status === "ready" && row.progress && (
+                <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
+                  <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+                  <span>{row.progress}</span>
+                </div>
+              )}
+
               {row.status === "ready" && row.result && (
                 <div className="rounded-md bg-green-50 border border-green-200 px-3 py-2 text-xs text-green-700 flex items-start gap-2">
                   <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
@@ -435,6 +472,9 @@ export function UploadStep({
                     <strong>{row.result.persistInfo.newCount} baru</strong>
                     {row.result.persistInfo.dupCount > 0 && (
                       <>, {row.result.persistInfo.dupCount} sudah ada (auto dedup)</>
+                    )}
+                    {(row.result.persistInfo.revivedCount ?? 0) > 0 && (
+                      <>, {row.result.persistInfo.revivedCount} yang pernah dihapus muncul lagi</>
                     )}
                     .
                   </span>

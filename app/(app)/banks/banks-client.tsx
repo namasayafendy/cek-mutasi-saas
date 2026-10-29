@@ -21,6 +21,8 @@ export function BanksClient({
   const [label, setLabel] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState("");
+  const [editNomor, setEditNomor] = useState("");
+  const [editPeran, setEditPeran] = useState<"" | "MASUK" | "KELUAR">("");
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
@@ -125,17 +127,41 @@ export function BanksClient({
   async function handleSaveEdit(id: string) {
     setError(null);
     const newLabel = editLabel.trim() || null;
+    // Nomor rekening (Tahap 1, Okt 2026): kalau diisi, setiap PDF yang
+    // diunggah ke rekening ini WAJIB memuat nomor yang sama di kepalanya —
+    // salah pilih rekening/salah file ditolak sebelum menyentuh data.
+    // Kosong = tanpa pemeriksaan (perilaku lama).
+    const nomorMentah = editNomor.replace(/[\s.-]/g, "");
+    if (nomorMentah && !/^[0-9]{6,20}$/.test(nomorMentah)) {
+      setError("Nomor rekening hanya angka, 6–20 digit.");
+      return;
+    }
+    const newNomor = nomorMentah || null;
+    const newPeran = editPeran || null;
+    if (newNomor) {
+      const kembar = banks.find((b) => b.id !== id && b.nomor_rekening === newNomor);
+      if (kembar) {
+        setError(`Nomor rekening ${newNomor} sudah dipakai "${bankDisplay(kembar)}".`);
+        return;
+      }
+    }
     const supabase = createClient();
     const { error: updErr } = await supabase
       .from("banks")
-      .update({ label: newLabel })
+      .update({ label: newLabel, nomor_rekening: newNomor, peran: newPeran })
       .eq("id", id);
     if (updErr) {
-      setError(updErr.message);
+      setError(
+        updErr.code === "23505"
+          ? `Nomor rekening ${newNomor} sudah dipakai rekening lain di akun ini.`
+          : updErr.message,
+      );
       return;
     }
     setBanks((prev) =>
-      prev.map((b) => (b.id === id ? { ...b, label: newLabel } : b)),
+      prev.map((b) =>
+        b.id === id ? { ...b, label: newLabel, nomor_rekening: newNomor, peran: newPeran } : b,
+      ),
     );
     setEditingId(null);
     startTransition(() => router.refresh());
@@ -328,17 +354,44 @@ export function BanksClient({
                         )}
                         <div>
                           {isEditing ? (
-                            <input
-                              autoFocus
-                              value={editLabel}
-                              onChange={(e) => setEditLabel(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") handleSaveEdit(b.id);
-                                if (e.key === "Escape") setEditingId(null);
-                              }}
-                              placeholder={getKodeLabel(b.kode)}
-                              className="input-base text-sm py-1"
-                            />
+                            <div className="space-y-1.5">
+                              <input
+                                autoFocus
+                                value={editLabel}
+                                onChange={(e) => setEditLabel(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleSaveEdit(b.id);
+                                  if (e.key === "Escape") setEditingId(null);
+                                }}
+                                placeholder={getKodeLabel(b.kode)}
+                                className="input-base text-sm py-1"
+                              />
+                              <input
+                                value={editNomor}
+                                onChange={(e) => setEditNomor(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleSaveEdit(b.id);
+                                  if (e.key === "Escape") setEditingId(null);
+                                }}
+                                inputMode="numeric"
+                                placeholder="Nomor rekening (opsional)"
+                                className="input-base text-sm py-1"
+                              />
+                              <select
+                                value={editPeran}
+                                onChange={(e) => setEditPeran(e.target.value as "" | "MASUK" | "KELUAR")}
+                                className="input-base text-sm py-1"
+                              >
+                                <option value="">Peran: —</option>
+                                <option value="MASUK">Peran: MASUK</option>
+                                <option value="KELUAR">Peran: KELUAR</option>
+                              </select>
+                              <div className="text-[11px] text-slate-500 max-w-[260px]">
+                                {b.parser_id === "BSI_BSINET_PDF"
+                                  ? "Bila nomor diisi, PDF yang nomornya beda akan ditolak."
+                                  : "Nomor disimpan, tapi PDF format ini belum dibaca nomornya — belum diperiksa."}
+                              </div>
+                            </div>
                           ) : (
                             <>
                               <div className="font-medium text-slate-900 text-sm">
@@ -347,6 +400,16 @@ export function BanksClient({
                               {b.label && (
                                 <div className="text-xs text-slate-500">
                                   Kode: {getKodeLabel(b.kode)}
+                                </div>
+                              )}
+                              {(b.nomor_rekening || b.peran) && (
+                                <div className="text-xs text-slate-500">
+                                  {b.nomor_rekening ? `No. rek ${b.nomor_rekening}` : "No. rek belum diisi"}
+                                  {b.peran && (
+                                    <span className="ml-1.5 inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+                                      {b.peran}
+                                    </span>
+                                  )}
                                 </div>
                               )}
                             </>
@@ -407,9 +470,11 @@ export function BanksClient({
                             onClick={() => {
                               setEditingId(b.id);
                               setEditLabel(b.label ?? "");
+                              setEditNomor(b.nomor_rekening ?? "");
+                              setEditPeran(b.peran ?? "");
                             }}
                             className="rounded p-1.5 text-slate-600 hover:bg-slate-100"
-                            title="Edit label"
+                            title="Edit label & nomor rekening"
                           >
                             <Pencil className="h-4 w-4" />
                           </button>

@@ -17,18 +17,28 @@
 // bank.recon_last_saldo LAMA, jadi ia WAJIB jalan sebelum baris banks
 // diperbarui. Kalau ditukar, `connected` selalu true dan deteksi mutasi
 // bolong mati diam-diam — gagal yang paling berbahaya, karena kelihatan sehat.
+//
+// TAHAP 1 (Okt 2026) menambah tiga langkah, urutannya juga mengikat:
+//   1. GERBANG REKENING — sebelum APA PUN (integritas, catatan unggahan,
+//      persist, banks). PDF rekening lain ditolak tanpa satu efek pun.
+//   2. CATATAN UNGGAHAN — sebelum persist, supaya setiap baris baru membawa
+//      unggah_id (dasar tombol "Batalkan unggahan"). Gagal mencatat = gagal
+//      total: unggahan tanpa catatan tidak bisa dibatalkan.
+//   3. VERIFIKASI ISI DATABASE — sesudah persist. Hasilnya masuk ke
+//      integrity.barisHilang / barisGanda; jalankanPass dan catatCakupan
+//      menolak berkas yang tidak lolos.
+// Dan: rekening dibaca SEGAR dari database di awal (prop `bank` diambil saat
+// halaman dibuka — titik saldo & nomor bisa sudah berubah sejak itu), dan
+// catatan unggahan SELALU ditandai selesai (finally), supaya tombol batal
+// tidak pernah bekerja dengan catatan setengah jadi.
 // ============================================================
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { renderAllPages } from "@/lib/pdf/renderer";
 import { parsePdfByParserId, ParserNotImplementedError } from "@/lib/parsers";
-import {
-  persistTransactions,
-  lookupParsedTxIds,
-  rowLookupKey,
-  type PersistResult,
-} from "@/lib/parsers/persist";
+import { persistTransactions, petakanKeDatabase, type PersistResult } from "@/lib/parsers/persist";
 import { analyzeIntegrity, type IntegrityResult } from "@/lib/parsers/integrity";
+import { periksaRekeningPdf, type KodeTolakRekening } from "@/lib/pipeline/gerbangRekening";
 import type { ParsedPdf } from "@/lib/pdf/parser";
 import type { RenderedPage } from "@/lib/pdf/renderer";
 import type { Bank, Jenis, PdfTransaction } from "@/lib/types";
@@ -57,6 +67,13 @@ export type BankUpload = {
   parsedKreditCount: number;
   parsedDebetCount: number;
   integrity?: IntegrityResult;
+  /** mutasi_unggahan.id unggahan ini — diteruskan ke catatCakupan supaya
+   *  cakupannya ikut terhapus kalau unggahan dibatalkan. */
+  unggahId: string | null;
+  /** true HANYA bila nomor rekening di kepala PDF benar-benar dibandingkan
+   *  dan sama dengan nomor rekening ini. false = tidak diperiksa (rekening
+   *  tanpa nomor / parser tak membaca nomor) — bukan bukti apa pun. */
+  rekeningTerbukti: boolean;
 };
 
 export interface OpsiProsesBank {
@@ -94,6 +111,11 @@ export interface OpsiProsesBank {
   /** Kabar kemajuan. WAJIB tidak pernah melempar — lemparannya akan
    *  tertangkap catch di bawah dan disalahartikan sebagai galat parse. */
   onLangkah?: (teks: string) => void;
+
+  /** Jalur asal unggahan, untuk catatan mutasi_unggahan. */
+  sumber?: "telegram" | "manual";
+  /** mutasi_jobs.id — hanya alur Telegram. */
+  jobId?: string | null;
 }
 
 export type HasilProsesBank =
@@ -101,6 +123,10 @@ export type HasilProsesBank =
   | {
       ok: false;
       alasan: string;
+      /** Terisi bila ditolak GERBANG REKENING — sebelum satu efek pun lahir. */
+      kodeTolak?: KodeTolakRekening;
+      /** REKENING_BEDA: id rekening terdaftar yang memiliki PDF ini. */
+      pemilikId?: string;
       /**
        * Terisi HANYA pada kegagalan "tidak ada transaksi jenis ini" — kegagalan
        * yang terjadi SESUDAH baris berhasil masuk database.
@@ -113,6 +139,8 @@ export type HasilProsesBank =
        */
       integrity?: IntegrityResult;
       persistInfo?: PersistResult;
+      /** Terisi bersama integrity — barisnya sudah tersimpan atas nama unggahan ini. */
+      unggahId?: string | null;
     };
 
 /**
@@ -137,6 +165,8 @@ export async function prosesSatuBank(opsi: OpsiProsesBank): Promise<HasilProsesB
     renderHalaman = true,
     gagalKalauJenisKosong = true,
     onLangkah,
+    sumber = "manual",
+    jobId = null,
   } = opsi;
 
   try {
@@ -144,25 +174,127 @@ export async function prosesSatuBank(opsi: OpsiProsesBank): Promise<HasilProsesB
       password: password || undefined,
     });
 
+    // ── 0. REKENING SEGAR DARI DATABASE ──
+    // Seluruh rekening akun: untuk gerbang (PDF milik rekening lain?) dan
+    // untuk keadaan rekening ini SEKARANG (nomor, titik saldo terakhir).
+    const { data: daftar, error: errDaftar } = await supabase
+      .from("banks")
+      .select("id, account_id, kode, label, parser_id, nomor_rekening, peran, recon_last_saldo, recon_last_date")
+      .eq("account_id", accountId);
+    if (errDaftar) throw new Error(`Gagal membaca daftar rekening: ${errDaftar.message}`);
+    const semuaBank = (daftar ?? []) as Bank[];
+    const segar = semuaBank.find((b) => b.id === bank.id);
+    if (!segar) throw new Error("Rekening tidak ditemukan di akun ini. Muat ulang halaman.");
+    const bankLain = semuaBank.filter((b) => b.id !== bank.id);
+    const reconSaldoSegar = segar.recon_last_saldo == null ? null : Number(segar.recon_last_saldo);
+
+    // ── 1. GERBANG REKENING ──
+    // Sebelum integritas, catatan, persist, dan banks. Ditolak di sini =
+    // tidak ada baris tersimpan, tidak ada titik saldo yang tertimpa, tidak
+    // ada cakupan (pemanggil tidak menerima `integrity`), tidak ada vonis.
+    const gerbang = periksaRekeningPdf({ ...bank, ...segar }, doc.statementMeta, bankLain);
+    if (!gerbang.ok) {
+      return { ok: false, alasan: gerbang.pesan, kodeTolak: gerbang.kode, pemilikId: gerbang.pemilikId };
+    }
+
     // Cek kelengkapan (A) + kontinuitas/bolong (B) vs titik terakhir bank.
     // WAJIB sebelum update banks di bawah — lihat catatan kepala berkas.
-    const integrity = analyzeIntegrity(doc, bank.recon_last_saldo ?? null);
-
-    onLangkah?.("Menyimpan ke history (auto dedup)...");
-    const persisted = await persistTransactions(supabase, accountId, bank.id, doc.rows);
-    const idMap = await lookupParsedTxIds(supabase, accountId, bank.id, doc.rows);
-
-    // Update "titik terakhir" rekonsiliasi bank (kalau statement ini lebih baru).
+    const integrity = analyzeIntegrity(doc, reconSaldoSegar);
     const sm = doc.statementMeta;
-    if (sm?.saldoAkhir != null && sm.lastDate) {
-      const prev = bank.recon_last_date ?? null;
-      if (!prev || sm.lastDate >= prev) {
-        await supabase
+
+    // ── 2. CATATAN UNGGAHAN ──
+    // Titik saldo SEBELUM/SESUDAH, waktu, dan pembuat diisi DATABASE sendiri
+    // (pemicu mutasi_unggahan_sebelum_sisip / _sebelum_ubah) — tidak dikirim
+    // dari sini, dan anggota tim memang tidak punya hak menulisnya. Pemicu
+    // yang sama menolak unggahan kedua untuk rekening ini selagi yang pertama
+    // belum selesai: pemilik baris (unggah_id) harus mengikuti urutan catatan.
+    const { data: unggah, error: errUnggah } = await supabase
+      .from("mutasi_unggahan")
+      .insert({
+        account_id: accountId,
+        bank_id: bank.id,
+        job_id: jobId && /^[0-9a-f-]{36}$/i.test(jobId) ? jobId : null,
+        sumber,
+        file_name: String(file.name ?? "").slice(0, 200) || null,
+        nomor_rekening_pdf: gerbang.nomorPdf,
+        periode_awal: sm?.periodeAwal ?? null,
+        periode_akhir: sm?.periodeAkhir ?? null,
+        tgl_baris_awal: sm?.firstDate ?? null,
+        tgl_baris_akhir: sm?.lastDate ?? null,
+        baris_terbaca: doc.rows.length,
+        // Titik penutup PDF ini — dipakai fungsi batal HANYA bila prosesnya
+        // mati sebelum tanda selesai (lihat migrasi 20261029151428).
+        target_saldo: sm?.saldoAkhir ?? null,
+        target_tgl: sm?.lastDate ?? null,
+      })
+      .select("id")
+      .single();
+    if (errUnggah || !unggah?.id) {
+      const pesan = errUnggah?.message ?? "tanpa id";
+      if (pesan.includes("UNGGAHAN_BERJALAN")) {
+        return {
+          ok: false,
+          alasan:
+            "Unggahan lain untuk rekening ini masih diproses. Tunggu sampai selesai " +
+            "(paling lama 15 menit), lalu ulangi. Tidak ada yang disimpan.",
+        };
+      }
+      throw new Error(`Gagal mencatat unggahan: ${pesan}. Tidak ada yang disimpan.`);
+    }
+    const unggahId = String(unggah.id);
+
+    let simpanan: PersistResult | null = null;
+    let idPerBaris: (string | null)[] = [];
+    try {
+      onLangkah?.("Menyimpan ke history (auto dedup)...");
+      simpanan = await persistTransactions(supabase, accountId, bank.id, doc.rows, null, unggahId);
+
+      // ── 3. PETA + VERIFIKASI ISI DATABASE ──
+      // Aturan pasangan yang SAMA dengan persist (lib/parsers/pasanganBaris.ts),
+      // tapi membaca database lagi: yang dibuktikan isi database, bukan niat kode.
+      onLangkah?.("Memeriksa isi database...");
+      const peta = await petakanKeDatabase(supabase, accountId, bank.id, doc.rows);
+      idPerBaris = peta.idPerBaris;
+      integrity.barisHilang = peta.hilang;
+      integrity.barisGanda = peta.ganda;
+      integrity.contohDb = [
+        ...peta.contohHilang.map((s) => `tidak tersimpan: ${s}`),
+        ...peta.contohGanda.map((s) => `ganda: ${s}`),
+      ].slice(0, 4);
+      if (peta.hilang > 0 || peta.ganda > 0) {
+        console.error("[prosesSatuBank] isi database tidak sama dengan PDF", {
+          hilang: peta.hilang,
+          ganda: peta.ganda,
+          contohHilang: peta.contohHilang,
+          contohGanda: peta.contohGanda,
+        });
+      }
+
+      // Update "titik terakhir" rekonsiliasi bank (kalau statement ini lebih
+      // baru). COMPARE-AND-SET di database — bukan dibandingkan dengan nilai
+      // di halaman, yang bisa sudah basi (titik saldo pernah mundur begitu).
+      if (sm?.saldoAkhir != null && sm.lastDate) {
+        const { error: errRecon } = await supabase
           .from("banks")
           .update({ recon_last_saldo: sm.saldoAkhir, recon_last_date: sm.lastDate })
-          .eq("id", bank.id);
+          .eq("id", bank.id)
+          .eq("account_id", accountId)
+          .or(`recon_last_date.is.null,recon_last_date.lte.${sm.lastDate}`);
+        if (errRecon) console.error("[prosesSatuBank] gagal memperbarui titik saldo:", errRecon.message);
       }
+    } finally {
+      // Tandai catatan unggahan SELESAI apa pun yang terjadi di atas — titik
+      // saldo sesudahnya dibaca database dari banks saat ini (pemicu). Tanpa
+      // tanda ini unggahan dianggap masih berjalan: tidak bisa dibatalkan,
+      // dan unggahan berikutnya rekening ini tertahan 15 menit.
+      const { error: errSelesai } = await supabase
+        .from("mutasi_unggahan")
+        .update({ selesai_at: new Date().toISOString(), baris_baru: simpanan?.newCount ?? 0 })
+        .eq("id", unggahId);
+      if (errSelesai) console.error("[prosesSatuBank] gagal menandai unggahan selesai:", errSelesai.message);
     }
+    const persisted: PersistResult = simpanan!;
+    const idBaris = new Map(doc.rows.map((r, i) => [r, idPerBaris[i]] as const));
 
     const parsedKreditCount = doc.rows.filter((r) => r.kredit > 0).length;
     const parsedDebetCount = doc.rows.filter((r) => r.debet > 0).length;
@@ -190,7 +322,7 @@ export async function prosesSatuBank(opsi: OpsiProsesBank): Promise<HasilProsesB
           deskripsi: r.deskripsi,
           kredit: j === "kredit" ? r.kredit : r.debet,
           bbox: r.bbox,
-          parsedTxId: idMap.get(rowLookupKey(r)),
+          parsedTxId: idBaris.get(r) ?? undefined,
           source: "current",
           bankId: bankIdLocal,
           noRef: r.noRef,
@@ -212,6 +344,7 @@ export async function prosesSatuBank(opsi: OpsiProsesBank): Promise<HasilProsesB
         alasan: `Tidak ada transaksi ${jenis} di file ini.${hint}`,
         integrity,
         persistInfo: persisted,
+        unggahId,
       };
     }
 
@@ -244,6 +377,8 @@ export async function prosesSatuBank(opsi: OpsiProsesBank): Promise<HasilProsesB
         parsedKreditCount,
         parsedDebetCount,
         integrity,
+        unggahId,
+        rekeningTerbukti: gerbang.diperiksa,
       },
     };
   } catch (err) {

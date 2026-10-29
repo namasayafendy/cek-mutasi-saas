@@ -43,6 +43,15 @@ export type StatementMeta = {
   saldoAkhir: number | null;    // saldo akhir periode (closing)
   firstDate: string | null;     // YYYY-MM-DD transaksi paling awal yg terbaca
   lastDate: string | null;      // YYYY-MM-DD transaksi paling akhir yg terbaca
+  /** Nomor rekening yang tercetak di kepala PDF (hanya digit). Satu-satunya
+   *  identitas rekening di PDF BSINet — nama pemilik tidak dicetak. Dipakai
+   *  gerbang tolak di prosesSatuBank: PDF rekening lain DITOLAK sebelum satu
+   *  baris pun tersimpan. undefined = parser bank ini belum membacanya. */
+  nomorRekening?: string | null;
+  mataUang?: string | null;     // mis. "IDR"
+  produk?: string | null;       // mis. "BSI TABUNGAN BISNIS"
+  periodeAwal?: string | null;  // YYYY-MM-DD dari baris "Periode" di kepala
+  periodeAkhir?: string | null; // YYYY-MM-DD dari baris "Periode" di kepala
 };
 
 export type ParsedDocument = {

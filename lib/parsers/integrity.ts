@@ -21,6 +21,14 @@ export type IntegrityResult = {
   lastDate: string | null;
   connected: boolean | null;  // null kalau belum ada titik terakhir tersimpan
   gapAmount: number;          // perkiraan selisih saldo kalau tidak nyambung
+  // C — isi DATABASE vs PDF (diisi prosesSatuBank SESUDAH persist lewat
+  // petakanKeDatabase; 0 sampai saat itu). Keutuhan A/B membaca hasil
+  // parse — kalau database membuang baris, hanya C yang melihatnya.
+  barisHilang: number;        // baris PDF yang tidak ada / isinya beda di DB
+  barisGanda: number;         // baris PDF yang tercatat lebih dari sekali di DB
+  /** Contoh singkat (tanggal, jam, nominal) baris yang tidak tersimpan / ganda,
+   *  untuk pesan penahanan Lapis 2 — tanpa nomor referensi. */
+  contohDb?: string[];
 };
 
 const TOL = 1; // toleransi Rp1 utk pembulatan per-baris
@@ -77,5 +85,7 @@ export function analyzeIntegrity(doc: ParsedDocument, lastSaldo: number | null):
     lastDate: m?.lastDate ?? null,
     connected,
     gapAmount,
+    barisHilang: 0,
+    barisGanda: 0,
   };
 }

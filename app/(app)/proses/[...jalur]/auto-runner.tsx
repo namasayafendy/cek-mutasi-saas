@@ -20,7 +20,7 @@ import { Loader2, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { prosesSatuBank } from "@/lib/pipeline/prosesSatuBank";
 import { jalankanPass, type HasilPass } from "@/lib/pipeline/jalankanPass";
-import { catatLangkah, kunciKirim, lepasKunci, tandaiTerkirim, tandaiSelesai, tandaiGagal } from "./actions";
+import { catatLangkah, kunciKirim, lepasKunci, tandaiTerkirim, tandaiSelesai, tandaiGagal, pastikanBankTugas } from "./actions";
 import { catatCakupan } from "@/lib/coverage/actions";
 import type { Bank, Outlet, MatchRulePreset } from "@/lib/types";
 
@@ -51,6 +51,11 @@ export function AutoRunner({
   const [selesai, setSelesai] = useState(false);
   const [laporan, setLaporan] = useState<string | null>(null);
   const [galat, setGalat] = useState<string | null>(null);
+  // PDF ternyata milik rekening lain yang terdaftar → tautan untuk memproses
+  // ulang tugas yang SAMA sebagai rekening itu (/proses/<token>/<bankId>).
+  // Tanpa ini sarannya buntu: kirim ulang berkas yang sama di Telegram tetap
+  // memakai rekening tebakan nama berkas.
+  const [tautanPemilik, setTautanPemilik] = useState<string | null>(null);
   const sudahJalan = useRef(false);
 
   useEffect(() => {
@@ -107,6 +112,8 @@ export function AutoRunner({
           bank,
           file,
           jenis: "kredit",
+          sumber: "telegram",
+          jobId,
           // Tidak ada yang melihat layar PDF di sini; melewatinya menghemat
           // ratusan MB memori di HP dan tidak menyentuh hasil parse sedikit pun.
           renderHalaman: false,
@@ -115,10 +122,23 @@ export function AutoRunner({
           gagalKalauJenisKosong: false,
           onLangkah: (t) => setTahap((x) => [...x.slice(0, -1), { teks: t, keadaan: "jalan" }]),
         });
-        if (!hasilBaca.ok) throw new Error(hasilBaca.alasan);
+        if (!hasilBaca.ok) {
+          if (hasilBaca.kodeTolak === "REKENING_BEDA" && hasilBaca.pemilikId) {
+            const token = window.location.pathname.split("/").filter(Boolean)[1];
+            if (token) setTautanPemilik(`/proses/${token}/${hasilBaca.pemilikId}`);
+          }
+          throw new Error(hasilBaca.alasan);
+        }
         const up = hasilBaca.upload;
         ubahTerakhir("selesai");
         await catatLangkah(jobId, "parse-ok");
+        // Rekening yang dipilih lewat tautan (/proses/<token>/<bankId>) dulu
+        // tidak pernah ditulis ke tugas — laporan & cakupan lalu membaca
+        // bank_id kosong. Ditulis HANYA bila gerbang benar-benar mencocokkan
+        // nomor di kepala PDF dengan nomor rekening ini. Tanpa bukti itu,
+        // pilihan yang keliru akan "lengket": kirim ulang berkas di Telegram
+        // tidak lagi menawarkan pilihan rekening.
+        if (up.rekeningTerbukti) await pastikanBankTugas(jobId, bank.id);
 
         const ig = up.integrity;
 
@@ -137,6 +157,9 @@ export function AutoRunner({
             connected: ig.connected,
             jobId,
             sumber: "telegram",
+            barisHilang: ig.barisHilang,
+            barisGanda: ig.barisGanda,
+            unggahId: up.unggahId,
           });
         }
 
@@ -145,7 +168,8 @@ export function AutoRunner({
           bankLabel: bank.label || bank.kode || "Rekening",
           barisTerbaca: up.persistInfo.total,
           barisBaru: up.persistInfo.newCount,
-          barisSudahAda: up.persistInfo.dupCount,
+          // Baris yang pernah dihapus lalu hidup lagi = baris LAMA, bukan baru.
+          barisSudahAda: up.persistInfo.dupCount + (up.persistInfo.revivedCount ?? 0),
           utuh: ig?.complete ?? null,
           nyambung: ig?.connected ?? null,
           selisihSambungan: ig?.gapAmount ?? 0,
@@ -303,6 +327,11 @@ export function AutoRunner({
         <div className="card p-5 border-red-200 bg-red-50">
           <h2 className="font-medium text-red-900">Gagal</h2>
           <p className="mt-1 text-sm text-red-800">{galat}</p>
+          {tautanPemilik && (
+            <a href={tautanPemilik} className="mt-3 inline-block btn-primary text-sm">
+              Proses ulang sebagai rekening pemilik PDF ini
+            </a>
+          )}
           <p className="mt-2 text-xs text-red-700">
             Mengulang aman untuk bagian yang belum terkirim: baris yang sudah tersimpan
             tidak akan digandakan, dan pass yang sudah mendarat tidak akan dikirim dua kali.

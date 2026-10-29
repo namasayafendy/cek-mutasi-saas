@@ -33,6 +33,12 @@ export interface CatatCakupanInput {
   connected?: boolean | null;
   jobId?: string | null;
   sumber?: "telegram" | "manual";
+  /** Hasil verifikasi isi database (Tahap 1): baris PDF yang tidak tersimpan
+   *  / tercatat ganda. Berkas dengan salah satunya > 0 tidak menyumbang cakupan. */
+  barisHilang?: number;
+  barisGanda?: number;
+  /** mutasi_unggahan.id — supaya "Batalkan unggahan" ikut menghapus cakupannya. */
+  unggahId?: string | null;
 }
 
 function angkaAtauNull(v: unknown): number | null {
@@ -80,6 +86,11 @@ export async function catatCakupan(input: CatatCakupanInput): Promise<{ ok: bool
   if (Number(input.chainBreaks ?? 0) > 0) {
     return { ok: false, error: "Rantai saldo putus — cakupan tidak dicatat." };
   }
+  // Isi database tidak sama dengan PDF (Tahap 1): jalankanPass menolak
+  // memvonis berkas ini, jadi tanggalnya tidak boleh tampak "sudah diperiksa".
+  if (Number(input.barisHilang ?? 0) > 0 || Number(input.barisGanda ?? 0) > 0) {
+    return { ok: false, error: "Isi database tidak sama dengan PDF — cakupan tidak dicatat." };
+  }
 
   const hariIni = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
   if (tglAkhir > hariIni) {
@@ -111,6 +122,26 @@ export async function catatCakupan(input: CatatCakupanInput): Promise<{ ok: bool
     .maybeSingle();
   if (!bank) return { ok: false, error: "Bank tidak ditemukan di akun ini." };
 
+  // Unggahan WAJIB milik akun + bank yang sama; selain itu diabaikan (null),
+  // bukan ditolak — cakupan tetap lebih penting daripada tautan batalnya.
+  let unggahId: string | null = null;
+  if (input.unggahId && /^[0-9a-f-]{36}$/i.test(input.unggahId)) {
+    const { data: ung } = await db
+      .from("mutasi_unggahan")
+      .select("id, dibatalkan_at")
+      .eq("id", input.unggahId)
+      .eq("account_id", ctx.account.id)
+      .eq("bank_id", bankId)
+      .maybeSingle();
+    // Unggahan yang SUDAH dibatalkan (baris-barisnya sudah dihapus) tidak
+    // boleh melahirkan cakupan — tanggalnya akan tampak sudah diperiksa
+    // padahal barisnya tidak ada.
+    if (ung?.dibatalkan_at) {
+      return { ok: false, error: "Unggahan ini sudah dibatalkan — cakupan tidak dicatat." };
+    }
+    if (ung) unggahId = input.unggahId;
+  }
+
   const { error } = await db.from("mutasi_coverage").upsert(
     {
       account_id: ctx.account.id,
@@ -124,6 +155,7 @@ export async function catatCakupan(input: CatatCakupanInput): Promise<{ ok: bool
       connected: typeof input.connected === "boolean" ? input.connected : null,
       job_id: input.jobId && /^[0-9a-f-]{36}$/i.test(input.jobId) ? input.jobId : null,
       sumber: input.sumber === "manual" ? "manual" : "telegram",
+      unggah_id: unggahId,
     },
     { onConflict: "account_id,bank_id,tgl_awal,tgl_akhir", ignoreDuplicates: true },
   );
