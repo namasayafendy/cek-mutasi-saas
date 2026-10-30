@@ -244,5 +244,27 @@ console.log("\n21. Salinan terhapus + baris AKTIF ber-ref LAIN dengan tgl/jam/no
   cek("baris aktif lain = ganda", h.gandaDb.length === 1 && h.gandaDb[0].id === lainAktif.id);
 }
 
+console.log("\n22. 2b dua baris kembar tanpa ref (pengirim beda), saldo bergeser sama, id DB terbalik → dipasangkan menurut saldo, bukan urutan id");
+{
+  const a = P("2026-10-07", "10.15", null, 0, 50000, 1050000 + 30000);
+  const b = P("2026-10-07", "10.15", null, 0, 50000, 1100000 + 30000);
+  const xB = { ...D({ ...b, saldo: 1100000 }), id: "00000000-0000-0000-0000-000000000001" };
+  const xA = { ...D({ ...a, saldo: 1050000 }), id: "00000000-0000-0000-0000-000000000009" };
+  const h = pasangkanBaris([a, b], [xB, xA]);
+  cek("A → baris A", h.pasangan[0]?.id === xA.id, JSON.stringify(h.pasangan.map((x) => x?.id)));
+  cek("B → baris B", h.pasangan[1]?.id === xB.id);
+}
+
+console.log("\n23. 2b kelompok dengan pergeseran TIDAK seragam → tidak ditebak (baru + ganda menahan)");
+{
+  const a = P("2026-10-07", "10.15", null, 0, 50000, 1080000);
+  const b = P("2026-10-07", "10.15", null, 0, 50000, 1110000);
+  const xA = D({ ...a, saldo: 1050000 });
+  const xB = D({ ...b, saldo: 1100000 });
+  const h = pasangkanBaris([a, b], [xA, xB]);
+  cek("keduanya baru (tidak dipasangkan)", h.baru.length === 2);
+  cek("baris DB tertahan ganda", h.gandaDb.length === 2);
+}
+
 console.log(`\n${lulus} lulus, ${gagal} gagal`);
 if (gagal > 0) process.exit(1);

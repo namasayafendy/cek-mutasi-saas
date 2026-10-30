@@ -179,7 +179,7 @@ export async function prosesSatuBank(opsi: OpsiProsesBank): Promise<HasilProsesB
     // untuk keadaan rekening ini SEKARANG (nomor, titik saldo terakhir).
     const { data: daftar, error: errDaftar } = await supabase
       .from("banks")
-      .select("id, account_id, kode, label, parser_id, nomor_rekening, peran, recon_last_saldo, recon_last_date")
+      .select("id, account_id, kode, label, parser_id, nomor_rekening, peran, recon_last_saldo, recon_last_date, is_active")
       .eq("account_id", accountId);
     if (errDaftar) throw new Error(`Gagal membaca daftar rekening: ${errDaftar.message}`);
     const semuaBank = (daftar ?? []) as Bank[];
@@ -194,7 +194,15 @@ export async function prosesSatuBank(opsi: OpsiProsesBank): Promise<HasilProsesB
     // ada cakupan (pemanggil tidak menerima `integrity`), tidak ada vonis.
     const gerbang = periksaRekeningPdf({ ...bank, ...segar }, doc.statementMeta, bankLain);
     if (!gerbang.ok) {
-      return { ok: false, alasan: gerbang.pesan, kodeTolak: gerbang.kode, pemilikId: gerbang.pemilikId };
+      // Tautan "proses ulang sebagai rekening pemilik" hanya ditawarkan bila
+      // rekening itu aktif — selain itu tautannya buntu.
+      const pemilikAktif = gerbang.pemilikId
+        ? semuaBank.some((b) => b.id === gerbang.pemilikId && b.is_active !== false)
+        : false;
+      const alasan = gerbang.pemilikId && !pemilikAktif
+        ? `${gerbang.pesan} Rekening itu sedang nonaktif — aktifkan dulu di menu Bank.`
+        : gerbang.pesan;
+      return { ok: false, alasan, kodeTolak: gerbang.kode, pemilikId: pemilikAktif ? gerbang.pemilikId : undefined };
     }
 
     // Cek kelengkapan (A) + kontinuitas/bolong (B) vs titik terakhir bank.

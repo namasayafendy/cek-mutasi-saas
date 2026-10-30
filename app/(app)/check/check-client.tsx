@@ -354,7 +354,45 @@ export function CheckClient({
           : "Tidak ada transfer dari Aceh Gadai di daftar ini.");
         return;
       }
-      const results = gadaiInputs.map((i) => ({
+      // Baris yang SUDAH dipegang klaim lain di database (tumpang H-1, sesi
+      // sebelumnya, baris "Hapus Data" yang dihidupkan kembali dengan klaim
+      // utuh) tidak boleh membuktikan klaim KEDUA — satu uang, dua "cocok".
+      // Sama dengan penjaga claimedByOther di /proses. Klaim seperti itu
+      // TIDAK dikirim (bukan dikirim "tidak ketemu": itu vonis terminal palsu).
+      const poolByKey = new Map(
+        matchingPool.map((t) => [`${t.bankId ?? "_"}|${t.no}|${t.tanggalDate.getTime()}|${t.kredit}`, t] as const),
+      );
+      const barisKlaim = new Map<string, string>();
+      for (const i of gadaiInputs) {
+        if (i.match?.status !== "matched") continue;
+        const bid = i.match.txBankId ?? i.bankId;
+        const tx = poolByKey.get(`${bid ?? "_"}|${i.match.txNo}|${i.match.txDate.getTime()}|${i.nominal}`);
+        if (tx?.parsedTxId) barisKlaim.set(String(i.id), tx.parsedTxId);
+      }
+      const idBaris = [...new Set(barisKlaim.values())];
+      const dipegang = new Set<string>();
+      if (idBaris.length > 0) {
+        const sb = createClient();
+        for (let a = 0; a < idBaris.length; a += 200) {
+          const { data, error } = await sb
+            .from("parsed_transactions")
+            .select("id")
+            .in("id", idBaris.slice(a, a + 200))
+            .not("claimed_by_input_id", "is", null);
+          if (error) {
+            setKirimMsg("❌ Tidak dikirim: gagal memeriksa baris yang sudah dipegang klaim lain (" + error.message + ").");
+            return;
+          }
+          for (const r of data ?? []) dipegang.add(String((r as { id: string }).id));
+        }
+      }
+      const nTerpegang = gadaiInputs.filter((i) => dipegang.has(barisKlaim.get(String(i.id)) ?? "")).length;
+      const dikirim = gadaiInputs.filter((i) => !dipegang.has(barisKlaim.get(String(i.id)) ?? ""));
+      if (dikirim.length === 0) {
+        setKirimMsg(`Tidak ada yang dikirim: ${nTerpegang} klaim cocok ke baris yang sudah dipegang klaim lain — periksa lewat /proses.`);
+        return;
+      }
+      const results = dikirim.map((i) => ({
         id: i.id,
         matched: i.match?.status === "matched",
         matched_by:
@@ -407,6 +445,7 @@ export function CheckClient({
       if (nSetoran > 0) extra.push(`${nSetoran} setoran ke pusat tidak dikirim — dinilai lewat /proses`);
       setKirimMsg(
         `✅ Terkirim. ${res.updated} cocok, ${res.unmatched} belum ketemu.` +
+          (nTerpegang > 0 ? ` (${nTerpegang} klaim TIDAK dikirim: barisnya sudah dipegang klaim lain)` : "") +
           (extra.length ? ` (${extra.join(", ")})` : "") +
           (res.alertSent ? " Alert Telegram terkirim." : " (alert gagal terkirim)"),
       );

@@ -153,14 +153,19 @@ export async function catatLangkah(jobId: string, langkah: string): Promise<Bala
  * pernah ditulis ke mutasi_jobs.bank_id, sehingga tandaiSelesai memberi label
  * "Rekening" dan cakupan untuk laporan bernilai null. Dipanggil SESUDAH
  * gerbang rekening meloloskan PDF (nomor di kepala PDF = nomor rekening ini),
- * jadi yang ditulis sudah terbukti. Bank yang SUDAH terisi tidak pernah
- * ditimpa — compare-and-set `bank_id IS NULL`.
+ * jadi yang ditulis sudah terbukti. Bank tebakan nama berkas yang keliru
+ * diganti selagi belum ada vonis terkirim (compare-and-set atas nilai lama).
  */
 export async function pastikanBankTugas(jobId: string, bankId: string): Promise<Balasan> {
   const r = await jobMilikku(jobId);
   if ("error" in r) return { ok: false, error: r.error };
   if (!/^[0-9a-f-]{36}$/i.test(String(bankId))) return { ok: false, error: "Bank tidak sah." };
-  if (r.job.bank_id) return { ok: true };
+  if (r.job.bank_id === bankId) return { ok: true };
+  // Rekening yang SUDAH terisi (tebakan nama berkas di webhook) boleh diganti
+  // HANYA selagi belum ada vonis yang terkirim dari tugas ini — sesudah itu
+  // laporannya sudah berbicara atas nama rekening lama. Pemanggil (auto-runner)
+  // hanya memanggil ini bila nomor di kepala PDF terbukti = nomor rekening ini.
+  if (r.job.bank_id && (r.job.dikirim_kredit_at || r.job.dikirim_debet_at)) return { ok: true };
   const { data: bank } = await r.db
     .from("banks")
     .select("id")
@@ -168,12 +173,16 @@ export async function pastikanBankTugas(jobId: string, bankId: string): Promise<
     .eq("account_id", r.ctx.account.id)
     .maybeSingle();
   if (!bank) return { ok: false, error: "Bank tidak ditemukan di akun ini." };
-  const { error } = await r.db
+  // Compare-and-set atas nilai yang tadi dibaca.
+  let q = r.db
     .from("mutasi_jobs")
     .update({ bank_id: bankId })
     .eq("id", jobId)
     .eq("account_id", r.ctx.account.id)
-    .is("bank_id", null);
+    .is("dikirim_kredit_at", null)
+    .is("dikirim_debet_at", null);
+  q = r.job.bank_id ? q.eq("bank_id", r.job.bank_id) : q.is("bank_id", null);
+  const { error } = await q;
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }

@@ -253,14 +253,35 @@ export function pasangkanBaris(rows: ParsedTxRow[], db: BarisDb[]): HasilPasanga
       if (b.deleted_at || b.no_ref || terpakai.has(String(b.id))) continue;
       masuk(dbSisa, kunciTanpaSaldoDb(b), b);
     }
+    const pasang = (i: number, b: BarisDb) => {
+      pasangan[i] = b;
+      cara[i] = "isi";
+      terpakai.add(String(b.id));
+    };
     for (const [k, idx] of pdfSisa) {
       const l = dbSisa.get(k);
       if (!l || l.length !== idx.length) continue;
-      idx.forEach((i, j) => {
-        pasangan[i] = l[j];
-        cara[i] = "isi";
-        terpakai.add(String(l[j].id));
-      });
+      if (idx.length === 1) {
+        pasang(idx[0], l[0]);
+        continue;
+      }
+      // Dua baris atau lebih dengan kunci sama (mis. dua kredit 50.000 dari
+      // pengirim berbeda di menit yang sama): urutan id database ACAK, jadi
+      // memasangkan menurut urutan bisa menukar milik dua pengirim — klaim
+      // A lalu memegang baris B. Hanya dipasangkan bila SATU pergeseran saldo
+      // yang sama menjelaskan semuanya (kredit belakangan menggeser seluruh
+      // baris sesudahnya sebesar nominal yang sama); selain itu tidak
+      // ditebak — jatuh ke penahanan ganda di bawah.
+      const p = [...idx].sort((a, b) => Number(rows[a].saldo) - Number(rows[b].saldo));
+      const d = [...l].sort((a, b) => Number(a.saldo) - Number(b.saldo));
+      const adaKosong = p.some((i) => rows[i].saldo == null) || d.some((b) => b.saldo == null);
+      const kembar =
+        p.some((i, j) => j > 0 && rows[i].saldo === rows[p[j - 1]].saldo) ||
+        d.some((b, j) => j > 0 && b.saldo === d[j - 1].saldo);
+      if (adaKosong || kembar) continue;
+      const geser = Number(rows[p[0]].saldo) - Number(d[0].saldo);
+      if (!p.every((i, j) => Number(rows[i].saldo) - Number(d[j].saldo) === geser)) continue;
+      p.forEach((i, j) => pasang(i, d[j]));
     }
   }
 
