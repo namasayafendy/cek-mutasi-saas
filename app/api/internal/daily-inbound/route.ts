@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
     // Semua query EKSPLISIT difilter account_id (jangan andalkan RLS — service role bypass)
     const [{ data: bankRows, error: bankErr }, { data: txRows, error: txErr }] = await Promise.all([
       db.from("banks")
-        .select("id, kode, label, is_active, recon_last_date")
+        .select("id, kode, label, is_active, recon_last_date, peran")
         .eq("account_id", accountId),
       db.from("parsed_transactions")
         .select("bank_id, tanggal, jam, nominal_kredit, nama_pengirim, deskripsi")
@@ -77,12 +77,21 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    // Tahap 2: kredit di rekening KELUAR (rekening kirim admin) BUKAN uang
+    // masuk usaha — isinya isi ulang dari rekening MASUK, retur, dsb. Ikut
+    // dihitung = uang yang sama terhitung dua kali. Akun tanpa rekening KELUAR
+    // tidak terdampak.
+    const idKeluar = new Set(
+      (bankRows ?? []).filter((b: any) => b.peran === "KELUAR").map((b: any) => String(b.id)),
+    );
+    const barisMasuk = (txRows ?? []).filter((t) => !idKeluar.has(String(t.bank_id)));
+
     // Rekap per bank + daftar transaksi (dibatasi 100 baris terbaru)
     const perBankMap = new Map<string, { bank: string; label: string; jumlahTransaksi: number; total: number; dataSampai: string | null }>();
     let totalMasuk = 0;
     const transaksi: Array<{ bank: string; jam: string | null; nominal: number; pengirim: string; deskripsi: string }> = [];
 
-    for (const t of txRows ?? []) {
+    for (const t of barisMasuk) {
       const b = bankById.get(String(t.bank_id));
       const bankKode = b?.kode || "?";
       const nominal = Number(t.nominal_kredit || 0);
@@ -117,7 +126,7 @@ export async function GET(request: NextRequest) {
       ok: true,
       tgl,
       totalMasuk,
-      jumlahTransaksi: (txRows ?? []).length,
+      jumlahTransaksi: barisMasuk.length,
       perBank: [...perBankMap.values()],
       transaksi,
       rekeningBelumUpload: belumUpload,

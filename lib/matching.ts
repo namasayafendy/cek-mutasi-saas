@@ -283,6 +283,16 @@ export type RunMatchingOptions = {
   /** Force cross-bank ke semua input (skip filter bank). Untuk leftover re-run. */
   forceCrossBank?: boolean;
   /**
+   * Tahap 2 (Okt 2026): klaim yang PUNYA rekening (input.bankId terisi —
+   * klaim gadai selalu diberi rekening pemiliknya, lihat
+   * lib/pipeline/rekeningKlaim.ts) HANYA boleh cocok dengan baris rekening
+   * itu — di SEMUA pass, termasuk PASS 1 REF yang biasanya tanpa saringan
+   * bank, dan forceCrossBank diabaikan untuknya. Baris tanpa bank dianggap
+   * rekening lain. Input "Semua bank" (bankId kosong) tetap lintas bank.
+   * Mati (bawaan) = perilaku lama persis.
+   */
+  bankKetat?: boolean;
+  /**
    * "all" (default) — match semua input dari awal.
    * "leftover-only" — proses HANYA input dengan status no_candidate, sisanya di-keep.
    */
@@ -386,8 +396,17 @@ export function runMatching(
   options?: RunMatchingOptions,
 ): { inputs: UserInput[]; summary: MatchSummary } {
   const getRules = options?.getRulesForInput ?? (() => DEFAULT_RULES);
+  const bankKetat = options?.bankKetat ?? false;
   const forceCrossBank = options?.forceCrossBank ?? false;
   const mode = options?.mode ?? "all";
+  // Ketat berlaku per input: hanya yang punya rekening.
+  const ketatUntuk = (a: string | undefined | null) => bankKetat && !!a;
+  // Lewati saringan bank? Lama: forceCrossBank atau input tanpa bank.
+  const lewatiFilterBank = (a: string | undefined | null) => (ketatUntuk(a) ? false : forceCrossBank || !a);
+  // Beda rekening? Lama: hanya bila KEDUA sisi punya bank dan berbeda.
+  // Ketat: baris wajib milik rekening klaim persis.
+  const bedaBank = (a: string | undefined | null, b: string | undefined | null) =>
+    ketatUntuk(a) ? (a ?? "") !== (b ?? "") : !!a && !!b && a !== b;
 
   const claimed = new Set<string>();
   const disepak: MatchSummary["disepak"] = [];
@@ -473,8 +492,8 @@ export function runMatching(
       if (hanyaSetoran && !adalahSetoran(j)) return false;
       if (resolved[jdx] || sudahAmbilDiJalan.has(String(j.id))) return false;
       const rj = getRules(j);
-      const lewatiBank = forceCrossBank || !j.bankId;
-      if (!lewatiBank && j.bankId && tx.bankId && j.bankId !== tx.bankId) return false;
+      const lewatiBank = lewatiFilterBank(j.bankId);
+      if (!lewatiBank && bedaBank(j.bankId, tx.bankId)) return false;
       if (!nominalMatches(j.nominal, tx.kredit, rj)) return false;
       const days = diffDays(j.tanggal, tx.tanggalDate);
       // Pesaing SETORAN dinilai dengan jendela setoran sendiri (tidak mundur).
@@ -517,8 +536,8 @@ export function runMatching(
     const refUp = kanonRef(input.refFt);
     if (!refUp) return;
 
-    const hits = transactions.filter((tx) =>
-      kanonRef(tx.noRef).startsWith(refUp),
+    const hits = transactions.filter(
+      (tx) => kanonRef(tx.noRef).startsWith(refUp) && !(ketatUntuk(input.bankId) && bedaBank(input.bankId, tx.bankId)),
     );
     if (hits.length === 0) return; // ref tak ketemu BUKAN alarm — lanjut pass 2/3
 
@@ -699,10 +718,10 @@ export function runMatching(
     const nama = String(input.namaPengirimResi ?? "").trim();
     if (jamInput === null || !nama) return;
 
-    const skipBankFilter = forceCrossBank || !input.bankId;
+    const skipBankFilter = lewatiFilterBank(input.bankId);
     const candidates = transactions.filter((tx) => {
       if (tx.claimedByOther) return false;
-      if (!skipBankFilter && input.bankId && tx.bankId && input.bankId !== tx.bankId) {
+      if (!skipBankFilter && bedaBank(input.bankId, tx.bankId)) {
         return false;
       }
       if (tx.kredit !== input.nominal) return false;
@@ -764,10 +783,10 @@ export function runMatching(
     if (jamInput === null) return;                 // jam tak terbaca -> PASS 4
 
     const rules = getRules(input);
-    const skipBankFilter = forceCrossBank || !input.bankId;
+    const skipBankFilter = lewatiFilterBank(input.bankId);
     const candidates = transactions.filter((tx) => {
       if (tx.claimedByOther) return false;
-      if (!skipBankFilter && input.bankId && tx.bankId && input.bankId !== tx.bankId) {
+      if (!skipBankFilter && bedaBank(input.bankId, tx.bankId)) {
         return false;
       }
       if (!nominalMatches(input.nominal, tx.kredit, rules)) return false;
@@ -795,14 +814,14 @@ export function runMatching(
       if (setoranLuar === null || pendingRefIssue[idx]) return;
       const sejam = (jt: number | null) => jt === null || Math.abs(jt - jamInput) <= PASS3_JAM_TOLERANSI_MENIT;
       const semuaSejam = transactions.filter((tx) => {
-        if (!skipBankFilter && input.bankId && tx.bankId && input.bankId !== tx.bankId) return false;
+        if (!skipBankFilter && bedaBank(input.bankId, tx.bankId)) return false;
         if (!nominalMatches(input.nominal, tx.kredit, rules)) return false;
         if (diffDays(input.tanggal, tx.tanggalDate) !== 0) return false;
         const jt = jamToMinutes(tx.waktu);
         return jt !== null && sejam(jt);
       });
       const luarSejam = (setoranLuar ?? []).filter((t) => {
-        if (!skipBankFilter && input.bankId && t.bankId && input.bankId !== t.bankId) return false;
+        if (!skipBankFilter && bedaBank(input.bankId, t.bankId)) return false;
         if (!nominalMatches(input.nominal, t.kredit, rules)) return false;
         if (diffDays(input.tanggal, t.tanggalDate) !== 0) return false;
         return sejam(jamToMinutes(t.waktu ?? null));
@@ -858,15 +877,15 @@ export function runMatching(
       namaSamaKetat(nama, namaResiKetat(j.namaPengirimResi)));
     if (saudara) return;
 
-    const skipBankFilter = forceCrossBank || !input.bankId;
+    const skipBankFilter = lewatiFilterBank(input.bankId);
     const bernama = transactions.filter((tx) => {
-      if (!skipBankFilter && input.bankId && tx.bankId && input.bankId !== tx.bankId) return false;
+      if (!skipBankFilter && bedaBank(input.bankId, tx.bankId)) return false;
       if (tx.kredit !== input.nominal) return false;
       if (Math.abs(diffDays(input.tanggal, tx.tanggalDate)) > 1) return false;
       return namaSamaKetat(nama, namaMutasiKetat(tx.namaPengirim));
     });
     const luar = terpegangLuar.filter((t) => {
-      if (!skipBankFilter && input.bankId && t.bankId && input.bankId !== t.bankId) return false;
+      if (!skipBankFilter && bedaBank(input.bankId, t.bankId)) return false;
       if (t.kredit !== input.nominal) return false;
       if (Math.abs(diffDays(input.tanggal, t.tanggalDate)) > 1) return false;
       return namaSamaKetat(nama, namaMutasiKetat(t.namaPengirim));
@@ -933,7 +952,7 @@ export function runMatching(
     // - input.bankId kosong/null → "Semua bank" → skip filter
     // - forceCrossBank=true → skip filter (re-run leftover ke semua bank)
     // - else: filter strict
-    const skipBankFilter = forceCrossBank || !input.bankId;
+    const skipBankFilter = lewatiFilterBank(input.bankId);
 
     // ── PASS 4 SETOR KE PUSAT: NOMINAL SAJA HANYA UNTUK CALON TUNGGAL ──
     //
@@ -945,7 +964,7 @@ export function runMatching(
       // Jendela SETORAN: [tgl slip, tgl slip + maju] — tidak mundur (lihat
       // dalamJendelaSetoran).
       const dalamJendela = (t: { tanggalDate: Date; kredit: number; bankId?: string | null }) => {
-        if (!skipBankFilter && input.bankId && t.bankId && input.bankId !== t.bankId) return false;
+        if (!skipBankFilter && bedaBank(input.bankId, t.bankId)) return false;
         if (!nominalMatches(input.nominal, t.kredit, rules)) return false;
         return dalamJendelaSetoran(diffDays(input.tanggal, t.tanggalDate), rules);
       };
@@ -1013,7 +1032,7 @@ export function runMatching(
 
     const allCandidates = transactions.filter((tx) => {
       if (tx.claimedByOther) return false;
-      if (!skipBankFilter && input.bankId && tx.bankId && input.bankId !== tx.bankId) {
+      if (!skipBankFilter && bedaBank(input.bankId, tx.bankId)) {
         return false;
       }
       if (!nominalMatches(input.nominal, tx.kredit, rules)) return false;
@@ -1059,7 +1078,7 @@ export function runMatching(
       const adaHariSamaTapiSudahDiambil = transactions.some((tx) => {
         if (!nominalMatches(input.nominal, tx.kredit, rules)) return false;
         if (diffDays(input.tanggal, tx.tanggalDate) !== 0) return false;
-        if (!skipBankFilter && input.bankId && tx.bankId && input.bankId !== tx.bankId) return false;
+        if (!skipBankFilter && bedaBank(input.bankId, tx.bankId)) return false;
         return tx.claimedByOther || claimed.has(txKey(tx));
       });
 

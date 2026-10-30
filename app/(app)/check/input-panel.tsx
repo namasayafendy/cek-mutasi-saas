@@ -45,6 +45,12 @@ export function InputPanel({
         setPullMsg("❌ " + res.error);
         return;
       }
+      // Tahap 2: rekening KELUAR terdaftar tapi konfigurasinya belum lengkap →
+      // tidak bisa memastikan klaim mana milik rekening mana. Jangan dinilai.
+      if (res.aturanRekening.masalah) {
+        setPullMsg(`❌ ${res.aturanRekening.masalah} Lengkapi di menu Bank dulu.`);
+        return;
+      }
       // Pemegang lemah (sudahMemegang: sudah MATCHED di gadai, dibawa tarikan
       // hanya sebagai kandidat korban aturan sepak di /proses) BUKAN klaim
       // untuk dinilai ulang di layar ini — tanpa saringan ini ia dicocokkan

@@ -141,6 +141,7 @@ export interface AlasanBatal {
     | "RANTAI_PUTUS"
     | "GAGAL_SIMPAN_BARIS"
     | "ISI_DB_TIDAK_SAMA"
+    | "REKENING_TIDAK_JELAS"
     | "GAGAL_SIMPAN_SESI"
     | "PERIODE_KOSONG"
     | "TIDAK_ADA_KLAIM"
@@ -157,6 +158,9 @@ export interface HasilPass {
   periodEnd: string | null;
 
   klaimDitarik: number;
+  /** Tahap 2: klaim milik rekening LAIN (aturan rekening pemilik aktif) —
+   *  tidak dinilai, tidak dikirim, tidak disimpan di sesi rekening ini. */
+  klaimRekeningLain?: number;
   /** Klaim yang dibuang saat konversi karena tanggal tak sah / nominal nol.
    *  Dibuang diam-diam oleh layar biasa (input-panel.tsx:51) — di sini dihitung
    *  supaya tidak ada klaim yang lenyap tanpa disebut. */
@@ -384,6 +388,10 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
    *   menganggur.
    * @returns id baris yang masuk daftar; itulah yang boleh distempel nanti.
    */
+  // Tahap 2: true = akun punya rekening KELUAR → setiap klaim dan setiap
+  // pembacaan "uang tanpa pemilik" dibatasi ke rekening berkas ini. Diisi
+  // sesudah klaim ditarik; false = perilaku lama persis.
+  let ketatRekening = false;
   const bacaNganggur = async (idTerpakai: Set<string>): Promise<string[]> => {
     if (!periodStart || !periodEnd) return [];
     try {
@@ -407,10 +415,15 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       if (batasAkhir < periodStart) return [];
 
       const kolom = jenis === "debet" ? "nominal_debet" : "nominal_kredit";
-      const { data: barisBaru, count } = await supabase
+      let qNganggur = supabase
         .from("parsed_transactions")
         .select(`id, tanggal, jam, ${kolom}, nama_pengirim, nama_penerima, deskripsi`, { count: "exact" })
-        .eq("account_id", accountId)
+        .eq("account_id", accountId);
+      // Dua rekening: baris rekening LAIN bukan urusan berkas ini — menyebut
+      // (dan menstempel) baris KELUAR saat memproses MASUK membuatnya tidak
+      // pernah muncul di laporan KELUAR sendiri, padahal ia belum dinilai.
+      if (ketatRekening) qNganggur = qNganggur.eq("bank_id", upload.bank.id);
+      const { data: barisBaru, count } = await qNganggur
         .gte("tanggal", periodStart as string)
         .lte("tanggal", batasAkhir)
         .is("claimed_by_input_id", null)
@@ -534,9 +547,27 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     hasil.batal = { kode: "TARIK_GAGAL", pesan: tarik.error };
     return hasil;
   }
+  // ── Tahap 2: rekening pemilik klaim ──
+  // Konfigurasi rekening KELUAR yang belum lengkap = tidak bisa memastikan
+  // klaim mana milik berkas ini → TIDAK menilai sama sekali. Menilai tanpa
+  // aturan justru melahirkan vonis "tidak ditemukan" palsu yang terminal.
+  const aturanRek = tarik.aturanRekening;
+  if (aturanRek.masalah) {
+    hasil.batal = {
+      kode: "REKENING_TIDAK_JELAS",
+      pesan: `${aturanRek.masalah} Lengkapi di menu Bank sebelum mutasi dinilai.`,
+    };
+    return hasil;
+  }
+  ketatRekening = aturanRek.aktif;
+  const milikBerkasIni = (i: { bankId: string }) => !ketatRekening || i.bankId === upload.bank.id;
+  hasil.klaimRekeningLain = ketatRekening
+    ? tarik.inputs.filter((i) => i.sudahMemegang !== true && !milikBerkasIni(i)).length
+    : 0;
+
   // Pemegang lemah ikut di tarik.inputs sebagai kandidat korban — bukan klaim
   // yang "ditarik untuk dinilai". Menghitungnya membengkakkan angka ini ±750.
-  hasil.klaimDitarik = tarik.inputs.filter((i) => i.sudahMemegang !== true).length;
+  hasil.klaimDitarik = tarik.inputs.filter((i) => i.sudahMemegang !== true && milikBerkasIni(i)).length;
   hasil.outletTakDikenal = tarik.unmappedOutlets;
   hasil.tertahanGerbang = tarik.tertahan ?? null;
   // Dicatat SEBELUM klaim dibuang/disaring, supaya keanggotaannya tidak ikut
@@ -549,6 +580,9 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
 
   const inputs: UserInput[] = [];
   for (const i of tarik.inputs) {
+    // Klaim rekening lain: tidak dinilai, tidak dikirim, tidak dibuang
+    // (bukan "rusak") — ia menunggu berkas rekeningnya sendiri.
+    if (!milikBerkasIni(i)) continue;
     const dt = parseDateISO(i.tanggalISO);
     if (!dt || !i.nominal) {
       hasil.klaimDibuang++;
@@ -997,6 +1031,9 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     getRulesForInput: (i) => gadaiAwareRules(i, rulesById),
     nama: opsiNama,
     setoran: opsiSetoran,
+    // Tahap 2: baris rekening lain (ref-pool, terpegang luar) tidak boleh
+    // dipakai klaim berkas ini — di pass mana pun.
+    bankKetat: ketatRekening,
   });
 
   // ── PELEPASAN PEMEGANG LAMA DIPERSISTENKAN DULU, SEBELUM SESI DISIMPAN ──

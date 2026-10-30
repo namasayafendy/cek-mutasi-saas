@@ -12,6 +12,7 @@ import type {
   MatchRulePreset,
 } from "@/lib/types";
 import { runMatching, adalahSetoran, type MatchRules, DEFAULT_RULES } from "@/lib/matching";
+import { susunAturanRekening } from "@/lib/pipeline/rekeningKlaim";
 import { createClient } from "@/lib/supabase/client";
 import { toDateISO, formatRupiah } from "@/lib/format";
 import { loadCarryoverPdfTxs } from "@/lib/sessions/carryover";
@@ -266,6 +267,11 @@ export function CheckClient({
     return pool;
   }, [uploads, useCarryover, carryoverByBank, jenis, refPool]);
 
+  // Tahap 2: akun dengan rekening KELUAR → klaim ber-rekening hanya boleh
+  // cocok dengan baris rekeningnya sendiri (lib/pipeline/rekeningKlaim.ts).
+  // Mati untuk semua akun lain = perilaku lama persis.
+  const ketatRekening = useMemo(() => susunAturanRekening(banks as any[]).aktif, [banks]);
+
   const round1 = useMemo(() => {
     if (uploads.length === 0 || inputs.length === 0) {
       return {
@@ -281,8 +287,9 @@ export function CheckClient({
     }
     return runMatching(inputs, matchingPool, outletColors, {
       getRulesForInput: (input) => gadaiAwareRules(input, rulesById),
+      bankKetat: ketatRekening,
     });
-  }, [inputs, uploads.length, matchingPool, outletColors, rulesById]);
+  }, [inputs, uploads.length, matchingPool, outletColors, rulesById, ketatRekening]);
 
   const matchResult = useMemo(() => {
     if (!leftoverReRun || round1.summary.noCandidate.length === 0) {
@@ -292,8 +299,9 @@ export function CheckClient({
       getRulesForInput: (input) => gadaiAwareRules(input, rulesById),
       forceCrossBank: true,
       mode: "leftover-only",
+      bankKetat: ketatRekening,
     });
-  }, [round1, matchingPool, outletColors, rulesById, leftoverReRun]);
+  }, [round1, matchingPool, outletColors, rulesById, leftoverReRun, ketatRekening]);
 
   const matchedInputs = matchResult.inputs;
 
@@ -331,7 +339,15 @@ export function CheckClient({
       // dikunci — penjaga anti double claim hanya ada di /proses. Setorannya
       // tetap PENDING di gadai dan dinilai /proses pada jalan berikutnya.
       const nSetoran = matchedInputs.filter((i) => String(i.id).startsWith(prefix) && adalahSetoran(i)).length;
-      const gadaiInputs = matchedInputs.filter((i) => String(i.id).startsWith(prefix) && !adalahSetoran(i));
+      // Tahap 2: klaim milik rekening yang TIDAK diunggah di layar ini tidak
+      // dinilai di sini — mengirimnya berarti vonis "tidak ditemukan" palsu.
+      const idUnggah = new Set(uploads.map((u) => u.bank.id));
+      const gadaiInputs = matchedInputs.filter(
+        (i) =>
+          String(i.id).startsWith(prefix) &&
+          !adalahSetoran(i) &&
+          (!ketatRekening || idUnggah.has(String(i.bankId ?? ""))),
+      );
       if (gadaiInputs.length === 0) {
         setKirimMsg(nSetoran > 0
           ? `Tidak ada yang dikirim: ${nSetoran} setoran ke pusat hanya dinilai lewat /proses.`

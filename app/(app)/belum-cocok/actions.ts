@@ -26,6 +26,7 @@ import { getAccountContext } from "@/lib/supabase/context";
 import { createClient } from "@/lib/supabase/server";
 import { tandaiTolakLintasHari } from "@/lib/laporan/tolakLintasHari";
 import { bacaTercakupAkun, paramTercakup } from "@/lib/coverage/tercakup";
+import { susunAturanRekening, pemilikKlaim, TANPA_REKENING } from "@/lib/pipeline/rekeningKlaim";
 
 /** Keputusan pemilik 28 Juli 2026: apa pun sebelum tanggal ini sudah beres. */
 const LANTAI = "2026-07-22";
@@ -218,11 +219,25 @@ export async function cariKandidat(
   const target = pakaiCustom ? Math.round(nominalCari as number) : nominal;
   const TOLERANSI = pakaiCustom ? 0 : 50_000;
 
+  // Tahap 2: dua rekening → kandidat HANYA dari rekening pemilik klaim.
+  // Menutup klaim dengan baris rekening lain = vonis palsu yang terminal.
+  const { data: semuaBank, error: errBank } = await k.db
+    .from("banks")
+    .select("id, peran, mulai_tgl, nomor_rekening, is_active")
+    .eq("account_id", k.ctx.account.id);
+  if (errBank) return { ok: false, msg: errBank.message };
+  const aturanRek = susunAturanRekening((semuaBank ?? []) as any[]);
+  if (aturanRek.masalah) return { ok: false, msg: `${aturanRek.masalah} Lengkapi di menu Bank dulu.` };
+  const pemilik = pemilikKlaim(aturanRek, String(arah).toUpperCase() === "DEBET" ? "debet" : "kredit", tgl);
+  if (pemilik === TANPA_REKENING) return { ok: false, msg: "Rekening pemilik klaim ini tidak bisa dipastikan." };
+
   try {
-    const { data, error } = await k.db
+    let q = k.db
       .from("parsed_transactions")
       .select(`id, tanggal, jam, ${kolom}, nama_pengirim, nama_penerima, no_ref, claimed_by_input_id`)
-      .eq("account_id", k.ctx.account.id)
+      .eq("account_id", k.ctx.account.id);
+    if (pemilik) q = q.eq("bank_id", pemilik);
+    const { data, error } = await q
       // Kalau pemilik menyebut tanggal sendiri, jendelanya dipersempit jadi
       // ±1 hari: ia sedang MENUNJUK hari tertentu, bukan menebak-nebak, dan
       // jendela lebar hanya akan mengubur barisnya di antara baris lain.

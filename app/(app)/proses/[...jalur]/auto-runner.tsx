@@ -211,6 +211,7 @@ export function AutoRunner({
           jenis: h.jenis as "kredit" | "debet",
           periodStart: h.periodStart, periodEnd: h.periodEnd,
           klaimDitarik: h.klaimDitarik, klaimDibuang: h.klaimDibuang,
+          klaimRekeningLain: h.klaimRekeningLain ?? 0,
           outletTakDikenal: h.outletTakDikenal,
           klaimDinilai: h.klaimDinilai, cocok: h.cocok, belumKetemu: h.belumKetemu,
           ditahanDiLuarPeriode: h.ditahanDiLuarPeriode,

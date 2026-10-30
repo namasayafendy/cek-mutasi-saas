@@ -23,6 +23,7 @@ export function BanksClient({
   const [editLabel, setEditLabel] = useState("");
   const [editNomor, setEditNomor] = useState("");
   const [editPeran, setEditPeran] = useState<"" | "MASUK" | "KELUAR">("");
+  const [editMulai, setEditMulai] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
@@ -138,6 +139,13 @@ export function BanksClient({
     }
     const newNomor = nomorMentah || null;
     const newPeran = editPeran || null;
+    // Tahap 2: rekening KELUAR WAJIB punya tanggal mulai — DEBET bertanggal
+    // sebelum itu tetap milik rekening MASUK. Peran lain tidak memakainya.
+    const newMulai = newPeran === "KELUAR" ? editMulai || null : null;
+    if (newPeran === "KELUAR" && (!newMulai || !newNomor)) {
+      setError("Rekening KELUAR wajib punya nomor rekening dan tanggal mulai dipakai.");
+      return;
+    }
     if (newNomor) {
       const kembar = banks.find((b) => b.id !== id && b.nomor_rekening === newNomor);
       if (kembar) {
@@ -148,7 +156,7 @@ export function BanksClient({
     const supabase = createClient();
     const { error: updErr } = await supabase
       .from("banks")
-      .update({ label: newLabel, nomor_rekening: newNomor, peran: newPeran })
+      .update({ label: newLabel, nomor_rekening: newNomor, peran: newPeran, mulai_tgl: newMulai })
       .eq("id", id);
     if (updErr) {
       setError(
@@ -160,7 +168,9 @@ export function BanksClient({
     }
     setBanks((prev) =>
       prev.map((b) =>
-        b.id === id ? { ...b, label: newLabel, nomor_rekening: newNomor, peran: newPeran } : b,
+        b.id === id
+          ? { ...b, label: newLabel, nomor_rekening: newNomor, peran: newPeran, mulai_tgl: newMulai }
+          : b,
       ),
     );
     setEditingId(null);
@@ -386,6 +396,17 @@ export function BanksClient({
                                 <option value="MASUK">Peran: MASUK</option>
                                 <option value="KELUAR">Peran: KELUAR</option>
                               </select>
+                              {editPeran === "KELUAR" && (
+                                <label className="block text-[11px] text-slate-600">
+                                  Mulai dipakai (transfer keluar sejak tanggal ini dicek di rekening ini)
+                                  <input
+                                    type="date"
+                                    value={editMulai}
+                                    onChange={(e) => setEditMulai(e.target.value)}
+                                    className="input-base text-sm py-1 mt-0.5"
+                                  />
+                                </label>
+                              )}
                               <div className="text-[11px] text-slate-500 max-w-[260px]">
                                 {b.parser_id === "BSI_BSINET_PDF"
                                   ? "Bila nomor diisi, PDF yang nomornya beda akan ditolak."
@@ -409,6 +430,9 @@ export function BanksClient({
                                     <span className="ml-1.5 inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
                                       {b.peran}
                                     </span>
+                                  )}
+                                  {b.peran === "KELUAR" && b.mulai_tgl && (
+                                    <span className="ml-1.5">sejak {String(b.mulai_tgl).slice(0, 10)}</span>
                                   )}
                                 </div>
                               )}
@@ -472,6 +496,7 @@ export function BanksClient({
                               setEditLabel(b.label ?? "");
                               setEditNomor(b.nomor_rekening ?? "");
                               setEditPeran(b.peran ?? "");
+                              setEditMulai(String(b.mulai_tgl ?? "").slice(0, 10));
                             }}
                             className="rounded p-1.5 text-slate-600 hover:bg-slate-100"
                             title="Edit label & nomor rekening"

@@ -13,6 +13,7 @@ import type {
   MatchRulePreset,
 } from "@/lib/types";
 import { runMatching, adalahSetoran, type MatchRules, DEFAULT_RULES } from "@/lib/matching";
+import { susunAturanRekening } from "@/lib/pipeline/rekeningKlaim";
 import { createClient } from "@/lib/supabase/client";
 import { toDateISO, formatRupiah } from "@/lib/format";
 import {
@@ -199,6 +200,9 @@ export default function HistoryCekClient({
     }
   }
 
+  // Tahap 2: lihat check-client — klaim ber-rekening hanya cocok di rekeningnya.
+  const ketatRekening = useMemo(() => susunAturanRekening(banks as any[]).aktif, [banks]);
+
   const round1 = useMemo(() => {
     if (!poolLoaded || inputs.length === 0) {
       return {
@@ -214,8 +218,9 @@ export default function HistoryCekClient({
     }
     return runMatching(inputs, pool, outletColors, {
       getRulesForInput: (input) => gadaiAwareRules(input, rulesById),
+      bankKetat: ketatRekening,
     });
-  }, [inputs, poolLoaded, pool, outletColors, rulesById]);
+  }, [inputs, poolLoaded, pool, outletColors, rulesById, ketatRekening]);
 
   const matchResult = useMemo(() => {
     if (!leftoverReRun || round1.summary.noCandidate.length === 0) return round1;
@@ -223,8 +228,9 @@ export default function HistoryCekClient({
       getRulesForInput: (input) => gadaiAwareRules(input, rulesById),
       forceCrossBank: true,
       mode: "leftover-only",
+      bankKetat: ketatRekening,
     });
-  }, [round1, pool, outletColors, rulesById, leftoverReRun]);
+  }, [round1, pool, outletColors, rulesById, leftoverReRun, ketatRekening]);
 
   const matchedInputs = matchResult.inputs;
   const summary = matchResult.summary;
@@ -240,7 +246,15 @@ export default function HistoryCekClient({
       // pengirimannya mendahului penguncian baris; penjaga anti double claim
       // hanya ada di /proses. Setorannya tetap PENDING di gadai.
       const nSetoran = matchedInputs.filter((i) => String(i.id).startsWith(prefix) && adalahSetoran(i)).length;
-      const gadaiInputs = matchedInputs.filter((i) => String(i.id).startsWith(prefix) && !adalahSetoran(i));
+      // Tahap 2: hanya klaim milik rekening yang ADA di kolam layar ini —
+      // klaim rekening lain tidak dinilai di sini (vonisnya akan palsu).
+      const idKolam = new Set(filteredBanks.map((b) => b.id));
+      const gadaiInputs = matchedInputs.filter(
+        (i) =>
+          String(i.id).startsWith(prefix) &&
+          !adalahSetoran(i) &&
+          (!ketatRekening || idKolam.has(String(i.bankId ?? ""))),
+      );
       if (gadaiInputs.length === 0) {
         setKirimMsg(nSetoran > 0
           ? `Tidak ada yang dikirim: ${nSetoran} setoran ke pusat hanya dinilai lewat /proses.`

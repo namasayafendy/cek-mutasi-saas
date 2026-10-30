@@ -34,6 +34,7 @@
 // ============================================================
 
 import { ambilSemuaHalaman, hariIniWib, tambahHari, POLA_TGL, type DbBaca } from "./bundel";
+import { susunAturanRekening } from "@/lib/pipeline/rekeningKlaim";
 
 /** Satu tanggal di jawaban GET {gadai}/api/transfer-klaim/periksa-ai. */
 export interface StatusTanggalGadai {
@@ -79,7 +80,7 @@ const JENDELA_HARI = 100;
 /** Rem kalau ringkasan sebuah job memuat rentang yang tak masuk akal. */
 const MAKS_RENTANG_JOB_HARI = 62;
 
-type Kandidat = { final: boolean; dasarMs: number };
+type Kandidat = { final: boolean; dasarMs: number; finalBank: Set<string> };
 
 /** Batal yang tidak merusak vonis: memang tidak ada yang perlu dicocokkan. */
 const BATAL_JINAK = new Set(["TIDAK_ADA_KLAIM", "PERIODE_KOSONG"]);
@@ -118,10 +119,22 @@ export async function tanggalPerluDiperiksa(
   // transaksi bertanggal ≥ lantai (export tidak memuat hari esok).
   const sejak = new Date(Date.parse(`${lantai}T00:00:00+07:00`)).toISOString();
 
+  // Tahap 2: dua rekening → tanggal D baru FINAL bila rekening MASUK sudah
+  // tercakup final, DAN (untuk D ≥ tanggal mulai KELUAR) rekening KELUAR juga.
+  // Tanpa ini D ditutup oleh PDF MASUK sebelum PDF KELUAR-nya masuk, dan
+  // transfer keluar hari itu tidak pernah diperiksa. Konfigurasi rekening
+  // belum lengkap → tidak ada tanggal yang final (diperiksa ulang, aman).
+  const { data: bankRows, error: errBank } = await db
+    .from("banks")
+    .select("id, peran, mulai_tgl, nomor_rekening, is_active")
+    .eq("account_id", accountId);
+  if (errBank) throw new Error(`banks gagal dibaca: ${errBank.message}`);
+  const aturanRek = susunAturanRekening((bankRows ?? []) as any[]);
+
   const jobs = await ambilSemuaHalaman<Record<string, unknown>>("mutasi_jobs", () =>
     db.from("mutasi_jobs")
       .select(
-        "id, created_at, selesai_at, " +
+        "id, bank_id, created_at, selesai_at, " +
           "ps0:ringkasan->pass->0->>periodStart, pe0:ringkasan->pass->0->>periodEnd, " +
           "ps1:ringkasan->pass->1->>periodStart, pe1:ringkasan->pass->1->>periodEnd, " +
           "ps2:ringkasan->pass->2->>periodStart, pe2:ringkasan->pass->2->>periodEnd, " +
@@ -154,9 +167,12 @@ export async function tanggalPerluDiperiksa(
       // Klaim D belum lahir sebelum 00:00 WIB D+1 — unggahan hari D bukan dasar
       // pemeriksaan D (tidak jadi kandidat, tidak menggeser dasar_proses_at).
       if (dibuatMs < Date.parse(`${tambahHari(d, 1)}T00:00:00+07:00`)) continue;
-      const k = kandidat.get(d) ?? { final: false, dasarMs: 0 };
+      const k = kandidat.get(d) ?? { final: false, dasarMs: 0, finalBank: new Set<string>() };
       // ≥ 07:00 WIB hari D+1  ⇔  ≥ 00:00 UTC hari D+1.
-      if (bolehFinal && dibuatMs >= Date.parse(`${tambahHari(d, 1)}T00:00:00Z`)) k.final = true;
+      if (bolehFinal && dibuatMs >= Date.parse(`${tambahHari(d, 1)}T00:00:00Z`)) {
+        k.final = true;
+        if (j.bank_id) k.finalBank.add(String(j.bank_id));
+      }
       if (selesaiMs > k.dasarMs) k.dasarMs = selesaiMs;
       kandidat.set(d, k);
     }
@@ -164,6 +180,14 @@ export async function tanggalPerluDiperiksa(
 
   const diGadai = new Map<string, StatusTanggalGadai>();
   for (const t of statusGadai.tanggal ?? []) if (t && POLA_TGL.test(String(t.tgl))) diGadai.set(String(t.tgl), t);
+
+  if (aturanRek.masalah || aturanRek.aktif) {
+    for (const [tgl, k] of kandidat) {
+      k.final = aturanRek.aktif
+        ? k.finalBank.has(aturanRek.masukId) && (tgl < aturanRek.keluarMulai || k.finalBank.has(aturanRek.keluarId))
+        : false;
+    }
+  }
 
   const calon: TanggalPerlu[] = [];
   for (const [tgl, k] of kandidat) {

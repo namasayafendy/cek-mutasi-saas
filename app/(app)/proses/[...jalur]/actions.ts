@@ -301,6 +301,8 @@ export interface RingkasPass {
   periodEnd: string | null;
   klaimDitarik: number;
   klaimDibuang: number;
+  /** Tahap 2: klaim milik rekening lain — tidak dinilai berkas ini. */
+  klaimRekeningLain?: number;
   outletTakDikenal: string[];
   klaimDinilai: number;
   cocok: number;
@@ -913,11 +915,16 @@ export async function tandaiSelesai(
   if (r.job.bank_id) {
     const { data: bk } = await r.db
       .from("banks")
-      .select("label, kode")
+      .select("label, kode, peran")
       .eq("id", r.job.bank_id)
       .eq("account_id", r.ctx.account.id)
       .maybeSingle();
-    if (bk) bankLabel = String((bk as any).label || (bk as any).kode || "Rekening");
+    if (bk) {
+      // Tahap 2: dua rekening → laporan menyebut perannya, supaya laporan
+      // berkas MASUK dan KELUAR tidak tertukar saat dibaca.
+      const peran = (bk as any).peran ? ` (${(bk as any).peran})` : "";
+      bankLabel = String((bk as any).label || (bk as any).kode || "Rekening") + peran;
+    }
   }
   const dariDb = { namaFile: jinak(r.job.file_name, 120), bankLabel: jinak(bankLabel, 60) };
 

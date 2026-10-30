@@ -12,6 +12,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { getAccountContext } from "@/lib/supabase/context";
 import type { RefIssueKirim } from "@/lib/types";
+import { susunAturanRekening, pemilikKlaim, type AturanRekening } from "@/lib/pipeline/rekeningKlaim";
 
 export interface GadaiPullInput {
   id: string; // id klaim dari Aceh Gadai (utk referensi/dedup)
@@ -77,7 +78,11 @@ export interface GadaiTertahan {
 
 export type GadaiPullResult =
   | { ok: true; inputs: GadaiPullInput[]; unmappedOutlets: string[]; total: number;
-      tertahan: GadaiTertahan | null }
+      tertahan: GadaiTertahan | null;
+      /** Tahap 2: aturan rekening pemilik klaim (lib/pipeline/rekeningKlaim.ts).
+       *  aktif=false = perilaku lama; `masalah` terisi = konfigurasi rekening
+       *  KELUAR belum lengkap → pemanggil WAJIB menolak menilai. */
+      aturanRekening: AturanRekening }
   | { ok: false; error: string };
 
 // Normalisasi nama outlet: trim + rapikan spasi + UPPERCASE (case-insensitive match)
@@ -158,6 +163,17 @@ export async function pullGadaiClaims(
     .order("urutan");
   const defaultBankId = banks && banks.length === 1 ? (banks[0] as any).id : "";
 
+  // 4b) Tahap 2: rekening pemilik per klaim. Hanya aktif bila akun punya
+  //     rekening berperan KELUAR; selain itu bankId = defaultBankId (lama).
+  const { data: semuaBank, error: errPeran } = await supabase
+    .from("banks")
+    .select("id, peran, mulai_tgl, nomor_rekening, is_active")
+    .eq("account_id", accountId);
+  if (errPeran) return { ok: false, error: `Gagal membaca peran rekening: ${errPeran.message}` };
+  const aturanRekening = susunAturanRekening((semuaBank ?? []) as any[]);
+  const bankKlaim = (tgl: string, cl: any): string =>
+    pemilikKlaim(aturanRekening, arah, tgl, cl?.rekening_nomor ?? null) ?? defaultBankId;
+
   // 5) Match rule default (sesuai arah)
   const { data: rules } = await supabase
     .from("match_rules")
@@ -186,7 +202,7 @@ export async function pullGadaiClaims(
       id: String(cl.id),
       tanggalISO: tgl,
       outletId: outId,
-      bankId: defaultBankId,
+      bankId: bankKlaim(tgl, cl),
       matchRuleId: defaultRuleId,
       nominal: Number(cl.nominal || 0),
       refFt: cl.ref_ft ? String(cl.ref_ft) : null,
@@ -215,7 +231,7 @@ export async function pullGadaiClaims(
       id: String(cl.id),
       tanggalISO: tgl,
       outletId: outId,
-      bankId: defaultBankId,
+      bankId: bankKlaim(tgl, cl),
       matchRuleId: defaultRuleId,
       nominal: Number(cl.nominal || 0),
       refFt: cl.ref_ft ? String(cl.ref_ft) : null,
@@ -233,7 +249,7 @@ export async function pullGadaiClaims(
     });
   }
 
-  return { ok: true, inputs, unmappedOutlets: [...unmapped], total, tertahan };
+  return { ok: true, inputs, unmappedOutlets: [...unmapped], total, tertahan, aturanRekening };
 }
 
 // ============================================================
