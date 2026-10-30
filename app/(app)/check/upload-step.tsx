@@ -15,6 +15,7 @@ import { getParserSpec } from "@/lib/banks/registry";
 import { createClient } from "@/lib/supabase/client";
 import { prosesSatuBank, type BankUpload } from "@/lib/pipeline/prosesSatuBank";
 import { catatCakupan } from "@/lib/coverage/actions";
+import { kirimJangkarKeluar } from "@/lib/rekeningKirim/actions";
 import type { Bank, Jenis } from "@/lib/types";
 
 // BankUpload dulu didefinisikan di sini. Sejak Fase 1 (kanal mutasi Telegram)
@@ -180,12 +181,21 @@ export function UploadStep({
     }
     if (peringatanCakupan) console.warn("[cakupan] manual tidak tercatat:", peringatanCakupan);
 
+    // Tahap 3: rekening KIRIM → titik saldonya ke gadai (mode bayangan).
+    let peringatanJangkar: string | undefined;
+    if (hasil.upload.rekeningTerbukti && bank.peran === "KELUAR") {
+      const jk = await kirimJangkarKeluar(bank.id, hasil.upload.unggahId).catch((e) => ({ ok: false, msg: String(e) }));
+      if (!jk.ok) peringatanJangkar = `Saldo rekening kirim belum terkirim ke Aceh Gadai: ${(jk as { msg?: string }).msg ?? "-"}`;
+    }
     // Anggota tim memang tidak mencatat cakupan (hanya pemilik) — itu bukan
     // peringatan yang perlu dibaca mereka di setiap unggahan.
     const tampilkan = peringatanCakupan && peringatanCakupan !== "Hanya pemilik." ? peringatanCakupan : undefined;
     updateRow(row.id, {
       status: "ready",
-      progress: tampilkan ? `⚠️ Cakupan tidak tercatat: ${tampilkan}` : undefined,
+      progress:
+        [tampilkan ? `⚠️ Cakupan tidak tercatat: ${tampilkan}` : "", peringatanJangkar ? `⚠️ ${peringatanJangkar}` : ""]
+          .filter(Boolean)
+          .join(" · ") || undefined,
       result: hasil.upload,
     });
   }

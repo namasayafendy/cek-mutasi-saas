@@ -22,6 +22,7 @@ import { prosesSatuBank } from "@/lib/pipeline/prosesSatuBank";
 import { jalankanPass, type HasilPass } from "@/lib/pipeline/jalankanPass";
 import { catatLangkah, kunciKirim, lepasKunci, tandaiTerkirim, tandaiSelesai, tandaiGagal, pastikanBankTugas } from "./actions";
 import { catatCakupan } from "@/lib/coverage/actions";
+import { kirimJangkarKeluar } from "@/lib/rekeningKirim/actions";
 import type { Bank, Outlet, MatchRulePreset } from "@/lib/types";
 
 type Tahap = { teks: string; keadaan: "jalan" | "selesai" | "gagal" | "ragu" };
@@ -139,6 +140,13 @@ export function AutoRunner({
         // pilihan yang keliru akan "lengket": kirim ulang berkas di Telegram
         // tidak lagi menawarkan pilihan rekening.
         if (up.rekeningTerbukti) await pastikanBankTugas(jobId, bank.id);
+
+        // Tahap 3: rekening KIRIM → titik saldonya ke gadai (tampilan admin
+        // pusat, mode bayangan). Gagal = disebut di layar, tidak menghentikan.
+        if (up.rekeningTerbukti && bank.peran === "KELUAR") {
+          const jk = await kirimJangkarKeluar(bank.id, up.unggahId).catch((e) => ({ ok: false, msg: String(e) }));
+          if (!jk.ok) dorong(`Saldo rekening kirim belum terkirim ke Aceh Gadai: ${(jk as { msg?: string }).msg ?? "-"}`, "ragu");
+        }
 
         const ig = up.integrity;
 
