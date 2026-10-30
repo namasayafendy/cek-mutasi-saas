@@ -97,6 +97,9 @@ export default function HistoryCekClient({
   const [filter, setFilter] = useState<FilterState>(defaultFilter);
   const [pool, setPool] = useState<PdfTransaction[]>([]);
   const [poolLoaded, setPoolLoaded] = useState(false);
+  // Bank yang BENAR-BENAR dimuat ke kolam (bukan filter yang sedang dipilih
+  // — filter bisa diubah sesudah memuat tanpa memuat ulang). Tahap 2.
+  const [poolBankIds, setPoolBankIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [inputs, setInputs] = useState<UserInput[]>([]);
@@ -190,10 +193,12 @@ export default function HistoryCekClient({
         void i;
       }
       setPool(allTx);
+      setPoolBankIds(bankList);
       setPoolLoaded(true);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Gagal memuat data history");
       setPool([]);
+      setPoolBankIds([]);
       setPoolLoaded(false);
     } finally {
       setLoading(false);
@@ -248,7 +253,7 @@ export default function HistoryCekClient({
       const nSetoran = matchedInputs.filter((i) => String(i.id).startsWith(prefix) && adalahSetoran(i)).length;
       // Tahap 2: hanya klaim milik rekening yang ADA di kolam layar ini —
       // klaim rekening lain tidak dinilai di sini (vonisnya akan palsu).
-      const idKolam = new Set(filteredBanks.map((b) => b.id));
+      const idKolam = new Set(poolBankIds);
       const gadaiInputs = matchedInputs.filter(
         (i) =>
           String(i.id).startsWith(prefix) &&
@@ -323,7 +328,9 @@ export default function HistoryCekClient({
       for (const i of matchedInputs) {
         const bid =
           (i.match?.status === "matched" && i.match.txBankId) || i.bankId || (filter.bankIds[0] ?? banks[0]?.id ?? "");
-        if (!bid) continue;
+        // TANPA_REKENING ("-") bukan bank — menyimpannya melahirkan sesi
+        // kosong (insert cek_inputs gagal di kolom uuid). Tahap 2.
+        if (!bid || bid === "-") continue;
         const arr = inputsByBank.get(bid) ?? [];
         arr.push(i);
         inputsByBank.set(bid, arr);
@@ -460,6 +467,7 @@ export default function HistoryCekClient({
                 setSavedSessionInfo(null);
                 setInputs([]);
                 setPool([]);
+                setPoolBankIds([]);
                 setPoolLoaded(false);
                 setLeftoverReRun(false);
               }}

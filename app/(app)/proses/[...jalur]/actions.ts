@@ -28,6 +28,7 @@ import { susunLapis2Lengkap, sebabAlarmRef, type IsiLapis2, type RingkasLapis2 }
 import { after } from "next/server";
 import { picuPeriksaAi, bacaKonfigGadai } from "@/lib/periksaAi/pemicu";
 import { bacaTercakupAkun, paramTercakup, type Tercakup } from "@/lib/coverage/tercakup";
+import { susunAturanRekening, pemilikKlaim, TANPA_REKENING } from "@/lib/pipeline/rekeningKlaim";
 import { buatLembarLapis2, sisipkanBarisLembar, BATAS_LEMBAR } from "@/lib/laporan/lembarWeb";
 
 export type Balasan = { ok: boolean; error?: string };
@@ -312,6 +313,8 @@ export interface RingkasPass {
   klaimDibuang: number;
   /** Tahap 2: klaim milik rekening lain — tidak dinilai berkas ini. */
   klaimRekeningLain?: number;
+  /** Tahap 2: seluruh arah ini milik rekening lain (lihat HasilPass). */
+  lewatRekeningLain?: boolean;
   outletTakDikenal: string[];
   klaimDinilai: number;
   cocok: number;
@@ -617,6 +620,14 @@ async function susunLaporanLapis2(
           // boleh terbaca "bersih").
           const refPernah = await bacaRefPernah(r.db, r.ctx.account.id,
             tunggakan.map((t) => String((t as any).klaim_id ?? "")));
+          // Tahap 2: calon dihitung HANYA di rekening pemilik klaim — sama
+          // dengan /belum-cocok (cariKandidat). Gagal membaca peran rekening /
+          // konfigurasi belum lengkap → tidak ada calon yang dihitung.
+          const { data: bankPeran, error: errPeran } = await r.db
+            .from("banks")
+            .select("id, peran, mulai_tgl, nomor_rekening, is_active")
+            .eq("account_id", r.ctx.account.id);
+          const aturanRek = errPeran ? null : susunAturanRekening((bankPeran ?? []) as any[]);
           for (const t of tunggakan) {
             const issue = refPernah?.get(String((t as any).klaim_id ?? "")) ?? null;
             if (issue && (!t.sebab || t.sebab === "tidak ada di rekening")) {
@@ -624,7 +635,10 @@ async function susunLaporanLapis2(
                 ? "REF menunjuk baris mutasi yang sudah dipegang klaim lain — kemungkinan resi bekas"
                 : "nomor resi menunjuk baris mutasi bernominal BEDA — salah baca AI atau resi diedit";
             }
-            if (refPernah === null || issue || sebabAlarmRef(t.sebab)) {
+            const pemilikT = aturanRek && !aturanRek.masalah
+              ? pemilikKlaim(aturanRek, String((t as any).arah ?? "KREDIT").toUpperCase() === "DEBET" ? "debet" : "kredit", String(t.tgl ?? ""))
+              : undefined;
+            if (refPernah === null || issue || sebabAlarmRef(t.sebab) || pemilikT === undefined || pemilikT === TANPA_REKENING) {
               (t as any).calonBebas = null;   // sengaja tidak ditelusuri
               continue;
             }
@@ -641,10 +655,12 @@ async function susunLaporanLapis2(
                 d.setUTCDate(d.getUTCDate() + n);
                 return d.toISOString().slice(0, 10);
               };
-              const { count } = await r.db
+              let qCalon = r.db
                 .from("parsed_transactions")
                 .select("id", { count: "exact", head: true })
-                .eq("account_id", r.ctx.account.id)
+                .eq("account_id", r.ctx.account.id);
+              if (pemilikT) qCalon = qCalon.eq("bank_id", pemilikT);
+              const { count } = await qCalon
                 .is("claimed_by_input_id", null)
                 .gte("tanggal", geserHariT(-4))
                 .lte("tanggal", geserHariT(4))
@@ -761,6 +777,11 @@ async function susunLaporanLapis2(
     })),
     tunggakan,
     gagal,
+    infoRekening: pass
+      .filter((p) => p.lewatRekeningLain)
+      .map((p) =>
+        `${p.jenis === "kredit" ? "Masuk (kredit)" : "Keluar (debet)"}: ${Number(p.klaimRekeningLain ?? 0)} klaim milik rekening lain — dinilai di berkas rekening itu`,
+      ),
   };
 
   const { teks, ringkas } = susunLapis2Lengkap(isi, { nomor: null, sebelumNomor: null, sebelumKapan: null });

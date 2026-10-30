@@ -55,8 +55,25 @@ export async function bacaTercakupAkun(db: SupabaseClient<any, any, any>, accoun
       terakhir(db, accountId, aturan.masukId),
       terakhir(db, accountId, aturan.keluarId),
     ]);
-    if (!m || !k) return null;
-    return m.tercakup <= k.tercakup ? m : k;
+    if (!m) return null;
+    // Tanggal SEBELUM rekening KELUAR mulai dipakai tidak butuh cakupan
+    // KELUAR (DEBET-nya milik MASUK) — tanpa ini, KELUAR yang belum punya PDF
+    // mematikan patokan untuk seluruh tanggal lama.
+    const d = new Date(`${aturan.keluarMulai}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 1);
+    const sebelumMulai = d.toISOString().slice(0, 10);
+    const batasKeluar = k && k.tercakup > sebelumMulai ? k.tercakup : sebelumMulai;
+    const tercakup = m.tercakup <= batasKeluar ? m.tercakup : batasKeluar;
+    // Jam patokan = saat KEDUA rekening sudah diunggah (yang lebih awal) bila
+    // ada tanggal tercakup yang butuh KELUAR; selain itu jam MASUK. Mengambil
+    // jam rekening yang kebetulan bertanggal terkecil bisa lebih lambat dari
+    // unggahan rekening lain → klaim yang belum pernah dinilai tercap
+    // "menggantung".
+    if (tercakup < aturan.keluarMulai || !k) return { tercakup, tercakupAt: m.tercakupAt };
+    const at = m.tercakupAt && k.tercakupAt
+      ? (Date.parse(m.tercakupAt) <= Date.parse(k.tercakupAt) ? m.tercakupAt : k.tercakupAt)
+      : null;
+    return { tercakup, tercakupAt: at };
   } catch (e) {
     console.error("[tercakup] gagal membaca cakupan mutasi:", e);
     return null;

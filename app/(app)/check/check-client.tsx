@@ -405,18 +405,44 @@ export function CheckClient({
       // rekonsiliasi berbasis kalender di sisi gadai).
       let periodEnd: string | null = null;
       let periodStart: string | null = null;
-      for (const up of uploads) {
-        for (const tx of txsForJenis(up)) {
-          const iso = toDateISO(tx.tanggalDate);
-          if (!periodEnd || iso > periodEnd) periodEnd = iso;
-          if (!periodStart || iso < periodStart) periodStart = iso;
+      // Tahap 2: dua rekening → periode yang dikirim HANYA dari rekening
+      // pemilik klaim yang dikirim. Periode gabungan semua PDF membuat klaim
+      // rekening yang PDF-nya lebih pendek tampak "tercakup" → vonis terminal
+      // UNMATCHED palsu di gadai. Lebih dari satu rekening pemilik → irisan
+      // periodenya (akhir terkecil, awal terbesar); tanpa irisan → tidak dikirim.
+      const bankPemilik = new Set(dikirim.map((i) => String(i.bankId ?? "")));
+      const unggahPeriode = ketatRekening ? uploads.filter((u) => bankPemilik.has(u.bank.id)) : uploads;
+      if (!ketatRekening) {
+        for (const up of unggahPeriode) {
+          for (const tx of txsForJenis(up)) {
+            const iso = toDateISO(tx.tanggalDate);
+            if (!periodEnd || iso > periodEnd) periodEnd = iso;
+            if (!periodStart || iso < periodStart) periodStart = iso;
+          }
+        }
+      } else {
+        for (const up of unggahPeriode) {
+          const tgl = txsForJenis(up).map((tx) => toDateISO(tx.tanggalDate)).sort();
+          if (tgl.length === 0) continue;
+          const awal = tgl[0];
+          const akhir = tgl[tgl.length - 1];
+          if (!periodEnd || akhir < periodEnd) periodEnd = akhir;
+          if (!periodStart || awal > periodStart) periodStart = awal;
+        }
+        if (periodStart && periodEnd && periodStart > periodEnd) {
+          setKirimMsg("❌ Tidak dikirim: periode mutasi rekening-rekening pemilik klaim tidak bertumpang. Kirim per rekening.");
+          return;
         }
       }
       // Fase D: kredit periode ini yang tidak terpasang ke input mana pun =
       // "uang masuk tanpa transaksi tercatat" — dikirim utk laporan owner.
       let unclaimedPayload: { count: number; total: number; rows: { t: string; j: string; n: number; p: string }[] } | null = null;
       if (jenis === "kredit") {
-        const uc = summary.unclaimed.filter((t) => t.source === "current");
+        // Dua rekening: kredit rekening lain (mis. isi ulang KELUAR dari MASUK)
+        // bukan "uang masuk tanpa transaksi" untuk klaim yang dikirim di sini.
+        const uc = summary.unclaimed.filter(
+          (t) => t.source === "current" && (!ketatRekening || bankPemilik.has(String(t.bankId ?? ""))),
+        );
         unclaimedPayload = {
           count: uc.length,
           total: uc.reduce((s, t) => s + t.kredit, 0),

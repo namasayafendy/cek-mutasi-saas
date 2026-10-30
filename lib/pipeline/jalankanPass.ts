@@ -161,6 +161,10 @@ export interface HasilPass {
   /** Tahap 2: klaim milik rekening LAIN (aturan rekening pemilik aktif) —
    *  tidak dinilai, tidak dikirim, tidak disimpan di sesi rekening ini. */
   klaimRekeningLain?: number;
+  /** Tahap 2: SEMUA klaim arah ini milik rekening lain — pass dilewati tanpa
+   *  dikirim. BUKAN kegagalan (tidak ada `batal`): berkas rekening itu yang
+   *  menilainya. */
+  lewatRekeningLain?: boolean;
   /** Klaim yang dibuang saat konversi karena tanggal tak sah / nominal nol.
    *  Dibuang diam-diam oleh layar biasa (input-panel.tsx:51) — di sini dihitung
    *  supaya tidak ada klaim yang lenyap tanpa disebut. */
@@ -615,6 +619,17 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       // blok SETOR KE PUSAT di lib/matching.ts.
       setoran: i.setoran === true,
     });
+  }
+  if (inputs.length === 0 && ketatRekening && (hasil.klaimRekeningLain ?? 0) > 0) {
+    // Dua rekening: arah ini tidak punya klaim di rekening berkas ini (KREDIT
+    // di berkas KELUAR, DEBET di berkas MASUK sesudah garis) — klaimnya
+    // menunggu berkas rekeningnya sendiri. Menyebutnya "tidak ada klaim" +
+    // alarm "JANGAN PAKAI LAPORAN INI" setiap hari adalah dusta yang membuat
+    // alarm sungguhan berhenti dibaca. Uang tanpa pemilik arah ini tetap
+    // dibaca dan distempel SEKALI, persis jalur normal.
+    hasil.lewatRekeningLain = true;
+    await stempelNganggur(await bacaNganggur(new Set()));
+    return hasil;
   }
   if (inputs.length === 0) {
     // TIDAK ADA KLAIM justru keadaan yang PALING perlu melaporkan uang tanpa

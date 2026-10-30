@@ -48,9 +48,12 @@ const debet = pass.find((p) => p.jenis === "debet");
 const jinak = (s: unknown, maks = 120) => String(s ?? "").replace(/[\r\n]+/g, " ").slice(0, maks);
 let bankLabel = "Rekening";
 if ((job as any).bank_id) {
-  const { data: bk } = await db.from("banks").select("label, kode")
+  const { data: bk } = await db.from("banks").select("label, kode, peran")
     .eq("id", (job as any).bank_id).eq("account_id", (job as any).account_id).maybeSingle();
-  if (bk) bankLabel = String((bk as any).label || (bk as any).kode || "Rekening");
+  if (bk) {
+    const peran = (bk as any).peran ? ` (${(bk as any).peran})` : "";
+    bankLabel = String((bk as any).label || (bk as any).kode || "Rekening") + peran;
+  }
 }
 bankLabel = jinak(bankLabel, 60);
 

@@ -277,6 +277,9 @@ export interface IsiLapis2 {
     calonBebas?: number | null;
   }[];
   gagal: string[];
+  /** Tahap 2: arah yang seluruh klaimnya milik rekening lain — keterangan,
+   *  BUKAN peringatan. */
+  infoRekening?: string[];
 }
 
 /**
@@ -385,6 +388,7 @@ export function susunLapis2Lengkap(isi: IsiLapis2, kepala: KepalaLapis2): { teks
 
   L.push(`🟢 LAPIS 2 · cek mutasi ${periode}` + (kepala.nomor ? ` · #${kepala.nomor}` : ""));
   L.push(`resi ↔ mutasi rekening · ${isi.bankLabel}`);
+  for (const s of isi.infoRekening ?? []) L.push(`ℹ️ ${s}`);
 
   // ── PERINGATAN, HANYA KALAU ADA ──
   // Satu tempat, paling atas. Kalau tidak ada, tidak dicetak sama sekali —

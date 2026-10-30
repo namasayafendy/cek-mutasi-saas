@@ -212,6 +212,7 @@ export function AutoRunner({
           periodStart: h.periodStart, periodEnd: h.periodEnd,
           klaimDitarik: h.klaimDitarik, klaimDibuang: h.klaimDibuang,
           klaimRekeningLain: h.klaimRekeningLain ?? 0,
+          lewatRekeningLain: h.lewatRekeningLain === true,
           outletTakDikenal: h.outletTakDikenal,
           klaimDinilai: h.klaimDinilai, cocok: h.cocok, belumKetemu: h.belumKetemu,
           ditahanDiLuarPeriode: h.ditahanDiLuarPeriode,
