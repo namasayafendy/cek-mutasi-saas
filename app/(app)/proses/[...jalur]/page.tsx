@@ -123,6 +123,17 @@ export default async function ProsesPage({
   const semuaBank = (banksRes.data ?? []) as Bank[];
   const rules = (rulesRes.data ?? []) as MatchRulePreset[];
 
+  // Rekening yang DIPILIH lewat tautan tapi tidak (lagi) aktif: jangan diam-
+  // diam jatuh ke satu-satunya rekening aktif — itu justru rekening yang baru
+  // saja ditolak gerbang, dan tautannya akan berputar tanpa ujung.
+  if (bankDipilih && !semuaBank.some((b) => b.id === bankDipilih)) {
+    return (
+      <Kartu
+        judul="Rekening tujuan tidak aktif"
+        isi={<p>Rekening yang dipilih untuk berkas ini sedang nonaktif. Aktifkan dulu di menu Bank, lalu buka tautan ini lagi.</p>}
+      />
+    );
+  }
   const bank =
     semuaBank.find((b) => b.id === (bankDipilih ?? job.bank_id)) ??
     (semuaBank.length === 1 ? semuaBank[0] : undefined);

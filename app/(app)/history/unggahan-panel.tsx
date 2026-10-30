@@ -7,7 +7,7 @@
 // TERAKHIR yang belum dibatalkan, dan hanya bagi pemilik.
 
 import { useEffect, useState } from "react";
-import { Loader2, Undo2, Upload } from "lucide-react";
+import { Loader2, RotateCcw, Undo2, Upload } from "lucide-react";
 import { daftarUnggahan, batalkanUnggahan, type RingkasUnggahan } from "@/lib/unggahan/actions";
 import { formatDateID, parseDateISO } from "@/lib/format";
 
@@ -45,8 +45,10 @@ export function UnggahanPanel({ bankId, onBerubah }: { bankId: string; onBerubah
       try {
         const r = await daftarUnggahan(bankId, 8);
         if (!aktif) return;
-        if (r.ok) setDaftar(r.daftar);
-        else setGalat(r.error);
+        if (r.ok) {
+          setDaftar(r.daftar);
+          setGalat(null);
+        } else setGalat(r.error);
       } catch (e) {
         if (aktif) setGalat(`Gagal memuat unggahan: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
@@ -57,6 +59,18 @@ export function UnggahanPanel({ bankId, onBerubah }: { bankId: string; onBerubah
       aktif = false;
     };
   }, [bankId, putaran]);
+
+  // Selama ada unggahan "berjalan", muat ulang diam-diam tiap 20 detik —
+  // supaya labelnya berganti ke selesai/terhenti dan tombol batal muncul
+  // tanpa pengguna harus keluar-masuk halaman. Berhenti sendiri begitu tak
+  // ada lagi yang berjalan.
+  useEffect(() => {
+    if (memuat || proses || !daftar.some((u) => u.status === "berjalan" && !u.dibatalkanAt)) return;
+    const t = setTimeout(() => setPutaran((n) => n + 1), 20_000);
+    return () => clearTimeout(t);
+    // `putaran` ikut: muat ulang yang GAGAL tidak mengubah daftar, dan tanpa
+    // ini pemantauan berhenti diam-diam sesudah satu kali gagal.
+  }, [daftar, memuat, proses, putaran]);
 
   function muat() {
     setMemuat(true);
@@ -109,6 +123,15 @@ export function UnggahanPanel({ bankId, onBerubah }: { bankId: string; onBerubah
         <Upload className="h-4 w-4 text-slate-500" />
         <h2 className="font-medium text-slate-900 text-sm">Unggahan terakhir</h2>
         <span className="text-xs text-slate-500">— hanya unggahan paling akhir yang bisa dibatalkan</span>
+        <button
+          type="button"
+          onClick={() => muat()}
+          disabled={memuat || proses !== null}
+          className="ml-auto text-xs inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 disabled:opacity-50"
+          title="Muat ulang daftar unggahan"
+        >
+          <RotateCcw className="h-3.5 w-3.5" /> Muat ulang
+        </button>
       </div>
       {galat && <div className="px-4 py-2 text-sm text-red-800 bg-red-50 border-b border-red-200">{galat}</div>}
       {kabar && <div className="px-4 py-2 text-sm text-emerald-800 bg-emerald-50 border-b border-emerald-200">{kabar}</div>}
@@ -146,10 +169,10 @@ export function UnggahanPanel({ bankId, onBerubah }: { bankId: string; onBerubah
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     {u.barisTerbaca} dibaca
                     <div className="text-xs text-slate-500">
-                      {u.status === "selesai"
-                        ? `${u.barisBaru} baru`
-                        : u.barisMilik != null
-                          ? `${u.barisMilik} baru`
+                      {u.barisMilik != null
+                        ? `${u.barisMilik} baru`
+                        : u.status === "selesai"
+                          ? `${u.barisBaru} baru`
                           : "baru: belum tercatat"}
                     </div>
                   </td>
@@ -158,9 +181,12 @@ export function UnggahanPanel({ bankId, onBerubah }: { bankId: string; onBerubah
                       <span className="text-xs text-slate-500">Dibatalkan {waktuWib(u.dibatalkanAt)}</span>
                     ) : u.status === "berjalan" ? (
                       <span className="text-xs text-amber-700">Sedang diproses…</span>
-                    ) : u.status === "terhenti" && !u.bolehBatal ? (
-                      <span className="text-xs text-slate-500">Terhenti (tidak selesai)</span>
-                    ) : u.bolehBatal ? (
+                    ) : u.status === "terhenti" || u.bolehBatal ? (
+                      <div className="flex flex-col items-end gap-1">
+                        {u.status === "terhenti" && (
+                          <span className="text-xs text-slate-500">Terhenti (tidak selesai)</span>
+                        )}
+                        {u.bolehBatal && (
                       <button
                         type="button"
                         onClick={() => batal(u)}
@@ -170,6 +196,8 @@ export function UnggahanPanel({ bankId, onBerubah }: { bankId: string; onBerubah
                         {proses === u.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Undo2 className="h-3.5 w-3.5" />}
                         Batalkan unggahan
                       </button>
+                        )}
+                      </div>
                     ) : null}
                   </td>
                 </tr>
