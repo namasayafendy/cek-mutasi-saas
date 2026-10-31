@@ -139,13 +139,14 @@ export function arahBawaanRekeningLain(
  * milik berkas ini. Pemegang lemah (klaim yang sudah MATCHED lewat nominal)
  * ikut ditarik sebagai kandidat korban; mereka pasif — hanya bisa tersepak
  * oleh klaim PENDING — jadi tanpa klaim milik, pass pasti tidak menilai apa
- * pun. Lalu salah satu:
- *   (a) tidak ada input sama sekali dan ada klaim milik rekening LAIN
- *       (perilaku Tahap 2 yang sudah tayang); atau
- *   (b) arah ini memang bawaan rekening lain (arahBawaanRekeningLain) dan
- *       tidak ada klaim milik yang dibuang karena datanya rusak.
+ * pun. Lalu: arah ini memang bawaan rekening lain (arahBawaanRekeningLain)
+ * dan tidak ada klaim milik yang dibuang karena datanya rusak.
+ *
  * Arah "rumah" (KREDIT di MASUK, DEBET di KELUAR, DEBET MASUK sebelum garis)
- * tanpa klaim TETAP alarm — di sana nol klaim memang janggal.
+ * tanpa klaim TETAP alarm — di sana nol klaim memang janggal — APA PUN klaim
+ * rekening lain. (Syarat lama "tanpa input + ada klaim rekening lain" ikut
+ * melewati arah rumah, mis. DEBET di KELUAR saat cron keluar mati sementara
+ * satu klaim debet pra-garis masih PENDING; tinjauan 31 Okt.)
  */
 export function lewatiPassRekeningLain(o: {
   aturan: AturanRekening;
@@ -156,13 +157,7 @@ export function lewatiPassRekeningLain(o: {
   klaimMilik: number;
   /** klaim milik berkas ini yang dibuang (tanggal/nominal rusak). */
   klaimDibuangMilik: number;
-  /** klaim BUKAN-pemegang milik rekening lain. */
-  klaimLain: number;
-  /** ada input milik berkas ini (termasuk pemegang lemah). */
-  adaInput: boolean;
 }): boolean {
-  if (!o.aturan.aktif || o.klaimMilik > 0) return false;
-  if (!o.adaInput && o.klaimLain > 0) return true;
-  if (o.klaimDibuangMilik > 0) return false;
+  if (!o.aturan.aktif || o.klaimMilik > 0 || o.klaimDibuangMilik > 0) return false;
   return arahBawaanRekeningLain(o.aturan, o.bankId, o.arah, o.periodEnd);
 }

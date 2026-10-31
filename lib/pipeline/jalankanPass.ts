@@ -544,8 +544,10 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     // milik berkas ini; gagal tarik / aturan bermasalah → PERIODE_KOSONG lama.
     const peran = upload.bank.peran ?? null;
     if ((arah === "kredit" && peran === "KELUAR") || (arah === "debet" && peran === "MASUK")) {
-      const t = await pullGadaiClaims(arah);
-      if (t.ok && !t.aturanRekening.masalah) {
+      // Gagal tarik (termasuk melempar) = PERIODE_KOSONG seperti dulu — cabang
+      // ini tidak boleh mengubah pass yang dulu batal rapi menjadi tugas GAGAL.
+      const t = await pullGadaiClaims(arah).catch(() => null);
+      if (t && t.ok && !t.aturanRekening.masalah) {
         const aturan = t.aturanRekening;
         const bukanPemegang = t.inputs.filter((i) => i.sudahMemegang !== true);
         const milik = bukanPemegang.filter((i) => i.bankId === upload.bank.id).length;
@@ -646,7 +648,6 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   if (lewatiPassRekeningLain({
         aturan: aturanRek, bankId: upload.bank.id, arah, periodEnd,
         klaimMilik: hasil.klaimDitarik, klaimDibuangMilik: hasil.klaimDibuang,
-        klaimLain: hasil.klaimRekeningLain ?? 0, adaInput: inputs.length > 0,
       })) {
     // Dua rekening: arah ini tidak punya klaim di rekening berkas ini (KREDIT
     // di berkas KELUAR, DEBET di berkas MASUK sesudah garis) — klaimnya

@@ -151,9 +151,14 @@ console.log("\n11. Pass dua rekening yang dilewati sebagai info (bukan 🚨 TIDA
 {
   const on = susunAturanRekening([MASUK, KELUAR]);
   const off = susunAturanRekening([MASUK]);
-  const dasar = { klaimMilik: 0, klaimDibuangMilik: 0, klaimLain: 0, adaInput: false };
-  const L = (o: Partial<typeof dasar> & { aturan?: any; bankId: string; arah: "kredit" | "debet"; periodEnd: string | null }) =>
-    lewatiPassRekeningLain({ aturan: on, ...dasar, ...o });
+  // klaimLain / adaInput hanya keterangan skenario: keputusan TIDAK boleh
+  // bergantung padanya (tinjauan 31 Okt — arah rumah tetap alarm).
+  const L = (o: { aturan?: any; bankId: string; arah: "kredit" | "debet"; periodEnd: string | null;
+                  klaimMilik?: number; klaimDibuangMilik?: number; klaimLain?: number; adaInput?: boolean }) =>
+    lewatiPassRekeningLain({
+      aturan: o.aturan ?? on, bankId: o.bankId, arah: o.arah, periodEnd: o.periodEnd,
+      klaimMilik: o.klaimMilik ?? 0, klaimDibuangMilik: o.klaimDibuangMilik ?? 0,
+    });
 
   // arah bawaan
   cek("bawaan: kredit di KELUAR → rekening lain", arahBawaanRekeningLain(on, "bank-keluar", "kredit", "2026-11-02"));
@@ -170,7 +175,8 @@ console.log("\n11. Pass dua rekening yang dilewati sebagai info (bukan 🚨 TIDA
   cek("MASUK·debet periode menyentuh garis (31/10–01/11), hanya pemegang → lewat", L({ bankId: "bank-masuk", arah: "debet", periodEnd: "2026-11-01", adaInput: true }));
   cek("KELUAR·kredit tanpa klaim sama sekali → lewat", L({ bankId: "bank-keluar", arah: "kredit", periodEnd: "2026-11-02" }));
   cek("KELUAR·kredit hanya pemegang → lewat", L({ bankId: "bank-keluar", arah: "kredit", periodEnd: "2026-11-02", adaInput: true }));
-  cek("perilaku Tahap 2 lama: tanpa input + klaim rekening lain → lewat", L({ bankId: "bank-keluar", arah: "debet", periodEnd: "2026-11-02", klaimLain: 3 }));
+  cek("KELUAR·debet tanpa input + klaim rekening lain → TETAP alarm (arah rumah)", !L({ bankId: "bank-keluar", arah: "debet", periodEnd: "2026-11-02", klaimLain: 3 }));
+  cek("MASUK·kredit tanpa input + setoran KIRIM menunggu → TETAP alarm (arah rumah)", !L({ bankId: "bank-masuk", arah: "kredit", periodEnd: "2026-11-02", klaimLain: 1 }));
 
   // yang TETAP alarm
   cek("MASUK·kredit hanya pemegang, PENDING 0 → TETAP alarm", !L({ bankId: "bank-masuk", arah: "kredit", periodEnd: "2026-11-02", adaInput: true }));

@@ -167,12 +167,14 @@ export async function GET(request: NextRequest) {
       continue;
     }
     if (rows.length === 0) {
-      // PDF pertama baru wajar ada sehari sesudah tanggal mulai.
-      if (umurPeran != null && umurPeran <= 1) {
+      // Hari mulai sendiri: PDF pertama (berisi hari mulai) baru bisa besok.
+      if (umurPeran === 0) {
         barisRekening.push(`• ${nama}: rekening baru (mulai ${tglID(mulai)}) — PDF pertama besok`);
         continue;
       }
-      barisRekening.push(`• ${nama}: belum ada mutasi tercatat sama sekali`);
+      barisRekening.push(umurPeran != null
+        ? `• ${nama}: belum ada mutasi tercatat — unggah PDF sejak ${tglID(mulai)}`
+        : `• ${nama}: belum ada mutasi tercatat sama sekali`);
       adaYangPerluDitindak = true;
       continue;
     }
