@@ -179,7 +179,7 @@ export async function prosesSatuBank(opsi: OpsiProsesBank): Promise<HasilProsesB
     // untuk keadaan rekening ini SEKARANG (nomor, titik saldo terakhir).
     const { data: daftar, error: errDaftar } = await supabase
       .from("banks")
-      .select("id, account_id, kode, label, parser_id, nomor_rekening, peran, recon_last_saldo, recon_last_date, is_active")
+      .select("id, account_id, kode, label, parser_id, nomor_rekening, peran, mulai_tgl, recon_last_saldo, recon_last_date, is_active")
       .eq("account_id", accountId);
     if (errDaftar) throw new Error(`Gagal membaca daftar rekening: ${errDaftar.message}`);
     const semuaBank = (daftar ?? []) as Bank[];
@@ -203,6 +203,24 @@ export async function prosesSatuBank(opsi: OpsiProsesBank): Promise<HasilProsesB
         ? `${gerbang.pesan} Rekening itu sedang nonaktif — aktifkan dulu di menu Bank.`
         : gerbang.pesan;
       return { ok: false, alasan, kodeTolak: gerbang.kode, pemilikId: pemilikAktif ? gerbang.pemilikId : undefined };
+    }
+
+    // ── 1b. REKENING KELUAR: PDF yang SELURUHNYA sebelum tanggal mulai ──
+    // Tidak ada klaim yang dinilai di rekening ini sebelum tanggal mulai, jadi
+    // PDF seperti itu (mis. PDF uji) hanya akan memasang titik saldo lama,
+    // cakupan, dan jangkar saldo rekening kirim di gadai — lalu unggahan
+    // sungguhan berikutnya dibandingkan dengan titik yang salah.
+    const mulaiKeluar = String(segar.mulai_tgl ?? "").slice(0, 10);
+    const akhirPdf = String(doc.statementMeta?.lastDate ?? "").slice(0, 10);
+    if (segar.peran === "KELUAR" && /^\d{4}-\d{2}-\d{2}$/.test(mulaiKeluar) &&
+        /^\d{4}-\d{2}-\d{2}$/.test(akhirPdf) && akhirPdf < mulaiKeluar) {
+      return {
+        ok: false,
+        alasan:
+          `PDF ini berakhir ${akhirPdf.split("-").reverse().join("/")}, sebelum rekening ${segar.label || segar.kode} ` +
+          `mulai dipakai (${mulaiKeluar.split("-").reverse().join("/")}). Tidak ada yang disimpan — unggah PDF yang ` +
+          `memuat transaksi sejak tanggal mulai.`,
+      };
     }
 
     // Cek kelengkapan (A) + kontinuitas/bolong (B) vs titik terakhir bank.

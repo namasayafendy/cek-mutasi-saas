@@ -125,7 +125,7 @@ export async function GET(request: NextRequest) {
   // ── 3. Usia data per rekening ──
   const { data: bankRows, error: errBank } = await db
     .from("banks")
-    .select("id, kode, label")
+    .select("id, kode, label, peran, mulai_tgl")
     .eq("account_id", accountId)
     .eq("is_active", true)
     .order("urutan");
@@ -157,13 +157,28 @@ export async function GET(request: NextRequest) {
       continue;
     }
     const rows = (cov ?? []) as BarisCakupan[];
+    // Rekening KELUAR baru: jendela 60 hari dihitung sejak tanggal mulai, bukan
+    // 60 hari ke belakang — sebelum tanggal mulai rekening ini memang tidak
+    // diperiksa, dan "baru N/60 hari" selama dua bulan hanya bising.
+    const mulai = b.peran === "KELUAR" ? String(b.mulai_tgl ?? "").slice(0, 10) : "";
+    const umurPeran = /^\d{4}-\d{2}-\d{2}$/.test(mulai) ? selisihHari(mulai, hariIni) : null;
+    if (umurPeran != null && umurPeran < 0) {
+      barisRekening.push(`• ${nama}: mulai dipakai ${tglID(mulai)}`);
+      continue;
+    }
     if (rows.length === 0) {
+      // PDF pertama baru wajar ada sehari sesudah tanggal mulai.
+      if (umurPeran != null && umurPeran <= 1) {
+        barisRekening.push(`• ${nama}: rekening baru (mulai ${tglID(mulai)}) — PDF pertama besok`);
+        continue;
+      }
       barisRekening.push(`• ${nama}: belum ada mutasi tercatat sama sekali`);
       adaYangPerluDitindak = true;
       continue;
     }
 
-    const h = hitungCakupan(rows, hariIni);
+    const jendela = umurPeran != null ? Math.max(1, Math.min(60, umurPeran + 1)) : 60;
+    const h = hitungCakupan(rows, hariIni, jendela);
     const umur = h.umurHari ?? 0;
     const potongan: string[] = [`• ${nama}: terbaca s/d ${tglID(h.akhir!)}`];
     if (umur > HARI_WAJAR) {

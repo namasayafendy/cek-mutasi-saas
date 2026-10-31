@@ -2,7 +2,7 @@
 //   npx tsx scripts/uji-rekening-klaim.mts
 // Murni: aturan (lib/pipeline/rekeningKlaim.ts) + mesin pencocok sungguhan
 // (lib/matching.ts runMatching, opsi bankKetat). Tanpa database.
-import { susunAturanRekening, pemilikKlaim, TANPA_REKENING } from "../lib/pipeline/rekeningKlaim.ts";
+import { susunAturanRekening, pemilikKlaim, TANPA_REKENING, arahBawaanRekeningLain, lewatiPassRekeningLain } from "../lib/pipeline/rekeningKlaim.ts";
 import { runMatching } from "../lib/matching.ts";
 import type { PdfTransaction, UserInput } from "../lib/types.ts";
 
@@ -145,6 +145,42 @@ console.log("\n10. bankKetat mati = hasil PERSIS seperti tanpa opsi (perilaku la
   const a = JSON.stringify(jalan(ins, txs).map((i) => i.match));
   const b = JSON.stringify(jalan(ins, txs, { bankKetat: false }).map((i) => i.match));
   cek("identik", a === b);
+}
+
+console.log("\n11. Pass dua rekening yang dilewati sebagai info (bukan 🚨 TIDAK_ADA_KLAIM / PERIODE_KOSONG)");
+{
+  const on = susunAturanRekening([MASUK, KELUAR]);
+  const off = susunAturanRekening([MASUK]);
+  const dasar = { klaimMilik: 0, klaimDibuangMilik: 0, klaimLain: 0, adaInput: false };
+  const L = (o: Partial<typeof dasar> & { aturan?: any; bankId: string; arah: "kredit" | "debet"; periodEnd: string | null }) =>
+    lewatiPassRekeningLain({ aturan: on, ...dasar, ...o });
+
+  // arah bawaan
+  cek("bawaan: kredit di KELUAR → rekening lain", arahBawaanRekeningLain(on, "bank-keluar", "kredit", "2026-11-02"));
+  cek("bawaan: kredit di MASUK → BUKAN", !arahBawaanRekeningLain(on, "bank-masuk", "kredit", "2026-11-02"));
+  cek("bawaan: debet di KELUAR → BUKAN", !arahBawaanRekeningLain(on, "bank-keluar", "debet", "2026-11-02"));
+  cek("bawaan: debet MASUK periode sampai 2026-11-01 → rekening lain", arahBawaanRekeningLain(on, "bank-masuk", "debet", "2026-11-01"));
+  cek("bawaan: debet MASUK periode sampai 2026-10-31 → BUKAN", !arahBawaanRekeningLain(on, "bank-masuk", "debet", "2026-10-31"));
+  cek("bawaan: debet MASUK tanggal tak terbaca → BUKAN (gagal-tertutup)", !arahBawaanRekeningLain(on, "bank-masuk", "debet", null));
+  cek("bawaan: aturan mati → BUKAN", !arahBawaanRekeningLain(off, "bank-masuk", "debet", "2026-11-02"));
+
+  // kasus yang dulu berbunyi 🚨 setiap hari
+  cek("MASUK·debet hanya pemegang lemah, sesudah garis → lewat", L({ bankId: "bank-masuk", arah: "debet", periodEnd: "2026-11-02", adaInput: true }));
+  cek("MASUK·debet hanya pemegang + klaim KELUAR menunggu → lewat", L({ bankId: "bank-masuk", arah: "debet", periodEnd: "2026-11-02", adaInput: true, klaimLain: 2 }));
+  cek("MASUK·debet periode menyentuh garis (31/10–01/11), hanya pemegang → lewat", L({ bankId: "bank-masuk", arah: "debet", periodEnd: "2026-11-01", adaInput: true }));
+  cek("KELUAR·kredit tanpa klaim sama sekali → lewat", L({ bankId: "bank-keluar", arah: "kredit", periodEnd: "2026-11-02" }));
+  cek("KELUAR·kredit hanya pemegang → lewat", L({ bankId: "bank-keluar", arah: "kredit", periodEnd: "2026-11-02", adaInput: true }));
+  cek("perilaku Tahap 2 lama: tanpa input + klaim rekening lain → lewat", L({ bankId: "bank-keluar", arah: "debet", periodEnd: "2026-11-02", klaimLain: 3 }));
+
+  // yang TETAP alarm
+  cek("MASUK·kredit hanya pemegang, PENDING 0 → TETAP alarm", !L({ bankId: "bank-masuk", arah: "kredit", periodEnd: "2026-11-02", adaInput: true }));
+  cek("MASUK·kredit tanpa klaim → TETAP alarm", !L({ bankId: "bank-masuk", arah: "kredit", periodEnd: "2026-11-02" }));
+  cek("KELUAR·debet tanpa klaim → TETAP alarm", !L({ bankId: "bank-keluar", arah: "debet", periodEnd: "2026-11-02" }));
+  cek("MASUK·debet sebelum garis tanpa klaim → TETAP alarm", !L({ bankId: "bank-masuk", arah: "debet", periodEnd: "2026-10-31", adaInput: true }));
+  cek("ada satu klaim milik (bukan pemegang) → TIDAK dilewati", !L({ bankId: "bank-masuk", arah: "debet", periodEnd: "2026-11-02", adaInput: true, klaimMilik: 1 }));
+  cek("KELUAR·kredit dengan 1 setoran KIRIM milik → TIDAK dilewati", !L({ bankId: "bank-keluar", arah: "kredit", periodEnd: "2026-11-02", adaInput: true, klaimMilik: 1 }));
+  cek("klaim milik dibuang (data rusak) → TETAP alarm", !L({ bankId: "bank-masuk", arah: "debet", periodEnd: "2026-11-02", adaInput: true, klaimDibuangMilik: 1 }));
+  cek("aturan mati → TIDAK pernah dilewati", !L({ aturan: off, bankId: "bank-masuk", arah: "debet", periodEnd: "2026-11-02", klaimLain: 5 }));
 }
 
 console.log(`\n${lulus} lulus, ${gagal} gagal`);

@@ -314,7 +314,7 @@ export async function POST(request: NextRequest) {
   // ── Tebak rekening ──
   const { data: bankRows } = await db
     .from("banks")
-    .select("id, kode, label, parser_id, recon_last_date")
+    .select("id, kode, label, parser_id, recon_last_date, nomor_rekening")
     .eq("account_id", accountId)
     .eq("is_active", true)
     .order("urutan");
@@ -327,7 +327,18 @@ export async function POST(request: NextRequest) {
   }
 
   const nl = namaFile.toLowerCase();
-  const cocokNama = banks.filter(
+  // Nama berkas BSINet memuat nomor rekening ("Mutasi_Rekening_1999881994
+  // (99).pdf"), sedangkan dua rekening sama-sama berkode BSI. Nomor PENUH
+  // (≥ 6 digit) yang tepat milik satu rekening = tebakan pertama; gerbang
+  // nomor rekening di kepala PDF tetap penjaga yang sebenarnya.
+  // Per deret angka (bukan gabungan semua digit): "…1994 (19).pdf" tidak boleh
+  // terbaca sebagai nomor lain hasil sambungan dua deret.
+  const deretAngka = nl.match(/\d+/g) ?? [];
+  const cocokNomor = banks.filter((b) => {
+    const n = String(b.nomor_rekening ?? "").replace(/\D/g, "");
+    return n.length >= 6 && deretAngka.some((d) => d === n);
+  });
+  const cocokNama = cocokNomor.length === 1 ? cocokNomor : banks.filter(
     (b) =>
       (b.kode && nl.includes(String(b.kode).toLowerCase())) ||
       (b.label && nl.includes(String(b.label).toLowerCase())),

@@ -19,8 +19,8 @@
 //   - DEBET  → rekening KELUAR bila tanggal transfernya ≥ tanggal mulai
 //              rekening KELUAR (banks.mulai_tgl); sebelum itu → MASUK
 //              ("permintaan sebelum garis: klaim DEBET ke MASUK").
-//   - Rekening EKSPLISIT dari gadai (medan `rekening_nomor`, belum dikirim
-//     gadai versi sekarang) mengalahkan aturan bawaan — untuk pengecualian
+//   - Rekening EKSPLISIT dari gadai (medan `rekening_nomor`; sejak 31 Okt
+//     dikirim gadai untuk Setor Cash Pusat ke KIRIM) mengalahkan aturan bawaan — untuk pengecualian
 //     yang sudah direncanakan: Setor Cash Pusat ke KELUAR, retur, PINDAH,
 //     bagi hasil, debet MASUK oleh Fendy. Nomor yang tidak terdaftar →
 //     klaim itu tidak dimiliki rekening mana pun → TIDAK dinilai (tetap
@@ -108,4 +108,61 @@ export function pemilikKlaim(
   const tgl = String(tanggalISO ?? "").slice(0, 10);
   if (!ISO.test(tgl)) return TANPA_REKENING;
   return tgl >= aturan.keluarMulai ? aturan.keluarId : aturan.masukId;
+}
+
+/**
+ * Arah pass ini, untuk berkas rekening ini, menurut aturan BAWAAN milik
+ * rekening LAIN? KREDIT di berkas KELUAR (kredit selalu milik MASUK kecuali
+ * eksplisit), atau DEBET di berkas MASUK yang periodenya sudah sampai garis
+ * mulai KELUAR. Tanggal akhir tak terbaca → false (gagal-tertutup, sejalan
+ * dengan pemilikKlaim yang memberi TANPA_REKENING).
+ */
+export function arahBawaanRekeningLain(
+  aturan: AturanRekening,
+  bankId: string,
+  arah: "kredit" | "debet",
+  periodEnd: string | null | undefined,
+): boolean {
+  if (!aturan.aktif) return false;
+  if (arah === "kredit") return bankId === aturan.keluarId;
+  if (bankId !== aturan.masukId) return false;
+  const akhir = String(periodEnd ?? "").slice(0, 10);
+  if (!ISO.test(akhir)) return false;
+  return akhir >= aturan.keluarMulai;
+}
+
+/**
+ * Pass dua rekening yang DILEWATI sebagai info, bukan batal TIDAK_ADA_KLAIM
+ * / PERIODE_KOSONG ("🚨 JANGAN PAKAI LAPORAN INI").
+ *
+ * Syarat dasar: aturan aktif dan TIDAK ADA satu pun klaim BUKAN-pemegang
+ * milik berkas ini. Pemegang lemah (klaim yang sudah MATCHED lewat nominal)
+ * ikut ditarik sebagai kandidat korban; mereka pasif — hanya bisa tersepak
+ * oleh klaim PENDING — jadi tanpa klaim milik, pass pasti tidak menilai apa
+ * pun. Lalu salah satu:
+ *   (a) tidak ada input sama sekali dan ada klaim milik rekening LAIN
+ *       (perilaku Tahap 2 yang sudah tayang); atau
+ *   (b) arah ini memang bawaan rekening lain (arahBawaanRekeningLain) dan
+ *       tidak ada klaim milik yang dibuang karena datanya rusak.
+ * Arah "rumah" (KREDIT di MASUK, DEBET di KELUAR, DEBET MASUK sebelum garis)
+ * tanpa klaim TETAP alarm — di sana nol klaim memang janggal.
+ */
+export function lewatiPassRekeningLain(o: {
+  aturan: AturanRekening;
+  bankId: string;
+  arah: "kredit" | "debet";
+  periodEnd: string | null | undefined;
+  /** klaim BUKAN-pemegang milik berkas ini (sebelum dibuang). */
+  klaimMilik: number;
+  /** klaim milik berkas ini yang dibuang (tanggal/nominal rusak). */
+  klaimDibuangMilik: number;
+  /** klaim BUKAN-pemegang milik rekening lain. */
+  klaimLain: number;
+  /** ada input milik berkas ini (termasuk pemegang lemah). */
+  adaInput: boolean;
+}): boolean {
+  if (!o.aturan.aktif || o.klaimMilik > 0) return false;
+  if (!o.adaInput && o.klaimLain > 0) return true;
+  if (o.klaimDibuangMilik > 0) return false;
+  return arahBawaanRekeningLain(o.aturan, o.bankId, o.arah, o.periodEnd);
 }

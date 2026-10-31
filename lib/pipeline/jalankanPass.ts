@@ -55,6 +55,7 @@ import { toDateISO, parseDateISO } from "@/lib/format";
 import { pullGadaiClaims, pushGadaiResults } from "@/app/(app)/check/actions-gadai";
 import type { BankUpload } from "@/lib/pipeline/prosesSatuBank";
 import { SEBAB_SETORAN_BELUM_KETEMU } from "@/lib/laporan/lapis2";
+import { arahBawaanRekeningLain, lewatiPassRekeningLain } from "@/lib/pipeline/rekeningKlaim";
 
 /**
  * Catat satu klaim ke rekap PER TANGGAL.
@@ -537,6 +538,28 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
 
   // ── P2: tanpa periodEnd, sisi gadai memvonis semuanya terminal ──
   if (!periodEnd || !periodStart) {
+    // Dua rekening: berkas tanpa SATU pun baris arah ini wajar bila arah ini
+    // memang milik rekening LAIN — PDF rekening KIRIM tanpa isi ulang (kredit),
+    // PDF MASUK sesudah garis tanpa debet. Hanya bila tidak ada satu pun klaim
+    // milik berkas ini; gagal tarik / aturan bermasalah → PERIODE_KOSONG lama.
+    const peran = upload.bank.peran ?? null;
+    if ((arah === "kredit" && peran === "KELUAR") || (arah === "debet" && peran === "MASUK")) {
+      const t = await pullGadaiClaims(arah);
+      if (t.ok && !t.aturanRekening.masalah) {
+        const aturan = t.aturanRekening;
+        const bukanPemegang = t.inputs.filter((i) => i.sudahMemegang !== true);
+        const milik = bukanPemegang.filter((i) => i.bankId === upload.bank.id).length;
+        if (milik === 0 && arahBawaanRekeningLain(aturan, upload.bank.id, arah, upload.integrity?.lastDate ?? null)) {
+          hasil.klaimRekeningLain = bukanPemegang.length;
+          hasil.outletTakDikenal = t.unmappedOutlets;
+          hasil.tertahanGerbang = t.tertahan ?? null;
+          hasil.lewatRekeningLain = true;
+          // Nol baris arah ini di berkas = tidak ada uang tanpa pemilik di sini.
+          hasil.unclaimedDiperiksa = true;
+          return hasil;
+        }
+      }
+    }
     hasil.batal = {
       kode: "PERIODE_KOSONG",
       pesan: `Tidak ada transaksi ${jenis} di berkas ini, jadi periodenya tidak bisa ditentukan.`,
@@ -620,13 +643,25 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
       setoran: i.setoran === true,
     });
   }
-  if (inputs.length === 0 && ketatRekening && (hasil.klaimRekeningLain ?? 0) > 0) {
+  if (lewatiPassRekeningLain({
+        aturan: aturanRek, bankId: upload.bank.id, arah, periodEnd,
+        klaimMilik: hasil.klaimDitarik, klaimDibuangMilik: hasil.klaimDibuang,
+        klaimLain: hasil.klaimRekeningLain ?? 0, adaInput: inputs.length > 0,
+      })) {
     // Dua rekening: arah ini tidak punya klaim di rekening berkas ini (KREDIT
     // di berkas KELUAR, DEBET di berkas MASUK sesudah garis) — klaimnya
     // menunggu berkas rekeningnya sendiri. Menyebutnya "tidak ada klaim" +
     // alarm "JANGAN PAKAI LAPORAN INI" setiap hari adalah dusta yang membuat
     // alarm sungguhan berhenti dibaca. Uang tanpa pemilik arah ini tetap
     // dibaca dan distempel SEKALI, persis jalur normal.
+    //
+    // Syaratnya "tidak ada klaim BUKAN-pemegang milik berkas ini", bukan
+    // "inputs kosong": pemegang lemah lama (MATCHED lewat nominal, ditarik
+    // 60 hari) ikut di inputs, dan dengan syarat lama pass DEBET berkas
+    // MASUK batal TIDAK_ADA_KLAIM setiap hari sampai ±akhir Desember.
+    // Pemegang pasif — tanpa klaim PENDING tidak ada yang bisa menyepaknya
+    // (matching.ts), jadi melewatinya tidak membuang vonis apa pun. Lihat
+    // lewatiPassRekeningLain (rekeningKlaim.ts).
     hasil.lewatRekeningLain = true;
     await stempelNganggur(await bacaNganggur(new Set()));
     return hasil;

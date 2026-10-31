@@ -779,9 +779,13 @@ async function susunLaporanLapis2(
     gagal,
     infoRekening: pass
       .filter((p) => p.lewatRekeningLain)
-      .map((p) =>
-        `${p.jenis === "kredit" ? "Masuk (kredit)" : "Keluar (debet)"}: ${Number(p.klaimRekeningLain ?? 0)} klaim milik rekening lain — dinilai di berkas rekening itu`,
-      ),
+      .map((p) => {
+        const nama = p.jenis === "kredit" ? "Masuk (kredit)" : "Keluar (debet)";
+        const n = Number(p.klaimRekeningLain ?? 0);
+        return n > 0
+          ? `${nama}: ${n} klaim milik rekening lain — dinilai di berkas rekening itu`
+          : `${nama}: arah ini milik rekening lain — tidak ada klaim yang menunggu di rekening ini`;
+      }),
   };
 
   const { teks, ringkas } = susunLapis2Lengkap(isi, { nomor: null, sebelumNomor: null, sebelumKapan: null });
