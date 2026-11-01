@@ -57,6 +57,8 @@ import type { BankUpload } from "@/lib/pipeline/prosesSatuBank";
 import { SEBAB_SETORAN_BELUM_KETEMU } from "@/lib/laporan/lapis2";
 import { arahBawaanRekeningLain, lewatiPassRekeningLain } from "@/lib/pipeline/rekeningKlaim";
 import { bacaBarisNganggur } from "@/lib/pipeline/nganggur";
+import { kakiPindahBerkas, rutePindah, type KakiPindah, type SesiPindah } from "@/lib/pipeline/pindahSaldo";
+import type { BarisPindah } from "@/lib/laporan/nganggur";
 
 /**
  * Catat satu klaim ke rekap PER TANGGAL.
@@ -211,6 +213,17 @@ export interface HasilPass {
    *  (tandaiSelesai) sesudah laporan yang merincinya tercatat di antrean —
    *  lihat lib/laporan/nganggur.ts. */
   idNganggur: string[] | null;
+
+  /** JEMBATAN PINDAH SALDO (lib/pipeline/pindahSaldo.ts). Hanya terisi bila
+   *  gadai mengirim sesi PINDAH dan berkas ini rekening asal/tujuannya:
+   *  baris yang terbaca bersama unclaimedRows tapi dikenali sebagai kaki
+   *  pindah saldo resmi (dikeluarkan dari unclaimedRows). */
+  pindahRows?: BarisPindah[];
+  /** id dari pindahRows — hak stempelnya SAMA dengan idNganggur (diisi di
+   *  dua jalan keluar yang sama; tidak ada = tidak distempel). */
+  idPindah?: string[] | null;
+  /** Kalimat jembatan untuk laporan (ragu, galat baca, data janggal). */
+  pindahCatatan?: string[];
 
   /** Tanggal terakhir yang BENAR-BENAR diperiksa untuk "tanpa pemilik".
    *  null = seluruh periode berkas diperiksa. Terisi = ada ekor tanggal yang
@@ -416,6 +429,13 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   // pembacaan "uang tanpa pemilik" dibatasi ke rekening berkas ini. Diisi
   // sesudah klaim ditarik; false = perilaku lama persis.
   let ketatRekening = false;
+  // JEMBATAN PINDAH SALDO (lib/pipeline/pindahSaldo.ts): sesi PINDAH SELESAI
+  // yang kakinya ada di rekening berkas ini — diisi sesudah klaim ditarik,
+  // HANYA bila gadai mengirim medan `pindah`. null = perilaku lama persis.
+  let pindahBerkas: { sesi: SesiPindah[]; rute: string; kaki: KakiPindah } | null = null;
+  const pindahCatatanAwal: string[] = [];
+  // id kaki pindah saldo yang terbaca — haknya distempel mengikuti idNganggur.
+  let idPindahTerbaca: string[] = [];
   const bacaNganggur = async (idTerpakai: Set<string>): Promise<string[]> => {
     if (!periodStart || !periodEnd) return [];
     try {
@@ -446,9 +466,15 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
         accountId, jenis,
         bankId: ketatRekening ? upload.bank.id : null,
         dari: periodStart, sampai: batasAkhir, idTerpakai,
+        ...(pindahBerkas ? { pindah: pindahBerkas } : {}),
       });
       hasil.unclaimedBelumLapor = baca.belumLapor;
       hasil.unclaimedRows = baca.rows;
+      if (baca.pindah) {
+        hasil.pindahRows = baca.pindah.rows;
+        hasil.pindahCatatan = [...pindahCatatanAwal, ...baca.pindah.catatan];
+        idPindahTerbaca = baca.pindah.ids;
+      }
       if (baca.tersaring > 0) {
         console.warn(`[jalankanPass] ${baca.tersaring} baris disaring jaring memori — ` +
                      `saveSession mungkin tidak menulis klaim (${jenis})`);
@@ -565,6 +591,28 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   }
   ketatRekening = aturanRek.aktif;
   const milikBerkasIni = (i: { bankId: string }) => !ketatRekening || i.bankId === upload.bank.id;
+  // JEMBATAN PINDAH SALDO: kaki pindah saldo hanya dinilai di berkas rekening
+  // yang TERBUKTI asal (debet) / tujuannya (kredit). Gadai tidak mengirim
+  // medan `pindah` (versi lama / saklar OFF) → kaki null → tidak ada apa pun.
+  {
+    const kiriman = tarik.pindah ?? null;
+    const kaki = kakiPindahBerkas({
+      kiriman, aturan: aturanRek, bankId: upload.bank.id, jenis: arah,
+      rekeningTerbukti: upload.rekeningTerbukti === true,
+    });
+    if (kiriman && kaki) {
+      pindahBerkas = { sesi: kiriman.sesi, rute: rutePindah(kiriman), kaki };
+      if (kiriman.galat) {
+        pindahCatatanAwal.push(`sesi pindah saldo tidak terbaca di Aceh Gadai (${kiriman.galat}) — kaki pindah saldo tetap disebut sebagai tanpa pemilik.`);
+      }
+      // Sesi janggal (dilewati gadai / ditolak bacaKirimanPindah) TIDAK ditulis
+      // ke laporan: tanggalnya tidak diketahui, jadi kalimatnya akan berulang
+      // di setiap laporan selama 60 hari. Kakinya sendiri tetap tampil tanpa
+      // pemilik (🔴) — itulah tanda yang terlihat.
+      const janggal = kiriman.dilewati + kiriman.ditolak;
+      if (janggal > 0) console.warn(`[jalankanPass] ${janggal} sesi pindah saldo janggal tidak dipasangkan (${jenis})`);
+    }
+  }
   hasil.klaimRekeningLain = ketatRekening
     ? tarik.inputs.filter((i) => i.sudahMemegang !== true && !milikBerkasIni(i)).length
     : 0;
@@ -643,6 +691,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
     // lewatiPassRekeningLain (rekeningKlaim.ts).
     hasil.lewatRekeningLain = true;
     hasil.idNganggur = await bacaNganggur(new Set());
+    if (hasil.pindahRows) hasil.idPindah = idPindahTerbaca;
     return hasil;
   }
   if (inputs.length === 0) {
@@ -1795,5 +1844,7 @@ export async function jalankanPass(opsi: OpsiPass): Promise<HasilPass> {
   // menghilangkan — dan itu sikap yang sama dengan komentar penstempelan sejak
   // awal, hanya sekarang benar-benar dijalankan.
   hasil.idNganggur = idNganggur;
+  // Kaki pindah saldo terbaca di bacaan yang sama → hak stempel yang sama.
+  if (hasil.pindahRows) hasil.idPindah = idPindahTerbaca;
   return hasil;
 }

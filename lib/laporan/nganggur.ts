@@ -54,6 +54,15 @@ export interface BarisNganggur {
   ket: string;
 }
 
+/** Kaki PINDAH SALDO resmi yang dikenali jembatan (lib/pipeline/pindahSaldo.ts):
+ *  baris mutasi yang tadinya "tanpa pemilik", pemiliknya sesi PINDAH gadai. */
+export interface BarisPindah extends BarisNganggur {
+  /** id sesi gerbang PINDAH di Aceh Gadai (angka). */
+  sesi: string;
+  /** "1994 → 1919" — empat digit akhir rekening asal → tujuan. */
+  rute: string;
+}
+
 /** Yang dibutuhkan dari satu ringkasan pass — RingkasPass (proses/actions.ts)
  *  maupun ringkasan job tersimpan (skrip kirim ulang). */
 export interface PassNganggur {
@@ -66,6 +75,15 @@ export interface PassNganggur {
    *  atau yang dilewati karena milik rekening lain. null/kosong = pass batal:
    *  dibaca dan dirinci, TIDAK distempel. */
   idNganggur?: string[] | null;
+  /** JEMBATAN PINDAH SALDO: baris yang terbaca bersama `unclaimedRows` tapi
+   *  dikenali sebagai kaki pindah saldo resmi — dirinci di blok sendiri.
+   *  Tidak ada = gadai tidak mengirim sesi PINDAH (perilaku lama persis). */
+  pindahRows?: BarisPindah[];
+  /** id dari `pindahRows` (urutan sama) yang boleh distempel — aturan SAMA
+   *  dengan idNganggur (null = pass batal). */
+  idPindah?: string[] | null;
+  /** Kalimat jembatan (tidak dipasangkan karena ragu, galat baca, …). */
+  pindahCatatan?: string[];
 }
 
 /** Bentuk id yang diterima penstempel (uuid parsed_transactions). Saringan
@@ -86,14 +104,18 @@ export function idStempelNganggur(
   kredit: PassNganggur | undefined,
   debet: PassNganggur | undefined,
 ): string[] {
-  const satu = (p: PassNganggur | undefined): string[] => {
-    const ids = Array.isArray(p?.idNganggur) ? p!.idNganggur! : [];
-    const rows = Array.isArray(p?.unclaimedRows) ? p!.unclaimedRows! : [];
+  const sejajar = (idsM: unknown, rowsM: unknown): string[] => {
+    const ids = Array.isArray(idsM) ? (idsM as unknown[]) : [];
+    const rows = Array.isArray(rowsM) ? (rowsM as unknown[]) : [];
     if (ids.length === 0) return [];
     if (ids.length !== rows.length || ids.length > BATAS_RINCI_NGANGGUR) return [];
     if (!ids.every((x) => typeof x === "string" && ID_SAH.test(x))) return [];
-    return ids;
+    return ids as string[];
   };
+  // Kaki pindah saldo (dirinci di blok PINDAH SALDO) dinilai terpisah dengan
+  // aturan yang sama — sejajar dengan daftarnya sendiri, atau tidak sama sekali.
+  const satu = (p: PassNganggur | undefined): string[] =>
+    [...sejajar(p?.idNganggur, p?.unclaimedRows), ...sejajar(p?.idPindah, p?.pindahRows)];
   return [...new Set([...satu(kredit), ...satu(debet)])];
 }
 
@@ -131,7 +153,9 @@ export function bahanNganggur(
 ): Pick<IsiLapis2,
   "kreditNganggur" | "sisaKreditNganggur" | "rpKreditNganggur" |
   "debetNganggur" | "sisaDebetNganggur" | "rpDebetNganggur" |
-  "nBiayaAdmin" | "rpBiayaAdmin" | "mulaiSisaKreditNganggur" | "mulaiSisaDebetNganggur"> {
+  "nBiayaAdmin" | "rpBiayaAdmin" | "mulaiSisaKreditNganggur" | "mulaiSisaDebetNganggur" | "pindahSaldo"> {
+  const kakiPindah = (p: PassNganggur | undefined) =>
+    (Array.isArray(p?.pindahRows) ? p!.pindahRows! : []).slice(0, BATAS_RINCI_NGANGGUR);
   const siapkan = (p: PassNganggur | undefined) => {
     const terbaca = Array.isArray(p?.unclaimedRows) ? p!.unclaimedRows! : [];
     // Peramban standar tidak pernah mengirim lebih dari batas (batas kueri
@@ -142,8 +166,9 @@ export function bahanNganggur(
     // Tanggal terakhir yang TERBACA — termasuk potongan admin dan baris
     // pra-lantai, yang tidak dirinci tapi ikut mengisi jatah baca. Diambil
     // dari daftar rinci saja, tanggal ini bisa terlalu awal (masih benar,
-    // hanya boros); diambil dari sini, ia tepat batas sisanya.
-    const tglSah = dipakai.map((x) => String(x?.tgl ?? "")).filter((t) => /^\d{4}-\d{2}-\d{2}$/.test(t));
+    // hanya boros); diambil dari sini, ia tepat batas sisanya. Kaki pindah
+    // saldo (jembatan) juga terbaca di jatah yang sama.
+    const tglSah = [...dipakai, ...kakiPindah(p)].map((x) => String(x?.tgl ?? "")).filter((t) => /^\d{4}-\d{2}-\d{2}$/.test(t));
     const mulaiSisa = sisa > 0 && tglSah.length ? tglSah.reduce((m, t) => (t > m ? t : m)) : null;
     // Barisnya datang dari peramban dan kini dicetak SEMUA ke Telegram —
     // baris baru di dalam nama tidak boleh bisa menyulap baris laporan palsu.
@@ -171,5 +196,36 @@ export function bahanNganggur(
     rpBiayaAdmin: jumlah(dAdmin),
     mulaiSisaKreditNganggur: k.mulaiSisa,
     mulaiSisaDebetNganggur: d.mulaiSisa,
+    // Medan ini HANYA ada bila jembatan pindah saldo berbicara — tanpa itu
+    // isi laporan (dan teksnya) sama persis dengan sebelum jembatan ada.
+    ...bahanPindahSaldo(kredit, debet, lantai, kakiPindah),
   };
+}
+
+/**
+ * Blok PINDAH SALDO RESMI untuk IsiLapis2: kaki yang dikenali (lantai sama
+ * dengan daftar tanpa pemilik; dijinakkan — datang dari peramban) + catatan
+ * jembatan. {} bila tidak ada apa pun yang perlu dikatakan.
+ */
+function bahanPindahSaldo(
+  kredit: PassNganggur | undefined,
+  debet: PassNganggur | undefined,
+  lantai: string,
+  kakiPindah: (p: PassNganggur | undefined) => BarisPindah[],
+): Pick<IsiLapis2, "pindahSaldo"> | Record<string, never> {
+  const bentuk = (xs: BarisPindah[], arah: "keluar" | "masuk") => xs
+    .filter((x) => String(x?.tgl ?? "") >= lantai)
+    .map((x) => ({
+      // Jam hanya angka & pemisah — tidak ada emoji/huruf dari peramban di baris 🔁.
+      tgl: String(x.tgl ?? ""), jam: String(x.jam ?? "").replace(/[^0-9.:]/g, "").slice(0, 8), nominal: Number(x.nominal || 0),
+      sesi: String(x.sesi ?? "").replace(/\D/g, "").slice(0, 18) || "?",
+      rute: jinak(x.rute, 20), arah,
+    }));
+  const baris = [...bentuk(kakiPindah(debet), "keluar"), ...bentuk(kakiPindah(kredit), "masuk")];
+  const catatan = [...(debet?.pindahCatatan ?? []), ...(kredit?.pindahCatatan ?? [])]
+    .filter((c) => typeof c === "string" && c.trim() !== "")
+    .slice(0, 10)
+    .map((c) => jinak(c, 300));
+  if (!baris.length && !catatan.length) return {};
+  return { pindahSaldo: { baris, catatan } };
 }

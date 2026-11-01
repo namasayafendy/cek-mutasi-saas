@@ -138,6 +138,17 @@ export interface IsiLapis2 {
   nganggurBatas?: string | null;
   /** false = pemeriksaan "tanpa pemilik" TIDAK jalan. Nol baris bukan "bersih". */
   nganggurDiperiksa?: boolean;
+  /** JEMBATAN PINDAH SALDO (lib/pipeline/pindahSaldo.ts, 1 Nov 2026): kaki
+   *  pindah saldo resmi (menu Pindah Saldo gadai, sesi SELESAI) yang tadinya
+   *  jatuh ke UANG DI MUTASI TANPA PEMILIK — debet rekening asal tampil 🔴
+   *  "UANG KELUAR TANPA ALASAN", kredit rekening tujuan "uang masuk tanpa
+   *  pemilik". BUKAN bagian cacah tanpa pemilik. Tidak ada = gadai tidak
+   *  mengirim sesi PINDAH → laporan sama persis dengan sebelumnya. */
+  pindahSaldo?: {
+    baris: { tgl: string; jam: string; nominal: number; sesi: string; rute: string; arah: "keluar" | "masuk" }[];
+    /** Kalimat jembatan: tidak dipasangkan karena ragu / galat baca. */
+    catatan: string[];
+  } | null;
 
   /** ── SANDINGAN LAPIS 1 ↔ LAPIS 2, dihitung MESIN ──
    *  Angkanya datang langsung dari Aceh Gadai (endpoint /transfer-klaim/sandingan),
@@ -979,6 +990,26 @@ export function susunLapis2Lengkap(isi: IsiLapis2, kepala: KepalaLapis2): { teks
   }
   if (isi.nganggurBatas) {
     L.push(`   ℹ️ diperiksa sampai ${tgl(isi.nganggurBatas)} saja — sesudah itu klaimnya belum lahir.`);
+  }
+
+  // ── PINDAH SALDO RESMI (jembatan, 1 Nov 2026) ──
+  // Kaki pindah saldo menu gadai (sesi PINDAH SELESAI) dipisah dari daftar di
+  // atas: ia BUKAN uang tanpa pemilik, tapi tetap disebut sekali — barisnya
+  // distempel bersama daftar di atas, jadi yang distempel = yang dirinci.
+  // Judulnya blok sendiri (tidak menjorok, bukan 🚨) dan barisnya "🔁", jadi
+  // pecahPesanLapis2 tidak pernah mengira ini lanjutan uang keluar. Tanpa
+  // medan ini tidak ada satu huruf pun yang berubah.
+  const ps = isi.pindahSaldo;
+  if (ps && (ps.baris.length > 0 || ps.catatan.length > 0)) {
+    L.push("");
+    L.push(`🔁 PINDAH SALDO RESMI (menu Pindah Saldo Aceh Gadai) — ${ps.baris.length} · ` +
+           rp(ps.baris.reduce((s, x) => s + Number(x.nominal || 0), 0)));
+    ps.baris.forEach((x) => L.push(
+      `   🔁 ${tgl(x.tgl)} ${x.jam} · ${rp(x.nominal)} · ${x.arah === "keluar" ? "keluar" : "masuk"} ${x.rute} · sesi #${x.sesi}`));
+    if (ps.baris.length > 0) {
+      L.push(`   ↳ dipasangkan dengan sesi pindah saldo yang SELESAI — bukan uang tanpa pemilik.`);
+    }
+    ps.catatan.forEach((c) => L.push(`   ℹ️ ${c}`));
   }
 
   // Pemeriksaan yang tidak jalan menghasilkan nol baris — dan nol itu BUKAN

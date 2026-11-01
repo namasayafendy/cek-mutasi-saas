@@ -338,6 +338,12 @@ export interface RingkasPass {
   /** id baris di `unclaimedRows` yang BOLEH distempel — distempel tandaiSelesai
    *  sesudah laporannya tercatat. null = pass batal: tidak distempel. */
   idNganggur?: string[] | null;
+  /** JEMBATAN PINDAH SALDO (lib/pipeline/pindahSaldo.ts): kaki pindah saldo
+   *  resmi yang dikeluarkan dari `unclaimedRows`, id-nya (hak stempel sama
+   *  dengan idNganggur), dan kalimat jembatan. Tidak ada = jembatan diam. */
+  pindahRows?: { tgl: string; jam: string; nominal: number; pihak: string; ket: string; sesi: string; rute: string }[];
+  idPindah?: string[] | null;
+  pindahCatatan?: string[];
   /** Tanggal terakhir yang benar-benar diperiksa untuk "tanpa pemilik".
    *  Terisi = ada ekor tanggal yang sengaja dilewati (klaimnya belum lahir). */
   unclaimedBatas?: string | null;

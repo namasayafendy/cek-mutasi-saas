@@ -13,6 +13,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getAccountContext } from "@/lib/supabase/context";
 import type { RefIssueKirim } from "@/lib/types";
 import { susunAturanRekening, pemilikKlaim, type AturanRekening } from "@/lib/pipeline/rekeningKlaim";
+import { bacaKirimanPindah, type KirimanPindah } from "@/lib/pipeline/pindahSaldo";
 
 export interface GadaiPullInput {
   id: string; // id klaim dari Aceh Gadai (utk referensi/dedup)
@@ -82,7 +83,11 @@ export type GadaiPullResult =
       /** Tahap 2: aturan rekening pemilik klaim (lib/pipeline/rekeningKlaim.ts).
        *  aktif=false = perilaku lama; `masalah` terisi = konfigurasi rekening
        *  KELUAR belum lengkap → pemanggil WAJIB menolak menilai. */
-      aturanRekening: AturanRekening }
+      aturanRekening: AturanRekening;
+      /** JEMBATAN PINDAH SALDO (lib/pipeline/pindahSaldo.ts): sesi PINDAH
+       *  SELESAI dari medan `pindah` gadai. null = medan tidak dikirim (gadai
+       *  versi lama / saklar gerbang_pindah OFF) → perilaku lama persis. */
+      pindah: KirimanPindah | null }
   | { ok: false; error: string };
 
 // Normalisasi nama outlet: trim + rapikan spasi + UPPERCASE (case-insensitive match)
@@ -116,6 +121,7 @@ export async function pullGadaiClaims(
   let claims: any[] = [];
   let pemegangRaw: any[] = [];
   let tertahan: GadaiTertahan | null = null;
+  let pindah: KirimanPindah | null = null;
   try {
     const base = c.gadai_api_url.replace(/\/+$/, "");
     const res = await fetch(`${base}/api/transfer-klaim?days=60&arah=${arah}`, {
@@ -142,6 +148,9 @@ export async function pullGadaiClaims(
         gerbangError: json.tertahan.gerbangError ?? null,
       };
     }
+    // Pindah Saldo resmi 1994 → 1919 (gadai lib/gerbang/pindahLapis2.ts).
+    // Tidak dikirim = null = jembatan diam.
+    pindah = bacaKirimanPindah(json.pindah);
   } catch (err) {
     return { ok: false, error: "Gagal terhubung ke Aceh Gadai: " + String(err) };
   }
@@ -249,7 +258,7 @@ export async function pullGadaiClaims(
     });
   }
 
-  return { ok: true, inputs, unmappedOutlets: [...unmapped], total, tertahan, aturanRekening };
+  return { ok: true, inputs, unmappedOutlets: [...unmapped], total, tertahan, aturanRekening, pindah };
 }
 
 // ============================================================

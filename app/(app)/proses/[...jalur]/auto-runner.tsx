@@ -272,6 +272,13 @@ export function AutoRunner({
           // distempel: tiap baris disebut lagi selamanya, dan 100 baris
           // tertua mengunci jatah baca sehingga yang baru tak pernah terbaca.
           idNganggur: h.idNganggur,
+          // Jembatan PINDAH SALDO (1 Nov 2026). Tanpa tiga baris ini kaki
+          // pindah saldo hilang dari laporan (sudah dikeluarkan dari
+          // unclaimedRows) dan tidak pernah distempel. undefined = jembatan
+          // diam → ringkasan sama persis dengan sebelumnya.
+          pindahRows: h.pindahRows,
+          idPindah: h.idPindah,
+          pindahCatatan: h.pindahCatatan,
         });
         const tutup = await tandaiSelesai(jobId, ringkasBerkas, [bersih(hasilKredit), bersih(hasilDebet)]);
         ubahTerakhir("selesai");

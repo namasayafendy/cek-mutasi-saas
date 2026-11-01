@@ -11,7 +11,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- baris DB tanpa tipe, sama seperti jalankanPass.ts */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { BATAS_RINCI_NGANGGUR, type BarisNganggur } from "@/lib/laporan/nganggur";
+import { BATAS_RINCI_NGANGGUR, type BarisNganggur, type BarisPindah } from "@/lib/laporan/nganggur";
+import { bacaCalonPindah, pasangkanPindah, sesiDalamRentang, type KakiPindah, type SesiPindah } from "@/lib/pipeline/pindahSaldo";
 
 export interface OpsiBacaNganggur {
   accountId: string;
@@ -23,6 +24,11 @@ export interface OpsiBacaNganggur {
   sampai: string;
   /** Jaring kedua — lihat bacaNganggur di jalankanPass. */
   idTerpakai: Set<string>;
+  /** JEMBATAN PINDAH SALDO (lib/pipeline/pindahSaldo.ts): sesi PINDAH
+   *  SELESAI dari gadai yang kakinya ada di rekening berkas ini (`bankId`
+   *  WAJIB). Tidak ada / null = perilaku lama persis. `kaki` = kaki yang
+   *  dinilai berkas ini (kakiPindahBerkas). */
+  pindah?: { sesi: SesiPindah[]; rute: string; kaki: KakiPindah } | null;
 }
 
 export interface HasilBacaNganggur {
@@ -34,6 +40,10 @@ export interface HasilBacaNganggur {
   belumLapor: number;
   /** Berapa yang disaring jaring memori. */
   tersaring: number;
+  /** Hanya bila `pindah` diminta: baris yang dikenali sebagai kaki PINDAH
+   *  SALDO resmi — DIKELUARKAN dari `rows`/`ids`/`belumLapor`, dirinci di
+   *  blok sendiri, dan (bersama `ids`) boleh distempel. */
+  pindah?: { rows: BarisPindah[]; ids: string[]; catatan: string[] };
 }
 
 /**
@@ -75,25 +85,64 @@ export async function bacaBarisNganggur(
   if (error) throw new Error(`baca baris tanpa pemilik ditolak: ${error.message}`);
 
   const semua = (barisBaru ?? []) as any[];
-  const rows = semua.filter((t) => !o.idTerpakai.has(String(t.id)));
-  const tersaring = semua.length - rows.length;
+  const terbaca = semua.filter((t) => !o.idTerpakai.has(String(t.id)));
+  const tersaring = semua.length - terbaca.length;
+  const bentuk = (t: any): BarisNganggur => ({
+    tgl: String(t.tanggal ?? "").slice(0, 10),
+    jam: String(t.jam ?? ""),
+    nominal: Number(t[kolom] ?? 0),
+    pihak: String(t.nama_pengirim || t.nama_penerima || ""),
+    ket: String(t.deskripsi ?? "").slice(0, 60),
+  });
+
+  // ── JEMBATAN PINDAH SALDO (lib/pipeline/pindahSaldo.ts) ──
+  // Kaki pindah saldo resmi dipisah dari "tanpa pemilik". Galat apa pun di
+  // sini = tidak ada yang dipisah (barisnya tetap disebut tanpa pemilik, arah
+  // yang aman) + catatan; TIDAK melempar, supaya pemeriksaan tanpa pemilik
+  // tidak berubah jadi "tidak jalan". Tanpa `o.pindah` blok ini diam.
+  let pindah: HasilBacaNganggur["pindah"];
+  let pasangan = new Map<string, string>();
+  if (o.pindah) {
+    const catatan: string[] = [];
+    const sesi = o.bankId ? sesiDalamRentang(o.pindah.sesi, o.dari, o.sampai) : [];
+    if (sesi.length) {
+      try {
+        const calonPerSesi = await bacaCalonPindah(supabase, {
+          accountId: o.accountId, bankId: o.bankId!, kolom, sesi,
+        });
+        const h = pasangkanPindah({
+          sesi, calonPerSesi, idTerbaca: new Set(terbaca.map((t) => String(t.id))),
+          kaki: o.pindah.kaki, idDiklaimPassIni: o.idTerpakai,
+        });
+        pasangan = h.pasangan;
+        catatan.push(...h.catatan);
+      } catch (e) {
+        pasangan = new Map();
+        catatan.push(`jembatan pindah saldo tidak bisa memeriksa mutasi (${e instanceof Error ? e.message.slice(0, 80) : "galat"}) — kaki pindah saldo tetap disebut sebagai tanpa pemilik.`);
+      }
+    }
+    const kaki = terbaca.filter((t) => pasangan.has(String(t.id)));
+    pindah = {
+      rows: kaki.map((t) => ({ ...bentuk(t), sesi: pasangan.get(String(t.id))!, rute: o.pindah!.rute })),
+      ids: kaki.map((t) => String(t.id)),
+      catatan,
+    };
+  }
+  const rows = pasangan.size ? terbaca.filter((t) => !pasangan.has(String(t.id))) : terbaca;
 
   return {
-    rows: rows.map((t) => ({
-      tgl: String(t.tanggal ?? "").slice(0, 10),
-      jam: String(t.jam ?? ""),
-      nominal: Number(t[kolom] ?? 0),
-      pihak: String(t.nama_pengirim || t.nama_penerima || ""),
-      ket: String(t.deskripsi ?? "").slice(0, 60),
-    })),
+    rows: rows.map(bentuk),
     ids: rows.map((t) => String(t.id)),
     // Cacah UTUH dilaporkan terpisah dari yang ditampilkan. Memotong di batas
     // tanpa menyebut sisanya berbunyi persis seperti "cuma segini".
     // Dikurangi yang tersaring jaring memori: arah galatnya jadi "sedikit
     // melebihkan sisa", dan itu arah yang aman — paling banyak ia menambah
     // baris "masih ada N lagi", bukan menghilangkan sesuatu.
-    belumLapor: Math.max(0, Number(count ?? semua.length) - tersaring),
+    // Kaki pindah saldo yang dikenali ikut terbaca (dan distempel bersama
+    // daftar ini) — ia bukan sisa yang belum dirinci.
+    belumLapor: Math.max(0, Number(count ?? semua.length) - tersaring - (pindah?.ids.length ?? 0)),
     tersaring,
+    ...(pindah ? { pindah } : {}),
   };
 }
 
