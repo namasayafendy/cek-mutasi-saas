@@ -16,12 +16,20 @@
 //      "🟢 LAPIS 2" hanya di pesan pertama.
 //   3. antreLaporanBerurutan + kurasOutbox dengan DB & pengirim tiruan.
 //   4. Pembanding: teks laporan versi git <dasar> untuk bentuk yang TIDAK
-//      berubah (≤ 8 baris per arah, 0 baris, potongan admin).
+//      berubah (≤ 8 baris per arah, 0 baris, potongan admin). Bentuk yang
+//      memuat uang KELUAR dibandingkan sesudah sorotannya dilepas (bagian 5).
+//   5. SOROTAN UANG KELUAR TANPA ALASAN (keputusan Owner 1 Nov 2026): judul
+//      + 🔴 di setiap baris keluar + satu peringatan di kepala; masuk & admin
+//      tidak disorot; 0 keluar → tanpa sorotan; laporan dipecah → baris 🔴
+//      di pesan lanjutan tetap tersorot dan judulnya diulang — HANYA bila
+//      pesannya dimulai di baris 🔴 / kalimat sisa keluar, bukan di baris ℹ️
+//      admin/batas (sapuan tetap 2×61×80 bentuk); rekening KIRIM 1919 ikut;
+//      dilepas sorotannya = SAMA PERSIS dengan versi <sebelum>.
 //
 // Tanpa database sungguhan, tanpa Telegram: env dikosongkan di awal supaya
 // pemanggilan tak sengaja ke klien sungguhan GAGAL, bukan menulis.
 //
-//   npx tsx scripts/uji-nganggur-rinci.mts [--dasar=<commit>]
+//   npx tsx scripts/uji-nganggur-rinci.mts [--dasar=<commit>] [--sebelum=<commit>]
 for (const k of ["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "TG_MUTASI_BOT_TOKEN"]) delete process.env[k];
 
 import { execSync } from "node:child_process";
@@ -30,13 +38,48 @@ import { bacaBarisNganggur, stempelBarisNganggur } from "../lib/pipeline/nganggu
 import { bahanNganggur, idStempelNganggur, laporanTercatat, BATAS_RINCI_NGANGGUR,
          type BarisNganggur, type PassNganggur } from "../lib/laporan/nganggur.ts";
 import { susunLapis2, susunLapis2Lengkap, pecahPesanLapis2, BATAS_PESAN_LAPIS2, AWALAN_LANJUTAN_LAPIS2,
+         JUDUL_KELUAR_TANPA_ALASAN, PENANDA_KELUAR_TANPA_ALASAN, SAMBUNGAN_KELUAR_LAPIS2,
          type IsiLapis2 } from "../lib/laporan/lapis2.ts";
 import { sisipkanBarisLembar } from "../lib/laporan/lembarWeb.ts";
 import { BATAS_TEKS_PESAN_TG } from "../lib/telegram/bot.ts";
 import { antreLaporanBerurutan, kurasOutbox } from "../lib/telegram/outbox.ts";
 
 const DASAR = (process.argv.find((a) => a.startsWith("--dasar="))?.slice(8)) || "47b85aa";
+/** Versi SEBELUM sorotan uang keluar (rinci semua, a772ae4) — pembanding bagian 5. */
+const SEBELUM = (process.argv.find((a) => a.startsWith("--sebelum="))?.slice(10)) || "a772ae4";
 const LANTAI = "2026-07-22";
+
+/** Kembalikan teks bersorot ke bentuk sebelum sorotan (a772ae4): buang
+ *  peringatan di kepala, judul keluar → "   keluar N · …", 🔴 → "•", buang
+ *  baris kosong pemisah yang ditambahkan di depan judul. Kalau hasilnya SAMA
+ *  PERSIS dengan versi lama, sorotan tidak mengubah cacah/rupiah/kalimat apa pun. */
+const KEPALA_KELUAR = `${JUDUL_KELUAR_TANPA_ALASAN} — `;
+const BARIS_KELUAR = `   ${PENANDA_KELUAR_TANPA_ALASAN} `;
+// Ada sisa → cacahnya menyebut berapa yang belum terbaca, rupiahnya menyebut
+// berapa yang dirinci; tanpa sisa → keduanya tidak ada (temuan tinjauan 3).
+const PERINGATAN_ATAS = /^🚨 ADA \d+ UANG KELUAR TANPA ALASAN( \(Rp [\d.]+\)|, termasuk \d+ yang belum terbaca \(Rp [\d.]+, rupiah \d+ yang dirinci\)) — lihat bagian bawah$/;
+function lepasSorotan(t: string): string {
+  const out: string[] = [];
+  for (const l of t.split("\n")) {
+    if (PERINGATAN_ATAS.test(l)) continue;
+    if (l.startsWith(KEPALA_KELUAR)) {
+      if (out.length && out[out.length - 1] === "") out.pop();
+      out.push("   keluar " + l.slice(KEPALA_KELUAR.length));
+      continue;
+    }
+    out.push(l.startsWith(BARIS_KELUAR) ? "   • " + l.slice(BARIS_KELUAR.length) : l);
+  }
+  return out.join("\n");
+}
+
+/** Gabungan isi pesan-pesan hasil pecahPesanLapis2 tanpa hiasannya: judul
+ *  lanjutan (+ baris sambungan uang keluar bila ada) dan penutup "bersambung". */
+const tanpaHias = (xs: string[]) => xs.flatMap((b, i) => {
+  let L = b.split("\n");
+  if (i > 0) { L = L.slice(1); if (L[0] === SAMBUNGAN_KELUAR_LAPIS2) L = L.slice(1); }
+  if (i < xs.length - 1) L = L.slice(0, -2);
+  return L;
+}).filter((l) => l !== "");
 
 let lulus = 0, gagal = 0;
 const harap = (label: string, ok: boolean, rinci = "") => {
@@ -159,7 +202,11 @@ function isiKosong(): IsiLapis2 {
 
 /** Baris yang distempel pada putaran ini, dan apakah masing-masing tercetak. */
 const barisRinci = (b: { tgl: string; jam: string; nominal: number; pihak: string }) => b.pihak;
-const tercetak = (teks: string, pihak: string) => teks.split("\n").some((l) => l.startsWith("   • ") && l.endsWith(` · ${pihak}`));
+// Baris rinci: masuk "   • …", keluar (disorot sejak 1 Nov 2026) "   🔴 …".
+const tercetak = (teks: string, pihak: string) => teks.split("\n").some((l) =>
+  (l.startsWith("   • ") || l.startsWith(BARIS_KELUAR)) && l.endsWith(` · ${pihak}`));
+const tercetakSorot = (teks: string, pihak: string) => teks.split("\n").some((l) => l.startsWith(BARIS_KELUAR) && l.endsWith(` · ${pihak}`));
+const tercetakBiasa = (teks: string, pihak: string) => teks.split("\n").some((l) => l.startsWith("   • ") && l.endsWith(` · ${pihak}`));
 
 // ═══════════════════════ 1. DB TIRUAN: BACA → STEMPEL → LAPORAN ═══════════════════════
 console.log("── 1a. 30 debet tanpa pemilik (rekening MASUK 1994, seperti 1 Nov) ──");
@@ -182,8 +229,12 @@ console.log("── 1a. 30 debet tanpa pemilik (rekening MASUK 1994, seperti 1 N
         `${p.baca.debet.rows.length} / ${p.baca.debet.belumLapor}`);
   harap("1a. SEMUA 30 debet tercetak rinci", debet30.every((r) => tercetak(p.teks, r.nama_penerima)),
         debet30.filter((r) => !tercetak(p.teks, r.nama_penerima)).map((r) => r.nama_penerima).join(", "));
-  harap("1a. cacah 'keluar 30' + rupiahnya = jumlah 30 baris",
-        p.teks.includes(`   keluar 30 · Rp ${debet30.reduce((s, r) => s + r.nominal_debet, 0).toLocaleString("id-ID")}`));
+  const rp30 = debet30.reduce((s, r) => s + r.nominal_debet, 0).toLocaleString("id-ID");
+  harap("1a. cacah 'keluar 30' + rupiahnya = jumlah 30 baris (judul bersorot)",
+        p.teks.includes(`\n${JUDUL_KELUAR_TANPA_ALASAN} — 30 · Rp ${rp30}\n`));
+  harap("1a. SEMUA 30 debet disorot 🔴", debet30.every((r) => tercetakSorot(p.teks, r.nama_penerima)));
+  harap("1a. peringatan di kepala: cacah & rupiah = blok", p.teks.split("\n")[2] === `🚨 ADA 30 UANG KELUAR TANPA ALASAN (Rp ${rp30}) — lihat bagian bawah`,
+        p.teks.split("\n")[2]);
   harap("1a. potongan admin tetap SATU baris (4 · Rp 18.000)", p.teks.includes("ℹ️ 4 potongan admin bank · Rp 18.000 — tidak dirinci."));
   harap("1a. tidak ada '…dan N lagi'", !/…dan \d+/.test(p.teks.split("UANG DI MUTASI TANPA PEMILIK")[1]));
   const distempel = rows.filter((r) => r.unclaimed_reported_at && r.unclaimed_reported_at !== "2026-10-31T00:00:00Z");
@@ -227,10 +278,19 @@ console.log("── 1b. 130 debet + 7 kredit — melewati batas 100 ──");
         p.teks.split("\n").filter((l) => l.includes("…dan")).join(" | "));
   harap("1b. kalimat sisa tidak menjanjikan 'laporan berikutnya' & tidak menyebut stempel",
         !p.teks.includes("laporan berikutnya") && !/distempel/i.test(p.teks));
+  const rp100 = terbaca.reduce((s, r) => s + r.nominal_debet, 0).toLocaleString("id-ID");
   harap("1b. kepala keluar: cacah 130, rupiah dikatakan hanya yang dirinci",
-        p.teks.includes("   keluar 130 · Rp ") && p.teks.includes("(rupiah 100 yang dirinci)"));
+        p.teks.includes(`\n${JUDUL_KELUAR_TANPA_ALASAN} — 130 · Rp ${rp100} (rupiah 100 yang dirinci)\n`));
+  // Cacah 130 = 100 dirinci + 30 sisa yang BELUM terbaca (isinya belum
+  // diketahui — bisa saja potongan admin), jadi kalimatnya menyebut itu.
+  harap("1b. peringatan di kepala menyebut 130, termasuk 30 yang belum terbaca, + rupiah 100 yang dirinci",
+        p.teks.split("\n")[2] === `🚨 ADA 130 UANG KELUAR TANPA ALASAN, termasuk 30 yang belum terbaca (Rp ${rp100}, rupiah 100 yang dirinci) — lihat bagian bawah`,
+        p.teks.split("\n")[2]);
   harap("1b. 7 kredit tercetak semua, tanpa sisa", rows.filter((r) => r.nominal_kredit > 0).every((r) => tercetak(p.teks, r.nama_pengirim)) &&
         p.teks.includes("   masuk  7 · Rp 1.400.000\n"));
+  harap("1b. 7 kredit TIDAK disorot (tetap '•'), 100 debet disorot 🔴",
+        rows.filter((r) => r.nominal_kredit > 0).every((r) => tercetakBiasa(p.teks, r.nama_pengirim) && !tercetakSorot(p.teks, r.nama_pengirim)) &&
+        terbaca.every((r) => tercetakSorot(p.teks, r.nama_penerima) && !tercetakBiasa(p.teks, r.nama_penerima)));
   // Pesan aman: dipecah, tiap bagian ≤ ambang, tidak ada baris rinci yang hilang.
   const bagian = pecahPesanLapis2(sisipkanBarisLembar(p.teks, "📊 Laporan web L2-9: https://contoh.test/l/abc"));
   harap(`1b. laporan ${p.teks.length} huruf dipecah ${bagian.length} pesan, semua ≤ ${BATAS_TEKS_PESAN_TG}`,
@@ -478,12 +538,6 @@ console.log("── 2. pecahPesanLapis2 ──");
         bagian.slice(0, -1).every((b, i) => b.endsWith(`↪️ bersambung ke pesan ${i + 2}/${bagian.length}`)) &&
         !bagian[bagian.length - 1].includes("bersambung"));
   harap("2. tautan laporan web di pesan pertama", bagian[0].split("\n")[2].startsWith("📊 Laporan web"));
-  const tanpaHias = (xs: string[]) => xs.flatMap((b, i) => {
-    let L = b.split("\n");
-    if (i > 0) L = L.slice(1);
-    if (i < xs.length - 1) L = L.slice(0, -2);
-    return L;
-  }).filter((l) => l !== "");
   const asli = teks.split("\n").filter((l) => l !== "");
   harap("2. gabungan semua pesan = teks asli baris demi baris (tidak hilang, tidak ganda)",
         JSON.stringify(tanpaHias(bagian)) === JSON.stringify(asli), `${tanpaHias(bagian).length} vs ${asli.length}`);
@@ -594,11 +648,17 @@ console.log(`── 4. teks laporan vs lapis2.ts versi ${DASAR} ──`);
     { const x = isiKosong(); x.nBiayaAdmin = 2; x.rpBiayaAdmin = 5_000; bentuk.push(["admin saja", x]); }
     { const x = isiKosong(); x.nganggurDiperiksa = false; bentuk.push(["tidak diperiksa", x]); }
     for (const [nama, x] of bentuk) {
-      harap(`4. bentuk tak berubah "${nama}": SAMA PERSIS dengan versi lama`, L0.susunLapis2(x, kepala) === susunLapis2(x, kepala));
+      // Bentuk yang memuat uang KELUAR kini disorot (bagian 5) — dibandingkan
+      // sesudah sorotannya dilepas; selebihnya harus SAMA PERSIS apa adanya.
+      const adaKeluar = x.debetNganggur.length + Number(x.sisaDebetNganggur ?? 0) > 0;
+      const baru = susunLapis2(x, kepala);
+      harap(adaKeluar ? `4. bentuk "${nama}": sorotan dilepas = SAMA PERSIS dengan versi lama`
+                      : `4. bentuk tak berubah "${nama}": SAMA PERSIS dengan versi lama`,
+            L0.susunLapis2(x, kepala) === (adaKeluar ? lepasSorotan(baru) : baru) && (!adaKeluar || baru !== lepasSorotan(baru)));
     }
     // 30 debet: versi lama mencetak 8 + "…dan 22 lagi" — 22 baris itu distempel tanpa dirinci.
     const x = isiKosong(); x.debetNganggur = baris("D", 30); x.rpDebetNganggur = 7;
-    const lama: string[] = L0.susunLapis2(x, kepala).split("\n"), baru = susunLapis2(x, kepala).split("\n");
+    const lama: string[] = L0.susunLapis2(x, kepala).split("\n"), baru = lepasSorotan(susunLapis2(x, kepala)).split("\n");
     const tambah = baru.filter((l) => !lama.includes(l)), hilang = lama.filter((l) => !baru.includes(l));
     // (bullet peringatan "   • angka dari Aceh Gadai…" bukan baris rinci)
     const rinci = (L: string[]) => L.filter((l) => /^   • .* · D \d+$/.test(l)).length;
@@ -612,6 +672,305 @@ console.log(`── 4. teks laporan vs lapis2.ts versi ${DASAR} ──`);
   } finally {
     if (existsSync(lamaL)) unlinkSync(lamaL);
   }
+}
+
+// ═══════════════════════ 5. SOROTAN UANG KELUAR TANPA ALASAN ═══════════════════════
+// Keputusan Owner 1 Nov 2026: "SEMUA UANG KELUAR TANPA ALASAN … baik rek 1994
+// maupun 1919, telegramnya DI HIGHLIGHT. Uang masuk tidak perlu di highlight."
+console.log(`── 5. sorotan uang keluar tanpa alasan (pembanding ${SEBELUM}) ──`);
+{
+  const kepala = { nomor: 41, sebelumNomor: 40, sebelumKapan: null };
+  const r = (t: string, jam: string, n: number, p: string): BarisNganggur => ({ tgl: t, jam, nominal: n, pihak: p, ket: "" });
+  const hitung = (t: string, s: string) => t.split(s).length - 1;
+
+  // ── 5a. bentuk dasar: 2 masuk + 3 keluar + admin + batas ──
+  {
+    const x = isiKosong();
+    x.kreditNganggur = [r(tgl(1), "10:02:11", 1_500_000, "SITI AMINAH"), r(tgl(2), "11:00:00", 250_000, "M_ALI*RAHMAN [PRIBADI]")];
+    x.rpKreditNganggur = 1_750_000;
+    x.debetNganggur = [r(tgl(1), "14:20:05", 2_000_000, "BUDI SANTOSO"), r(tgl(2), "09:11:40", 750_000, "TOKO_MAJU (QRIS) *"),
+                       r(tgl(2), "16:45:00", 300_000, "")];
+    x.rpDebetNganggur = 3_050_000;
+    x.nBiayaAdmin = 2; x.rpBiayaAdmin = 9_000; x.nganggurBatas = tgl(2);
+    const { teks, ringkas } = susunLapis2Lengkap(x, kepala);
+    const L = teks.split("\n");
+    harap("5a. baris pertama tetap '🟢 LAPIS 2 · cek mutasi' (jangkar LIKE)", L[0].startsWith("🟢 LAPIS 2 · cek mutasi"));
+    harap("5a. peringatan SATU baris tepat di bawah kepala, cacah & rupiah = blok",
+          L[2] === "🚨 ADA 3 UANG KELUAR TANPA ALASAN (Rp 3.050.000) — lihat bagian bawah" && hitung(teks, "🚨 ADA ") === 1, L[2]);
+    harap("5a. judul blok keluar bersorot, dipisah baris kosong dari daftar masuk",
+          teks.includes("   • 2 Nov 11:00:00 · Rp 250.000 · M_ALI*RAHMAN [PRIBADI]\n\n🚨 UANG KELUAR TANPA ALASAN — 3 · Rp 3.050.000\n"));
+    harap("5a. setiap baris keluar diawali 🔴 (termasuk pihak kosong & karakter Markdown)",
+          teks.includes("\n   🔴 1 Nov 14:20:05 · Rp 2.000.000 · BUDI SANTOSO\n") &&
+          teks.includes("\n   🔴 2 Nov 09:11:40 · Rp 750.000 · TOKO_MAJU (QRIS) *\n") &&
+          teks.includes("\n   🔴 2 Nov 16:45:00 · Rp 300.000 · \n") && hitung(teks, PENANDA_KELUAR_TANPA_ALASAN) === 3);
+    harap("5a. uang MASUK tidak disorot (tetap '•', tanpa 🔴)",
+          tercetakBiasa(teks, "SITI AMINAH") && !tercetakSorot(teks, "SITI AMINAH") && teks.includes("\n   masuk  2 · Rp 1.750.000\n"));
+    harap("5a. potongan admin & batas tetap baris ℹ️ biasa (tidak disorot)",
+          teks.includes("\n   ℹ️ 2 potongan admin bank · Rp 9.000 — tidak dirinci.\n   ℹ️ diperiksa sampai 2 Nov saja"));
+    harap("5a. ringkas web tidak berubah: keluar {3, 3.050.000}; peringatan 'menutup hari' tidak ketambahan",
+          ringkas.tanpaPemilikKeluar?.n === 3 && ringkas.tanpaPemilikKeluar?.rp === 3_050_000 &&
+          !ringkas.peringatan.some((p) => /UANG KELUAR/.test(p)));
+    const web = sisipkanBarisLembar(teks, "📊 Laporan web L2-41: https://contoh.test/l/x").split("\n");
+    harap("5a. dengan tautan web: baris 3 = tautan, baris 4 = peringatan", web[2].startsWith("📊 Laporan web") && PERINGATAN_ATAS.test(web[3]));
+  }
+
+  // ── 5b. tanpa uang keluar: TIDAK ada sorotan apa pun ──
+  {
+    const bentuk: [string, IsiLapis2][] = [];
+    bentuk.push(["0 baris", isiKosong()]);
+    { const x = isiKosong(); x.kreditNganggur = [r(tgl(1), "08:00:00", 50_000, "A")]; x.rpKreditNganggur = 50_000; bentuk.push(["masuk saja", x]); }
+    { const x = isiKosong(); x.nBiayaAdmin = 4; x.rpBiayaAdmin = 18_000; bentuk.push(["admin saja", x]); }
+    { const x = isiKosong(); x.nganggurDiperiksa = false; bentuk.push(["tidak diperiksa", x]); }
+    for (const [nama, x] of bentuk) {
+      const t = susunLapis2(x, kepala);
+      harap(`5b. "${nama}": tanpa peringatan, tanpa judul keluar, tanpa 🔴`,
+            !t.includes("UANG KELUAR TANPA ALASAN") && !t.includes(PENANDA_KELUAR_TANPA_ALASAN) && !t.includes("🚨 ADA "));
+    }
+  }
+
+  // ── 5c. keluar saja: judul langsung di bawah kepala blok (tanpa baris kosong) ──
+  {
+    const x = isiKosong();
+    x.debetNganggur = [r(tgl(1), "09:00:00", 1_000_000, "X")]; x.rpDebetNganggur = 1_000_000;
+    const t = susunLapis2(x, kepala);
+    harap("5c. keluar saja: 'UANG DI MUTASI TANPA PEMILIK' lalu judul bersorot",
+          t.endsWith("UANG DI MUTASI TANPA PEMILIK\n🚨 UANG KELUAR TANPA ALASAN — 1 · Rp 1.000.000\n   🔴 1 Nov 09:00:00 · Rp 1.000.000 · X"));
+  }
+
+  // ── 5d. 1919 rekening KIRIM: debet tanpa pemilik ikut disorot ──
+  {
+    noBaris = 0;
+    const rows: Baris[] = [
+      mutasi(tgl(1), "debet", 4_250_000, "PENERIMA 1919 A", { bank_id: BANK_LAIN }),
+      mutasi(tgl(2), "debet", 600_000, "PENERIMA 1919 B", { bank_id: BANK_LAIN }),
+      mutasi(tgl(2), "debet", 6_500, "ADMIN 1919", { bank_id: BANK_LAIN }),
+      mutasi(tgl(1), "kredit", 20_000_000, "PINDAH SALDO DARI 1994", { bank_id: BANK_LAIN }),
+      mutasi(tgl(1), "debet", 9_999_999, "MILIK 1994", { bank_id: BANK }),
+      mutasi(tgl(2), "debet", 123_000, "SUDAH DIKLAIM 1919", { bank_id: BANK_LAIN, claimed_by_input_id: "inp-7" }),
+    ];
+    const db = dbTiruan({ parsed_transactions: rows });
+    // Dua rekening aktif → jalankanPass membaca dengan bankId berkas ini (ketatRekening).
+    const baca = async (jenis: "debet" | "kredit") =>
+      bacaBarisNganggur(db as any, { accountId: AKUN, jenis, bankId: BANK_LAIN, dari: tgl(1), sampai: tgl(2), idTerpakai: new Set() });
+    const bd = await baca("debet"), bk = await baca("kredit");
+    const pd: PassNganggur = { unclaimedRows: bd.rows, unclaimedBelumLapor: bd.belumLapor, idNganggur: bd.ids };
+    const pk: PassNganggur = { unclaimedRows: bk.rows, unclaimedBelumLapor: bk.belumLapor, idNganggur: bk.ids };
+    const x: IsiLapis2 = { ...isiKosong(), bankLabel: "BSI ••1919 (KELUAR)", ...bahanNganggur(pk, pd, LANTAI),
+      infoRekening: ["Masuk (kredit): arah ini milik rekening lain — tidak ada klaim yang menunggu di rekening ini"] };
+    const t = susunLapis2(x, kepala), L = t.split("\n");
+    harap("5d. 1919: dua debet tanpa pemilik disorot 🔴", tercetakSorot(t, "PENERIMA 1919 A") && tercetakSorot(t, "PENERIMA 1919 B"));
+    harap("5d. 1919: peringatan atas (baris 3) SEBELUM baris ℹ️ rekening lain",
+          L[2] === "🚨 ADA 2 UANG KELUAR TANPA ALASAN (Rp 4.850.000) — lihat bagian bawah" && L[3].startsWith("ℹ️ Masuk (kredit): arah ini milik rekening lain"), `${L[2]} | ${L[3]}`);
+    harap("5d. 1919: isi ulang (kredit) tetap '•', admin 1919 tetap ℹ️, baris 1994 & yang diklaim tidak ikut",
+          tercetakBiasa(t, "PINDAH SALDO DARI 1994") && t.includes("ℹ️ 1 potongan admin bank · Rp 6.500 — tidak dirinci.") &&
+          !t.includes("MILIK 1994") && !t.includes("SUDAH DIKLAIM 1919"));
+    // Pass debet 1919 batal (TIDAK_ADA_KLAIM): tetap dirinci & disorot, TIDAK distempel.
+    const pBatal = await putaran(db, { dari: tgl(1), sampai: tgl(2), bankId: BANK_LAIN, batal: true });
+    harap("5d. 1919 pass batal: debet tetap dirinci + disorot, tidak distempel",
+          tercetakSorot(pBatal.teks, "PENERIMA 1919 A") && PERINGATAN_ATAS.test(pBatal.teks.split("\n")[2]) &&
+          rows.every((b) => b.unclaimed_reported_at === null));
+  }
+
+  // ── 5e. laporan dipecah: baris 🔴 di pesan lanjutan tetap tersorot + judul diulang ──
+  const cekPecah = (teks: string, isi: IsiLapis2, batas: number) => {
+    const bagian = pecahPesanLapis2(teks, batas);
+    const keluar = isi.debetNganggur, masuk = isi.kreditNganggur;
+    // Penilai sambungan, dihitung dari TEKS ASLI, bukan dari aturan
+    // pecahPesanLapis2 (temuan tinjauan 1: aturan lama "baris menjorok
+    // sesudah judul keluar" ikut memasang 🚨 di depan baris ℹ️ admin/batas).
+    // Isi daftar keluar = baris sesudah judul keluar yang diawali 🔴 atau
+    // kalimat sisa "…dan" — sambungan sah HANYA kalau pesan lanjutan dimulai
+    // di salah satunya. Awal tiap pesan = cacah baris isi pesan-pesan sebelumnya.
+    const asli = teks.split("\n").filter((l) => l !== "");
+    const iJudul = asli.findIndex((l) => l.startsWith(KEPALA_KELUAR));
+    const daftarKeluar = new Set<number>();
+    if (iJudul >= 0) {
+      for (let j = iJudul + 1; j < asli.length && (asli[j].startsWith(BARIS_KELUAR) || asli[j].startsWith("   …dan ")); j++) daftarKeluar.add(j);
+    }
+    const adaSambungan = (b: string) => b.split("\n")[1] === SAMBUNGAN_KELUAR_LAPIS2;
+    let mulai = 0;
+    const awalPesan = bagian.map((b, i) => {
+      let L = b.split("\n");
+      if (i > 0) { L = L.slice(1); if (L[0] === SAMBUNGAN_KELUAR_LAPIS2) L = L.slice(1); }
+      if (i < bagian.length - 1) L = L.slice(0, -2);
+      const di = mulai;
+      mulai += L.filter((l) => l !== "").length;
+      return di;
+    });
+    return {
+      bagian,
+      panjangAman: bagian.every((b) => b.length <= batas),
+      utuh: JSON.stringify(tanpaHias(bagian)) === JSON.stringify(teks.split("\n").filter((l) => l !== "")),
+      keluarTersorot: keluar.every((k) => bagian.filter((b) => tercetakSorot(b, k.pihak)).length === 1 &&
+                                         bagian.every((b) => !tercetakBiasa(b, k.pihak))),
+      masukPolos: masuk.every((k) => bagian.every((b) => !tercetakSorot(b, k.pihak))),
+      keluarDiLanjutan: keluar.filter((k) => bagian.slice(1).some((b) => tercetakSorot(b, k.pihak))).length,
+      // Pesan lanjutan yang dimulai di baris 🔴 / kalimat sisa keluar WAJIB
+      // membawa sambungan; SEMUA yang lain (baris masuk, judul blok, baris ℹ️
+      // admin/batas, …) TIDAK — tidak ada lagi "terserah".
+      sambunganBenar: bagian.every((b, i) => adaSambungan(b) === (i > 0 && daftarKeluar.has(awalPesan[i]))) &&
+                      !bagian[0].includes(SAMBUNGAN_KELUAR_LAPIS2),
+      // Alarm tanpa isi: pesan bersambungan yang tidak memuat satu pun baris
+      // 🔴 atau kalimat sisa keluar (bentuk temuan 1). Harus selalu 0.
+      sambunganPalsu: bagian.filter((b) => adaSambungan(b) &&
+        !b.split("\n").some((l) => l.startsWith(BARIS_KELUAR) || l.startsWith("   …dan "))).length,
+      // Jenis baris pertama tiap pesan lanjutan — supaya uji bisa memastikan
+      // bentuk yang dulu kena (ℹ️ sesudah daftar keluar) benar-benar terjadi.
+      awalLanjutan: bagian.slice(1).map((_, j) => {
+        const i = j + 1, a = asli[awalPesan[i]] ?? "";
+        const sesudahJudulKeluar = iJudul >= 0 && awalPesan[i] > iJudul;
+        return { ada: adaSambungan(bagian[i]),
+                 jenis: daftarKeluar.has(awalPesan[i]) ? (a.startsWith(BARIS_KELUAR) ? "🔴" : "…dan")
+                      : sesudahJudulKeluar && a.startsWith("   ℹ️") ? "ℹ️-sesudah-keluar" : "lain" };
+      }),
+      nSambungan: bagian.filter(adaSambungan).length,
+    };
+  };
+  {
+    const nama = (p: string, i: number) => `${p}${String(i).padStart(3, "0")} `.padEnd(80, "N");
+    const isi: IsiLapis2 = {
+      ...isiKosong(),
+      ...bahanNganggur(
+        { unclaimedRows: Array.from({ length: 100 }, (_, i) => r(tgl(1 + (i % 3)), "23:59:59", 123_456_789 + i, nama("K", i))), unclaimedBelumLapor: 100 },
+        { unclaimedRows: Array.from({ length: 100 }, (_, i) => r(tgl(1 + (i % 3)), "23:59:59", 987_654_321 + i, nama("D", i))), unclaimedBelumLapor: 140 },
+        LANTAI),
+      tunggakan: Array.from({ length: 12 }, (_, i) => ({ no_faktur: `SBR-1-${1000 + i}`, outlet: "BIREUEN", tgl: tgl(1), nominal: 1_000_000, umur: 3, sebab: "tidak ada di rekening" })),
+    };
+    const teks = sisipkanBarisLembar(susunLapis2(isi, { nomor: 12, sebelumNomor: 11, sebelumKapan: null }),
+                                     "📊 Laporan web L2-12: https://contoh.test/lembar/xyz");
+    const c = cekPecah(teks, isi, BATAS_PESAN_LAPIS2);
+    harap(`5e. laporan ${teks.length} huruf → ${c.bagian.length} pesan, semua ≤ ${BATAS_TEKS_PESAN_TG}`,
+          c.bagian.length >= 4 && c.panjangAman, c.bagian.map((b) => b.length).join(","));
+    harap("5e. pesan pertama: '🟢 LAPIS 2' + tautan baris 3 + peringatan baris 4 (cacah 140)",
+          c.bagian[0].startsWith("🟢 LAPIS 2") && c.bagian[0].split("\n")[2].startsWith("📊 Laporan web") &&
+          /^🚨 ADA 140 UANG KELUAR TANPA ALASAN, termasuk 40 yang belum terbaca \(Rp [\d.]+, rupiah 100 yang dirinci\) — lihat bagian bawah$/.test(c.bagian[0].split("\n")[3]),
+          c.bagian[0].split("\n")[3]);
+    harap(`5e. ${c.keluarDiLanjutan} baris keluar jatuh di pesan lanjutan — SEMUA 100 tersorot 🔴 di tepat satu pesan`,
+          c.keluarDiLanjutan > 0 && c.keluarTersorot);
+    harap("5e. baris masuk tidak tersorot di pesan mana pun", c.masukPolos);
+    harap(`5e. pesan lanjutan yang dimulai di tengah daftar keluar mengulang judulnya (${c.nSambungan}×), yang lain tidak`,
+          c.nSambungan >= 1 && c.sambunganBenar);
+    harap("5e. gabungan pesan = teks asli (sambungan bukan baris laporan)", c.utuh);
+    harap("5e. pesan lanjutan tetap diawali '↪️ LAPIS 2 lanjutan', bukan '🟢 LAPIS 2'",
+          c.bagian.slice(1).every((b) => b.startsWith(`${AWALAN_LANJUTAN_LAPIS2} `) && !b.startsWith("🟢 LAPIS 2")));
+
+    // Acak: banyak bentuk, dua batas (tandaiSelesai & kirim ulang yang
+    // mengurangi ruang untuk kepalanya), nama sembarang — termasuk nama masuk
+    // yang menyamar sebagai judul keluar (menjorok, jadi tidak boleh dikira judul).
+    let rusak = 0, adaSambungan = 0;
+    const contohRusak: string[] = [];
+    for (let c2 = 0; c2 < 200; c2++) {
+      const nK = Math.floor(Math.random() * 101), nD = Math.floor(Math.random() * 101);
+      const acakNama = (p: string, i: number) => {
+        const u = Math.random();
+        const dasar = u < 0.05 ? `${JUDUL_KELUAR_TANPA_ALASAN} PALSU ${p}${i}` : u < 0.1 ? `*_[]()~\`>#+-=|{}.! ${p}${i}` : `${p}${i} `;
+        return dasar.padEnd(dasar.length + Math.floor(Math.random() * Math.max(0, 80 - dasar.length)), "x").slice(0, 80);
+      };
+      const sisaK = Math.random() < 0.2 ? Math.floor(Math.random() * 30) : 0;
+      const sisaD = Math.random() < 0.2 ? Math.floor(Math.random() * 30) : 0;
+      const isiA: IsiLapis2 = {
+        ...isiKosong(),
+        ...bahanNganggur(
+          { unclaimedRows: Array.from({ length: nK }, (_, i) => r(tgl(1 + (i % 3)), "10:00:00", 1_000 + i * 777, acakNama("K", i))), unclaimedBelumLapor: nK + sisaK },
+          { unclaimedRows: Array.from({ length: nD }, (_, i) => r(tgl(1 + (i % 3)), "10:00:00", Math.random() < 0.05 ? 2_500 : 3_000 + i * 913, acakNama("D", i))), unclaimedBelumLapor: nD + sisaD },
+          LANTAI),
+        gagal: Math.random() < 0.3 ? ["debet: Tidak ada klaim debet yang menunggu."] : [],
+        infoRekening: Math.random() < 0.3 ? ["Masuk (kredit): arah ini milik rekening lain — tidak ada klaim yang menunggu di rekening ini"] : [],
+      };
+      const t = Math.random() < 0.5 ? susunLapis2(isiA, kepala) : sisipkanBarisLembar(susunLapis2(isiA, kepala), "📊 Laporan web L2-1: https://contoh.test/l/a");
+      const batas = Math.random() < 0.5 ? BATAS_PESAN_LAPIS2 : BATAS_PESAN_LAPIS2 - 300;
+      const h = cekPecah(t, isiA, batas);
+      const nKeluar = isiA.debetNganggur.length + Number(isiA.sisaDebetNganggur ?? 0);
+      const peringatanOk = nKeluar > 0
+        ? PERINGATAN_ATAS.test(h.bagian[0].split("\n").find((l) => l.startsWith("🚨 ADA ")) ?? "") && hitung(t, "🚨 ADA ") === 1
+        : !t.includes("🚨 ADA ") && !t.includes(JUDUL_KELUAR_TANPA_ALASAN + " — ") && h.nSambungan === 0;
+      const ok = h.panjangAman && h.utuh && h.keluarTersorot && h.masukPolos && h.sambunganBenar && h.sambunganPalsu === 0 && peringatanOk &&
+        h.bagian[0].startsWith("🟢 LAPIS 2") && (t.length <= batas ? h.bagian.length === 1 && h.bagian[0] === t : h.bagian.length >= 2);
+      if (h.nSambungan > 0) adaSambungan++;
+      if (!ok) { rusak++; if (contohRusak.length < 3) contohRusak.push(`nK=${nK} nD=${nD} batas=${batas} ${JSON.stringify({ ...h, bagian: h.bagian.length, awalLanjutan: undefined })}`); }
+    }
+    harap(`5e. 200 laporan acak (${adaSambungan} dengan sambungan): panjang ≤ batas, utuh, keluar 🔴, masuk polos, peringatan tepat`,
+          rusak === 0 && adaSambungan > 0, `${rusak} rusak; ${contohRusak.join(" || ")}`);
+
+    // Sapuan TETAP (bukan acak) di batas sungguhan 4000, bentuk temuan
+    // tinjauan 1: masuk 0-60 × keluar 1-80, dengan potongan admin + batas
+    // tanggal, sisa keluar 0 dan 7. Dulu sebagian pesan lanjutan yang dimulai
+    // di baris "   ℹ️ N potongan admin bank …" / "   ℹ️ diperiksa sampai …"
+    // ikut mendapat judul 🚨 — alarm tanpa satu pun baris 🔴. Sapuan ini
+    // WAJIB memuat bentuk itu (dan bentuk "…dan" sisa keluar), bukan sekadar lolos.
+    let rusakS = 0, nBentuk = 0;
+    const jenisS: Record<string, { n: number; ada: number }> = {};
+    const contohS: string[] = [];
+    for (const sisaD of [0, 7]) for (let nK = 0; nK <= 60; nK++) for (let nD = 1; nD <= 80; nD++) {
+      nBentuk++;
+      const isiS: IsiLapis2 = {
+        ...isiKosong(),
+        ...bahanNganggur(
+          { unclaimedRows: Array.from({ length: nK }, (_, i) => r(tgl(1 + (i % 2)), "10:00:00", 150_000 + i * 1_000, `PENGIRIM ${i} `.padEnd(30, "A"))), unclaimedBelumLapor: nK },
+          { unclaimedRows: Array.from({ length: nD }, (_, i) => r(tgl(1 + (i % 2)), "11:00:00", 250_000 + i * 1_000, `PENERIMA ${i} `.padEnd(30, "B"))), unclaimedBelumLapor: nD + sisaD },
+          LANTAI),
+        nBiayaAdmin: 3, rpBiayaAdmin: 13_500, nganggurBatas: tgl(2),
+      };
+      const h = cekPecah(susunLapis2(isiS, kepala), isiS, BATAS_PESAN_LAPIS2);
+      for (const a of h.awalLanjutan) {
+        const j = (jenisS[a.jenis] ??= { n: 0, ada: 0 });
+        j.n++; if (a.ada) j.ada++;
+      }
+      if (!(h.panjangAman && h.utuh && h.keluarTersorot && h.sambunganBenar && h.sambunganPalsu === 0)) {
+        rusakS++; if (contohS.length < 2) contohS.push(`masuk ${nK} + keluar ${nD} (sisa ${sisaD}): ${JSON.stringify(h.awalLanjutan)}`);
+      }
+    }
+    const js = (k: string) => jenisS[k] ?? { n: 0, ada: 0 };
+    harap(`5e. sapuan ${nBentuk} bentuk di batas 4000: tidak ada 🚨 sambungan tanpa isi keluar ` +
+          `(${js("ℹ️-sesudah-keluar").n} pesan lanjutan dimulai di baris ℹ️ sesudah daftar keluar → 0 bersambungan)`,
+          rusakS === 0 && js("ℹ️-sesudah-keluar").n > 0 && js("ℹ️-sesudah-keluar").ada === 0,
+          `${rusakS} rusak; ${JSON.stringify(jenisS)}; ${contohS.join(" || ")}`);
+    harap(`5e. sapuan: pesan lanjutan yang dimulai di baris 🔴 (${js("🔴").n}) atau kalimat sisa keluar (${js("…dan").n}) SEMUA bersambungan, ` +
+          `yang lain (${js("lain").n}) tidak`,
+          js("🔴").n > 0 && js("🔴").ada === js("🔴").n && js("…dan").n > 0 && js("…dan").ada === js("…dan").n && js("lain").ada === 0,
+          JSON.stringify(jenisS));
+  }
+
+  // ── 5f. pembanding versi SEBELUM sorotan: dilepas sorotannya = SAMA PERSIS ──
+  const sebelumL = "lib/laporan/__sebelum_lapis2_sorot.ts";
+  try {
+    writeFileSync(sebelumL, execSync(`git show ${SEBELUM}:lib/laporan/lapis2.ts`, { encoding: "utf8", maxBuffer: 8 << 20 }));
+    const L1 = await import("../" + sebelumL);
+    let beda = 0, bedaTanpaKeluar = 0, nKeluar = 0;
+    const contoh: string[] = [];
+    for (let c = 0; c < 400; c++) {
+      const nK = Math.floor(Math.random() * 15), nD = Math.random() < 0.35 ? 0 : Math.floor(Math.random() * 15);
+      const x = isiKosong();
+      x.kreditNganggur = Array.from({ length: nK }, (_, i) => r(tgl(1 + (i % 3)), "09:15:00", 10_000 * (i + 1), `K ${i}`));
+      x.rpKreditNganggur = x.kreditNganggur.reduce((s, b) => s + b.nominal, 0);
+      x.debetNganggur = Array.from({ length: nD }, (_, i) => r(tgl(1 + (i % 3)), "09:15:00", 20_000 * (i + 1), `D ${i}`));
+      x.rpDebetNganggur = x.debetNganggur.reduce((s, b) => s + b.nominal, 0);
+      if (Math.random() < 0.3) { x.sisaKreditNganggur = Math.floor(Math.random() * 20); x.mulaiSisaKreditNganggur = Math.random() < 0.5 ? tgl(3) : null; }
+      if (Math.random() < 0.3) { x.sisaDebetNganggur = Math.floor(Math.random() * 20); x.mulaiSisaDebetNganggur = Math.random() < 0.5 ? tgl(3) : null; }
+      if (Math.random() < 0.4) { x.nBiayaAdmin = 1 + Math.floor(Math.random() * 5); x.rpBiayaAdmin = 2_500 * x.nBiayaAdmin; }
+      if (Math.random() < 0.3) x.nganggurBatas = tgl(2);
+      if (Math.random() < 0.2) x.nganggurDiperiksa = false;
+      if (Math.random() < 0.3) x.gagal = ["kredit: Tidak ada klaim kredit yang menunggu."];
+      if (Math.random() < 0.3) x.infoRekening = ["Keluar (debet): 3 klaim milik rekening lain — dinilai di berkas rekening itu"];
+      const lama = L1.susunLapis2Lengkap(x, kepala), baru = susunLapis2Lengkap(x, kepala);
+      const adaKeluar = x.debetNganggur.length + Number(x.sisaDebetNganggur ?? 0) > 0;
+      if (adaKeluar) nKeluar++;
+      if (lepasSorotan(baru.teks) !== lama.teks || JSON.stringify(baru.ringkas) !== JSON.stringify(lama.ringkas)) {
+        beda++; if (contoh.length < 2) contoh.push(`nK=${nK} nD=${nD}`);
+      }
+      if (!adaKeluar && baru.teks !== lama.teks) bedaTanpaKeluar++;
+    }
+    harap(`5f. 400 bentuk acak (${nKeluar} ber-keluar): sorotan dilepas = teks ${SEBELUM} SAMA PERSIS, ringkas web sama`, beda === 0, `${beda} beda ${contoh.join(" | ")}`);
+    harap(`5f. bentuk tanpa uang keluar: teks SAMA PERSIS dengan ${SEBELUM} apa adanya`, bedaTanpaKeluar === 0, `${bedaTanpaKeluar}`);
+  } catch (e) {
+    harap("5f. lapis2 sebelum sorotan dapat dimuat dari git " + SEBELUM, false, String(e));
+  } finally {
+    if (existsSync(sebelumL)) unlinkSync(sebelumL);
+  }
+
+  // ── 5g. sorotan tidak bergantung parse_mode: kirimPesan tetap teks polos ──
+  harap("5g. lib/telegram/bot.ts tidak memasang parse_mode (nama pihak bebas karakter tidak bisa menolak pesan)",
+        !/parse_mode\s*:/.test(readFileSync("lib/telegram/bot.ts", "utf8")));
 }
 
 console.log(`\n${lulus} lulus, ${gagal} gagal`);

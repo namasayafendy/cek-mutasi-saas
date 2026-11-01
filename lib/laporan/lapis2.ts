@@ -353,6 +353,15 @@ export interface SisiRingkas {
   mati: { n: number; rp: number };
 }
 
+/** Judul blok uang KELUAR tanpa pemilik (keputusan Owner 1 Nov 2026: disorot).
+ *  Dipakai juga pecahPesanLapis2 untuk mengenali pesan lanjutan yang dimulai
+ *  di tengah daftarnya — JANGAN diubah tanpa ikut mengubah uji. */
+export const JUDUL_KELUAR_TANPA_ALASAN = "🚨 UANG KELUAR TANPA ALASAN";
+/** Penanda SETIAP baris uang keluar tanpa pemilik (masuk tetap "•"). */
+export const PENANDA_KELUAR_TANPA_ALASAN = "🔴";
+/** Baris ke-2 pesan lanjutan yang dimulai di tengah daftar uang keluar. */
+export const SAMBUNGAN_KELUAR_LAPIS2 = `${JUDUL_KELUAR_TANPA_ALASAN} — lanjutan dari pesan sebelumnya`;
+
 /** Teks laporan saja — dipertahankan untuk skrip uji & kirim ulang. */
 export function susunLapis2(isi: IsiLapis2, kepala: KepalaLapis2): string {
   return susunLapis2Lengkap(isi, kepala).teks;
@@ -396,6 +405,44 @@ export function susunLapis2Lengkap(isi: IsiLapis2, kepala: KepalaLapis2): { teks
 
   L.push(`🟢 LAPIS 2 · cek mutasi ${periode}` + (kepala.nomor ? ` · #${kepala.nomor}` : ""));
   L.push(`resi ↔ mutasi rekening · ${isi.bankLabel}`);
+
+  // ── SOROTAN: UANG KELUAR TANPA ALASAN (keputusan Owner 1 November 2026) ──
+  //
+  // "SEMUA UANG KELUAR TANPA ALASAN di cek transfer saat cek LAPIS 2 baik rek
+  // 1994 maupun 1919, telegramnya DI HIGHLIGHT. Uang masuk tidak perlu."
+  //
+  // Satu baris di sini, tepat di bawah kepala, supaya terbaca di pratinjau
+  // notifikasi tanpa membuka pesannya; rinciannya di blok UANG DI MUTASI TANPA
+  // PEMILIK di bawah. Cacah & rupiahnya variabel yang SAMA dengan blok itu
+  // (rupiah hanya dari yang dirinci — dikatakan, bukan disamarkan sebagai
+  // total). Potongan admin bank tidak ikut: pemiliknya sudah jelas.
+  //
+  // Sorotannya emoji + HURUF BESAR, BUKAN parse_mode: kirimPesan sengaja teks
+  // polos (lib/telegram/bot.ts), dan nama pihak dari mutasi bisa berisi
+  // karakter apa pun — satu "_" atau "*" di MarkdownV2 membuat Telegram
+  // menolak SELURUH laporan.
+  //
+  // BUKAN butir "🚨 JANGAN PAKAI LAPORAN INI MENUTUP HARI" (awas di bawah):
+  // laporannya tetap sah, hanya ada uang yang harus ditanyakan. Baris pertama
+  // tetap "🟢 LAPIS 2 …" (jangkar LIKE) — tautan laporan web disisipkan di
+  // baris ke-3, jadi baris ini turun satu.
+  //
+  // Cacahnya = yang dirinci + SISA. Sisa adalah baris yang belum terbaca
+  // (melewati BATAS_RINCI_NGANGGUR) — isinya belum diketahui, dan cacah utuh
+  // pembaca (lib/pipeline/nganggur.ts, belumLapor) menghitung setiap debet
+  // > 0 yang belum distempel, termasuk potongan admin bank yang belum
+  // terbaca. Jadi kalau ada sisa, kalimatnya MENYEBUTNYA ("termasuk N yang
+  // belum terbaca") — angka 130 tidak boleh terbaca sebagai 130 uang keluar
+  // yang sudah dipastikan tanpa alasan (temuan tinjauan 1 Nov 2026).
+  const sisaD = Math.max(0, Number(isi.sisaDebetNganggur ?? 0));
+  const nD = isi.debetNganggur.length + sisaD;
+  if (nD > 0) {
+    L.push(`🚨 ADA ${nD} UANG KELUAR TANPA ALASAN` +
+           (sisaD > 0
+             ? `, termasuk ${sisaD} yang belum terbaca (${rp(isi.rpDebetNganggur)}, rupiah ${isi.debetNganggur.length} yang dirinci)`
+             : ` (${rp(isi.rpDebetNganggur)})`) +
+           ` — lihat bagian bawah`);
+  }
   for (const s of isi.infoRekening ?? []) L.push(`ℹ️ ${s}`);
 
   // ── PERINGATAN, HANYA KALAU ADA ──
@@ -885,15 +932,21 @@ export function susunLapis2Lengkap(isi: IsiLapis2, kepala: KepalaLapis2): { teks
   // tidak akan pernah terbaca lagi — jadi kalimatnya menyebut dari tanggal
   // berapa PDF berikutnya harus mulai. Ia juga tidak menyebut "distempel":
   // pada pass batal, baris yang tercetak pun tidak distempel.
+  //
+  // UANG KELUAR DISOROT (keputusan Owner 1 Nov 2026, lihat sorotan di
+  // kepala): judulnya sendiri "🚨 UANG KELUAR TANPA ALASAN — N · Rp X" dan
+  // SETIAP barisnya diawali 🔴 — penanda itu menempel di barisnya, jadi ikut
+  // ke pesan lanjutan kalau laporan dipecah (pecahPesanLapis2 juga mengulang
+  // judulnya di sana). Uang MASUK tetap "•" seperti dulu; potongan admin bank
+  // tetap baris ℹ️ biasa. Cacah, rupiah, kalimat sisa, dan stempel TIDAK
+  // berubah — hanya cara mencetaknya.
   const sisaK = Math.max(0, Number(isi.sisaKreditNganggur ?? 0));
-  const sisaD = Math.max(0, Number(isi.sisaDebetNganggur ?? 0));
   const nK = isi.kreditNganggur.length + sisaK;
-  const nD = isi.debetNganggur.length + sisaD;
-  const cetakNganggur = (judul: string, n: number, rpRinci: number,
+  const cetakNganggur = (kepalaBaris: string, rpRinci: number, penanda: string,
                          baris: IsiLapis2["kreditNganggur"], sisa: number, mulaiSisa: string | null | undefined) => {
     // Rupiah hanya dari yang dirinci — dikatakan, bukan disamarkan sebagai total.
-    L.push(`   ${judul} ${n} · ${rp(rpRinci)}` + (sisa > 0 ? ` (rupiah ${baris.length} yang dirinci)` : ""));
-    baris.forEach((x) => L.push(`   • ${tgl(x.tgl)} ${x.jam} · ${rp(x.nominal)} · ${x.pihak}`));
+    L.push(`${kepalaBaris} · ${rp(rpRinci)}` + (sisa > 0 ? ` (rupiah ${baris.length} yang dirinci)` : ""));
+    baris.forEach((x) => L.push(`   ${penanda} ${tgl(x.tgl)} ${x.jam} · ${rp(x.nominal)} · ${x.pihak}`));
     if (sisa > 0) {
       // Penyusun lama (tanpa mulaiSisa…) jatuh ke tanggal terakhir yang
       // dirinci — bisa lebih awal dari batas sebenarnya, tidak pernah lebih
@@ -910,8 +963,14 @@ export function susunLapis2Lengkap(isi: IsiLapis2, kepala: KepalaLapis2): { teks
   if (nK + nD === 0) {
     L.push(`   ✅ tidak ada.`);
   } else {
-    if (nK > 0) cetakNganggur("masuk ", nK, isi.rpKreditNganggur, isi.kreditNganggur, sisaK, isi.mulaiSisaKreditNganggur);
-    if (nD > 0) cetakNganggur("keluar", nD, isi.rpDebetNganggur, isi.debetNganggur, sisaD, isi.mulaiSisaDebetNganggur);
+    if (nK > 0) cetakNganggur(`   masuk  ${nK}`, isi.rpKreditNganggur, "•", isi.kreditNganggur, sisaK, isi.mulaiSisaKreditNganggur);
+    if (nD > 0) {
+      // Baris kosong memisahkannya dari daftar masuk (dan memberi
+      // pecahPesanLapis2 tempat memecah tepat di depan judul ini).
+      if (nK > 0) L.push("");
+      cetakNganggur(`${JUDUL_KELUAR_TANPA_ALASAN} — ${nD}`, isi.rpDebetNganggur, PENANDA_KELUAR_TANPA_ALASAN,
+                    isi.debetNganggur, sisaD, isi.mulaiSisaDebetNganggur);
+    }
   }
   // Disebut DI LUAR cacah di atas, bukan dijumlahkan ke dalamnya: ini bukan
   // uang tanpa pemilik, ini potongan bank yang pemiliknya sudah jelas.
@@ -976,8 +1035,10 @@ export function pecahPesanLapis2(teks: string, batas: number = BATAS_PESAN_LAPIS
   const ekor = (semula[0] ?? "").replace(/^🟢 LAPIS 2\s*/, "").trim();
   const judul = (k: number, n: number) => `${AWALAN_LANJUTAN_LAPIS2} ${k}/${n}` + (ekor ? ` ${ekor}` : "");
   const penutup = (k: number, n: number) => `↪️ bersambung ke pesan ${k + 1}/${n}`;
-  // Ruang judul + baris kosong + penutup, dengan nomor terpanjang yang mungkin.
-  const muat = batas - (judul(999, 999).length + penutup(999, 999).length + 4);
+  // Ruang judul + baris kosong + penutup, dengan nomor terpanjang yang mungkin
+  // — ditambah baris SAMBUNGAN_KELUAR_LAPIS2 (lihat di bawah), selalu
+  // disisihkan supaya pesan yang mendapatkannya tetap ≤ batas.
+  const muat = batas - (judul(999, 999).length + SAMBUNGAN_KELUAR_LAPIS2.length + penutup(999, 999).length + 5);
   // Jaring: baris tunggal yang lebih panjang dari ruang dipecah per huruf
   // (per titik kode, supaya emoji tidak terbelah). Laporan normal tidak punya.
   const baris: string[] = [];
@@ -1009,9 +1070,29 @@ export function pecahPesanLapis2(teks: string, batas: number = BATAS_PESAN_LAPIS
   }
   if (kini.length) bagian.push(kini);
   const n = bagian.length;
+  // Pesan lanjutan yang dimulai DI TENGAH DAFTAR uang keluar tanpa alasan
+  // (baris pertamanya baris 🔴 atau kalimat sisa "…dan N baris lagi", dan
+  // judul blok terakhir sebelumnya adalah JUDUL_KELUAR_TANPA_ALASAN) mengulang
+  // judul itu di baris ke-2: baris 🔴 sudah tersorot sendiri, tetapi tidak
+  // boleh terbaca tanpa keterangan apa daftarnya (keputusan Owner 1 Nov
+  // 2026). Judul blok = baris tidak kosong yang tidak diawali spasi; seluruh
+  // isi blok laporan ini menjorok.
+  //
+  // BUKAN sembarang baris menjorok (temuan tinjauan 1 Nov 2026): pesan yang
+  // dimulai di baris "   ℹ️ N potongan admin bank …" / "   ℹ️ diperiksa
+  // sampai …" — ekor blok yang sama — dulu ikut mendapat judul 🚨, jadi
+  // pesan terakhirnya berbunyi alarm tanpa satu pun baris 🔴. Potongan admin
+  // tetap baris ℹ️ biasa, tidak disorot.
+  const awalDaftarKeluar = (b: string) => b.startsWith(`   ${PENANDA_KELUAR_TANPA_ALASAN} `) || b.startsWith("   …dan ");
+  let blokTerakhir = "";
+  const diTengahKeluar = bagian.map((xs) => {
+    const ya = xs.length > 0 && awalDaftarKeluar(xs[0]) && blokTerakhir.startsWith(JUDUL_KELUAR_TANPA_ALASAN);
+    for (const b of xs) if (b !== "" && !b.startsWith(" ")) blokTerakhir = b;
+    return ya;
+  });
   return bagian.map((xs, i) => {
     const k = i + 1;
-    const isi = k === 1 ? xs : [judul(k, n), ...xs];
+    const isi = k === 1 ? xs : [judul(k, n), ...(diTengahKeluar[i] ? [SAMBUNGAN_KELUAR_LAPIS2] : []), ...xs];
     return (k < n ? [...isi, "", penutup(k, n)] : isi).join("\n");
   });
 }
