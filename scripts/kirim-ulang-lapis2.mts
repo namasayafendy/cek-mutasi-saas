@@ -19,7 +19,8 @@ for (const b of readFileSync(".env.local", "utf8").split(/\r?\n/)) {
 }
 
 import { createClient } from "@supabase/supabase-js";
-import { susunLapis2Lengkap, type IsiLapis2 } from "../lib/laporan/lapis2.ts";
+import { susunLapis2Lengkap, pecahPesanLapis2, BATAS_PESAN_LAPIS2, AWALAN_LANJUTAN_LAPIS2, type IsiLapis2 } from "../lib/laporan/lapis2.ts";
+import { bahanNganggur } from "../lib/laporan/nganggur.ts";
 import { hitungCakupan, type BarisCakupan } from "../lib/coverage/celah.ts";
 import { bacaTercakupAkun, paramTercakup } from "../lib/coverage/tercakup.ts";
 import { buatLembarLapis2, sisipkanBarisLembar } from "../lib/laporan/lembarWeb.ts";
@@ -82,8 +83,6 @@ for (const p of pass) for (const x of (p.perTanggal ?? [])) {
 const perTanggal = [...petaTgl.values()].sort((a, b) => (a.tgl < b.tgl ? -1 : 1));
 const tidakKetemu = pass.flatMap((p) => p.tidakKetemu ?? []).filter((x: any) => x.tgl >= LANTAI)
   .sort((a: any, b: any) => (a.tgl < b.tgl ? -1 : a.tgl > b.tgl ? 1 : 0));
-const rowsK = (kredit?.unclaimedRows ?? []).filter((x: any) => x.tgl >= LANTAI);
-const rowsD = (debet?.unclaimedRows ?? []).filter((x: any) => x.tgl >= LANTAI);
 
 // ── Sandingan + tunggakan dari Aceh Gadai ──
 const { data: cfg } = await db.from("account_settings")
@@ -180,12 +179,8 @@ const isi: IsiLapis2 = {
   tidakKetemu,
   ditahanLuarPeriode: pass.reduce((s, p) => s + Number(p.ditahanDiLuarPeriode ?? 0), 0),
   ditahanKonflik: pass.reduce((s, p) => s + Number(p.ditahanKonflik ?? 0), 0),
-  kreditNganggur: rowsK,
-  sisaKreditNganggur: Math.max(0, Number(kredit?.unclaimedBelumLapor ?? rowsK.length) - rowsK.length),
-  rpKreditNganggur: rowsK.reduce((s: number, x: any) => s + Number(x.nominal || 0), 0),
-  debetNganggur: rowsD,
-  sisaDebetNganggur: Math.max(0, Number(debet?.unclaimedBelumLapor ?? rowsD.length) - rowsD.length),
-  rpDebetNganggur: rowsD.reduce((s: number, x: any) => s + Number(x.nominal || 0), 0),
+  // Penyusun yang SAMA dengan tandaiSelesai — termasuk potongan admin bank.
+  ...bahanNganggur(kredit, debet, LANTAI),
   nganggurBatas: [kredit?.unclaimedBatas, debet?.unclaimedBatas]
     .filter((x): x is string => typeof x === "string" && !!x).sort()[0] ?? null,
   nganggurDiperiksa: pass.length === 0 ? false : pass.every((p) => p.unclaimedDiperiksa !== false),
@@ -204,8 +199,21 @@ const { data: asli } = await db.from("mutasi_laporan_outbox")
   .like("teks", "🟢 LAPIS 2%")
   .order("id", { ascending: false }).limit(1).maybeSingle();
 
+// Laporan asli yang dipecah (1 Nov 2026): pesan lanjutannya ikut dibaca dan
+// digabung, supaya baris di pesan 2/3, 3/3 tidak terbaca "BARU".
+const bukanBaku = (l: string) => l.startsWith(AWALAN_LANJUTAN_LAPIS2) || l.startsWith("↪️ bersambung ke pesan");
+let teksAsli = asli ? String((asli as any).teks) : "";
 if (asli) {
-  const a = String((asli as any).teks).split("\n");
+  const { data: lanjut } = await db.from("mutasi_laporan_outbox")
+    .select("id, teks").eq("job_id", jobId)
+    .like("teks", `${AWALAN_LANJUTAN_LAPIS2}%`)
+    .gt("id", (asli as any).id)
+    .order("id", { ascending: true });
+  for (const x of (lanjut ?? []) as any[]) teksAsli += "\n" + String(x.teks);
+}
+
+if (asli) {
+  const a = teksAsli.split("\n").filter((l) => !bukanBaku(l));
   const b = teksBaru.split("\n");
   const setA = new Set(a), setB = new Set(b);
   const hilang = a.filter((l) => !setB.has(l) && l.trim() && !barisTautan(l));
@@ -259,16 +267,20 @@ if (akunGadaiEnv && akunGadaiEnv !== String((job as any).account_id)) {
   });
   teksLapis2 = sisipkanBarisLembar(teksBaru, barisWeb);
 }
-const teksKirim = kepala.join("\n") + teksLapis2;
-console.log(teksKirim);
-const { data: baris, error } = await db.from("mutasi_laporan_outbox").insert({
+// Dipecah seperti tandaiSelesai — kepala kiriman ulang ikut di pesan pertama,
+// jadi ruangnya dikurangkan dari batas setiap bagian.
+const kepalaTeks = kepala.join("\n");
+const bagian = pecahPesanLapis2(teksLapis2, BATAS_PESAN_LAPIS2 - kepalaTeks.length);
+bagian[0] = kepalaTeks + bagian[0];
+bagian.forEach((b, i) => console.log((i ? "\n" : "") + b));
+const { data: baris, error } = await db.from("mutasi_laporan_outbox").insert(bagian.map((teks) => ({
   account_id: (job as any).account_id,
   chat_id: tujuan,
-  teks: teksKirim,
+  teks,
   balas_ke: null,
   job_id: null,          // bukan laporan job ini — supaya tidak dikira laporan kedua
   status: "PENDING",
-}).select("id").single();
+}))).select("id");
 if (error) { console.error("gagal mengantre:", error.message); process.exit(1); }
-console.log(`\n✅ diantre sebagai outbox #${(baris as any).id} -> chat ${tujuan}`);
+console.log(`\n✅ diantre sebagai outbox #${((baris ?? []) as any[]).map((b) => b.id).join(", #")} -> chat ${tujuan}`);
 console.log("   akan dikirim penguras antrean (cron tiap 30 menit, 08.00-20.00 WIB).");

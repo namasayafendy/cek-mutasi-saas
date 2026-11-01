@@ -93,6 +93,9 @@ export function tombolBaris(baris: TombolInline[][]) {
 }
 
 // ── Kirim pesan ───────────────────────────────────────────────────────────
+/** Teks lebih panjang dari ini DIPOTONG kirimPesan (Telegram menolak > 4096). */
+export const BATAS_TEKS_PESAN_TG = 4000;
+
 export interface OpsiKirim {
   /** Balas ke pesan tertentu, supaya satu kiriman = satu utas. */
   balasKe?: number;
@@ -116,8 +119,9 @@ export async function kirimPesan(
 ): Promise<HasilTg<{ message_id: number }>> {
   const payload: Record<string, unknown> = {
     chat_id: chatId,
-    // Telegram menolak pesan > 4096 karakter.
-    text: teks.length > 4000 ? teks.slice(0, 3990) + "\n… (dipotong)" : teks,
+    // Telegram menolak pesan > 4096 karakter. Laporan yang tidak boleh
+    // terpotong dipecah lebih dulu oleh pemanggilnya (pecahPesanLapis2).
+    text: teks.length > BATAS_TEKS_PESAN_TG ? teks.slice(0, 3990) + "\n… (dipotong)" : teks,
     disable_notification: opsi.tanpaNotifikasi ?? false,
     link_preview_options: { is_disabled: true },
   };

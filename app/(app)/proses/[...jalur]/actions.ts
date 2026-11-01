@@ -19,12 +19,13 @@
 // ============================================================
 
 import { tandaiTolakLintasHari } from "@/lib/laporan/tolakLintasHari";
-import { adalahBiayaAdmin } from "@/lib/bank/biayaAdmin";
+import { bahanNganggur, idStempelNganggur, laporanTercatat } from "@/lib/laporan/nganggur";
+import { stempelBarisNganggur } from "@/lib/pipeline/nganggur";
 import { getAccountContext } from "@/lib/supabase/context";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { antreLaporan } from "@/lib/telegram/outbox";
+import { antreLaporan, antreLaporanBerurutan } from "@/lib/telegram/outbox";
 import { hitungCakupan, saranExport, tglID, type BarisCakupan, type HasilCakupan } from "@/lib/coverage/celah";
-import { susunLapis2Lengkap, sebabAlarmRef, type IsiLapis2, type RingkasLapis2 } from "@/lib/laporan/lapis2";
+import { susunLapis2Lengkap, pecahPesanLapis2, sebabAlarmRef, type IsiLapis2, type RingkasLapis2 } from "@/lib/laporan/lapis2";
 import { after } from "next/server";
 import { picuPeriksaAi, bacaKonfigGadai } from "@/lib/periksaAi/pemicu";
 import { bacaTercakupAkun, paramTercakup, type Tercakup } from "@/lib/coverage/tercakup";
@@ -334,6 +335,9 @@ export interface RingkasPass {
   tidakKetemu?: { no_faktur: string; outlet: string; tgl: string; nominal: number; sebab: string }[];
   /** Baris mutasi tanpa pemilik — kredit maupun DEBET. */
   unclaimedRows?: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
+  /** id baris di `unclaimedRows` yang BOLEH distempel — distempel tandaiSelesai
+   *  sesudah laporannya tercatat. null = pass batal: tidak distempel. */
+  idNganggur?: string[] | null;
   /** Tanggal terakhir yang benar-benar diperiksa untuk "tanpa pemilik".
    *  Terisi = ada ekor tanggal yang sengaja dilewati (klaimnya belum lahir). */
   unclaimedBatas?: string | null;
@@ -459,20 +463,13 @@ async function susunLaporanLapis2(
     .filter((x) => x.tgl >= LANTAI_LAPIS2)
     .sort((a, b) => (a.tgl < b.tgl ? -1 : a.tgl > b.tgl ? 1 : 0));
 
-  const rowsK = (kredit?.unclaimedRows ?? []).filter((x) => x.tgl >= LANTAI_LAPIS2);
-  const rowsDSemua = (debet?.unclaimedRows ?? []).filter((x) => x.tgl >= LANTAI_LAPIS2);
-
-  // ── POTONGAN ADMIN BANK DIPISAH, BUKAN DIBUANG ──
+  // ── UANG DI MUTASI TANPA PEMILIK ──
   //
-  // Rp 2.500 dan Rp 6.500 adalah biaya yang dibebankan bank, bukan uang
-  // perusahaan yang bergerak ke siapa pun. Tiap hari ia mendarat di blok
-  // "UANG DI MUTASI TANPA PEMILIK" dan menyita tempat baris yang benar-benar
-  // perlu dilihat. Keputusan pemilik 3 September 2026.
-  //
-  // Cacah & jumlahnya tetap dibawa ke laporan sebagai SATU baris. Kalau bank
-  // menaikkan tarifnya, baris itulah yang akan memperlihatkannya.
-  const rowsDAdmin = rowsDSemua.filter((x) => adalahBiayaAdmin(x.nominal));
-  const rowsD = rowsDSemua.filter((x) => !adalahBiayaAdmin(x.nominal));
+  // SEMUA baris yang dibaca pass dirinci (dan hanya itu yang nanti distempel
+  // tandaiSelesai) — tidak lagi dipotong di baris ke-8 (1 Nov 2026). Potongan admin bank Rp 2.500 / Rp 6.500 tetap
+  // dipisah jadi SATU baris (keputusan pemilik 3 September 2026). Disusun di
+  // lib/laporan/nganggur.ts — penyusun yang SAMA dipakai skrip kirim ulang.
+  const nganggur = bahanNganggur(kredit, debet, LANTAI_LAPIS2);
 
   // Tunggakan dari sisi gadai.
   let tunggakan: IsiLapis2["tunggakan"] = [];
@@ -732,22 +729,10 @@ async function susunLaporanLapis2(
     tidakKetemu,
     ditahanLuarPeriode: pass.reduce((s, p) => s + Number(p.ditahanDiLuarPeriode ?? 0), 0),
     ditahanKonflik: pass.reduce((s, p) => s + Number(p.ditahanKonflik ?? 0), 0),
-    kreditNganggur: rowsK,
-    // Cacah UTUH yang belum pernah dilaporkan. Daftarnya dipotong 25 di
-    // pipeline; menyebut cuma yang tampil berbunyi persis seperti "cuma segini".
-    sisaKreditNganggur: Math.max(0, Number(kredit?.unclaimedBelumLapor ?? rowsK.length) - rowsK.length),
-    rpKreditNganggur: rowsK.reduce((s, x) => s + Number(x.nominal || 0), 0),
-    debetNganggur: rowsD,
-    // Potongan admin ikut dikurangkan dari "sisa yang belum dilaporkan".
-    // Tanpa ini, baris yang sengaja tidak dirinci akan muncul lagi sebagai
-    // "…dan N lagi" — persis angka yang baru saja kita sembunyikan.
-    sisaDebetNganggur: Math.max(
-      0,
-      Number(debet?.unclaimedBelumLapor ?? rowsDSemua.length) - rowsD.length - rowsDAdmin.length,
-    ),
-    rpDebetNganggur: rowsD.reduce((s, x) => s + Number(x.nominal || 0), 0),
-    nBiayaAdmin: rowsDAdmin.length,
-    rpBiayaAdmin: rowsDAdmin.reduce((s, x) => s + Number(x.nominal || 0), 0),
+    // Cacah UTUH yang belum pernah dilaporkan ikut sebagai "sisa" — menyebut
+    // cuma yang tampil berbunyi persis seperti "cuma segini". Potongan admin
+    // bukan sisa: ia sudah terbaca, hanya tidak dirinci.
+    ...nganggur,
     // Ekor tanggal yang SENGAJA tidak diuji, dan apakah pemeriksaannya jalan.
     // Keduanya harus sampai ke laporan: "(0) karena bersih" dan "(0) karena
     // belum diperiksa" tidak boleh berbunyi sama.
@@ -1020,6 +1005,9 @@ export async function tandaiSelesai(
 
   if (!ditutup || ditutup.length === 0) {
     // Sudah ditutup pihak lain. Laporannya sudah (atau sedang) dikirim di sana.
+    // TIDAK menstempel: laporan INI tidak dikirim, jadi baris yang dibacanya
+    // belum diberitahukan lewat sini. Penutup yang menang menstempel id-nya
+    // sendiri, sesudah laporannya sendiri tercatat.
     return { ok: true, teks };
   }
 
@@ -1031,8 +1019,8 @@ export async function tandaiSelesai(
   //
   // Barisnya ke-3, tepat di bawah dua baris kepala: baris pertama WAJIB tetap
   // diawali "🟢 LAPIS 2" (jangkar LIKE untuk patokan "sejak" di atas dan cron
-  // periksa-ai), dan pesan yang terpotong 4000 karakter tetap membawa
-  // tautannya.
+  // periksa-ai), dan laporan yang dipecah jadi beberapa pesan tetap membawa
+  // tautannya di pesan pertama.
   //
   // Batas tunggunya dipendekkan kalau sebagian besar waktu sudah habis untuk
   // sandingan & tunggakan (masing-masing sampai 25 dtk): job SUDAH ditutup di
@@ -1067,13 +1055,46 @@ export async function tandaiSelesai(
   if (chatLaporan) {
     // Lewat antrean, bukan kirim langsung: laporan hasil rekonsiliasi terlalu
     // mahal untuk hilang gara-gara satu panggilan jaringan yang gagal.
-    await antreLaporan({
+    //
+    // DIPECAH, bukan dipotong (1 Nov 2026): kirimPesan memotong diam-diam di
+    // atas 4000 karakter, dan sejak semua baris tanpa pemilik dirinci, yang
+    // terpotong di ekor bisa baris yang sudah distempel. Laporan yang muat
+    // tetap satu pesan, persis seperti dulu.
+    const bagian = pecahPesanLapis2(teks);
+    const antre = await antreLaporanBerurutan({
       accountId: r.ctx.account.id,
       chatId: chatLaporan,
-      teks,
+      teks: bagian,
       balasKe,
       jobId,
     });
+
+    // ── STEMPEL "SUDAH DIBERITAHUKAN" — DI SINI, BUKAN DI PERAMBAN ──
+    //
+    // Janji lib/laporan/nganggur.ts: yang distempel = yang dirinci. Dulu
+    // peramban menstempel di akhir tiap pass, jauh sebelum laporan ini
+    // disusun. Pass kredit yang sudah menstempel lalu pass debet yang
+    // melempar (tandaiGagal tidak merinci apa pun), layar yang ditutup di
+    // tengah pass debet, atau tab kembar yang kalah CAS di atas — ketiganya
+    // meninggalkan baris berstempel yang tidak pernah tercetak di mana pun,
+    // dan stempel itu membuatnya tidak akan pernah dibaca lagi.
+    //
+    // Sekarang: hanya SESUDAH seluruh bagian laporan tercatat di antrean
+    // (atau terkirim langsung), dan hanya id dua pass yang dirinci di atas
+    // (idStempelNganggur memakai masukan yang sama dengan bahanNganggur).
+    // Fungsi yang mati di antara antre dan stempel = baris disebut dua kali,
+    // arah yang aman. Tanpa chat tujuan tidak ada yang distempel — job selalu
+    // lahir dari webhook Telegram, jadi cabang itu hanya jaring.
+    const kreditP = pass.find((p) => p.jenis === "kredit");
+    const debetP = pass.find((p) => p.jenis === "debet");
+    const idStempel = idStempelNganggur(kreditP, debetP);
+    if (idStempel.length > 0) {
+      if (laporanTercatat(antre, bagian.length)) {
+        await stempelBarisNganggur(r.db, r.ctx.account.id, idStempel);
+      } else {
+        console.error(`[tandaiSelesai] laporan ${jobId} tidak tercatat — ${idStempel.length} baris tanpa pemilik TIDAK distempel (disebut lagi)`);
+      }
+    }
   }
 
   // ── PEMERIKSAAN AI (di aplikasi gadai) ──

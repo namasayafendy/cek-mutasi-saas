@@ -113,11 +113,19 @@ export interface IsiLapis2 {
   ditahanKonflik: number;
   kreditNganggur: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
   rpKreditNganggur: number;
-  /** Sisa yang belum pernah dilaporkan tapi tidak muat di daftar ini. */
+  /** Sisa yang belum pernah dilaporkan dan TIDAK terbaca pass karena batas
+   *  BATAS_RINCI_NGANGGUR — belum distempel. Terbaca lagi HANYA oleh PDF yang
+   *  mulai pada/sebelum `mulaiSisa…` (pembaca mulai dari tanggal awal
+   *  berkasnya sendiri). Daftar di atasnya distempel server sesudah laporan
+   *  ini tercatat — kecuali pass-nya batal (tidak distempel sama sekali). */
   sisaKreditNganggur?: number;
+  /** Tanggal terakhir yang terbaca pass; setiap baris sisa bertanggal ini ke
+   *  atas. null/undefined = tidak diketahui. */
+  mulaiSisaKreditNganggur?: string | null;
   debetNganggur: { tgl: string; jam: string; nominal: number; pihak: string; ket: string }[];
   rpDebetNganggur: number;
   sisaDebetNganggur?: number;
+  mulaiSisaDebetNganggur?: string | null;
   /** Potongan admin bank (Rp 2.500 / Rp 6.500) yang SENGAJA tidak dirinci.
    *  Keputusan pemilik 3 September 2026. Tetap dicetak satu baris: angka yang
    *  lenyap tanpa keterangan sama menakutkannya dengan angka yang salah, dan
@@ -858,27 +866,52 @@ export function susunLapis2Lengkap(isi: IsiLapis2, kepala: KepalaLapis2): { teks
   }
 
   // ── 3. UANG DI MUTASI YANG TIDAK DIKLAIM SIAPA PUN ──
-  const nK = Math.max(isi.kreditNganggur.length, Number(isi.sisaKreditNganggur ?? 0) + isi.kreditNganggur.length);
-  const nD = Math.max(isi.debetNganggur.length, Number(isi.sisaDebetNganggur ?? 0) + isi.debetNganggur.length);
+  //
+  // SEMUA baris dirinci, tidak dipotong (keputusan pemilik 1 Nov 2026). Dulu
+  // hanya 8 pertama yang tercetak, padahal pipeline menstempel "sudah
+  // diberitahukan" sampai 25 baris — baris ke-9..25 distempel tanpa pernah
+  // dibaca siapa pun, dan stempel itu membuatnya tidak akan disebut lagi.
+  // Sejak rekening dibagi dua, seluruh debet rekening MASUK jatuh ke sini.
+  //
+  // Hanya yang tercetak di sini yang boleh distempel (lib/laporan/nganggur.ts;
+  // stempelnya dipasang tandaiSelesai sesudah laporan ini tercatat). Sisa =
+  // baris yang belum terbaca karena batas, belum distempel — tanggal tertua
+  // dibaca dulu, jadi sisanya selalu tanggal paling baru. Panjang pesan
+  // diurus pecahPesanLapis2, bukan dengan memotong daftar ini.
+  //
+  // Kalimat sisa TIDAK menjanjikan "dirinci di laporan berikutnya": pembaca
+  // hanya membaca dari tanggal awal berkasnya sendiri, dan saran export
+  // harian mulai dari akhir tercakup − 1 hari. Sisa yang lebih tua dari itu
+  // tidak akan pernah terbaca lagi — jadi kalimatnya menyebut dari tanggal
+  // berapa PDF berikutnya harus mulai. Ia juga tidak menyebut "distempel":
+  // pada pass batal, baris yang tercetak pun tidak distempel.
+  const sisaK = Math.max(0, Number(isi.sisaKreditNganggur ?? 0));
+  const sisaD = Math.max(0, Number(isi.sisaDebetNganggur ?? 0));
+  const nK = isi.kreditNganggur.length + sisaK;
+  const nD = isi.debetNganggur.length + sisaD;
+  const cetakNganggur = (judul: string, n: number, rpRinci: number,
+                         baris: IsiLapis2["kreditNganggur"], sisa: number, mulaiSisa: string | null | undefined) => {
+    // Rupiah hanya dari yang dirinci — dikatakan, bukan disamarkan sebagai total.
+    L.push(`   ${judul} ${n} · ${rp(rpRinci)}` + (sisa > 0 ? ` (rupiah ${baris.length} yang dirinci)` : ""));
+    baris.forEach((x) => L.push(`   • ${tgl(x.tgl)} ${x.jam} · ${rp(x.nominal)} · ${x.pihak}`));
+    if (sisa > 0) {
+      // Penyusun lama (tanpa mulaiSisa…) jatuh ke tanggal terakhir yang
+      // dirinci — bisa lebih awal dari batas sebenarnya, tidak pernah lebih
+      // lambat, jadi PDF yang mulai di situ tetap membaca seluruh sisanya.
+      const mulai = mulaiSisa || baris.reduce((m, x) => (x.tgl > m ? x.tgl : m), "");
+      L.push(mulai
+        ? `   …dan ${sisa} baris lagi (tanggal ${tgl(mulai)} ke atas) belum dirinci — ` +
+          `unggah PDF yang mulai ${tgl(mulai)} (atau lebih awal) supaya dirinci`
+        : `   …dan ${sisa} baris lagi belum dirinci — unggah ulang PDF dengan tanggal awal yang sama supaya dirinci`);
+    }
+  };
   L.push("");
   L.push(`UANG DI MUTASI TANPA PEMILIK`);
   if (nK + nD === 0) {
     L.push(`   ✅ tidak ada.`);
   } else {
-    if (nK > 0) {
-      L.push(`   masuk  ${nK} · ${rp(isi.rpKreditNganggur)}`);
-      isi.kreditNganggur.slice(0, 8).forEach((x) =>
-        L.push(`   • ${tgl(x.tgl)} ${x.jam} · ${rp(x.nominal)} · ${x.pihak}`));
-      const sisaK = nK - Math.min(8, isi.kreditNganggur.length);
-      if (sisaK > 0) L.push(`   …dan ${sisaK} lagi`);
-    }
-    if (nD > 0) {
-      L.push(`   keluar ${nD} · ${rp(isi.rpDebetNganggur)}`);
-      isi.debetNganggur.slice(0, 8).forEach((x) =>
-        L.push(`   • ${tgl(x.tgl)} ${x.jam} · ${rp(x.nominal)} · ${x.pihak}`));
-      const sisaD = nD - Math.min(8, isi.debetNganggur.length);
-      if (sisaD > 0) L.push(`   …dan ${sisaD} lagi`);
-    }
+    if (nK > 0) cetakNganggur("masuk ", nK, isi.rpKreditNganggur, isi.kreditNganggur, sisaK, isi.mulaiSisaKreditNganggur);
+    if (nD > 0) cetakNganggur("keluar", nD, isi.rpDebetNganggur, isi.debetNganggur, sisaD, isi.mulaiSisaDebetNganggur);
   }
   // Disebut DI LUAR cacah di atas, bukan dijumlahkan ke dalamnya: ini bukan
   // uang tanpa pemilik, ini potongan bank yang pemiliknya sudah jelas.
@@ -912,4 +945,73 @@ export function susunLapis2Lengkap(isi: IsiLapis2, kepala: KepalaLapis2): { teks
   };
 
   return { teks: L.join("\n"), ringkas };
+}
+
+// ── PESAN TELEGRAM: DIPECAH, BUKAN DIPOTONG (1 November 2026) ──
+//
+// kirimPesan (lib/telegram/bot.ts) memotong DIAM-DIAM teks di atas 4000
+// karakter ("… (dipotong)"), karena Telegram menolak pesan > 4096. Sejak blok
+// UANG TANPA PEMILIK merinci semua baris, laporan bisa melewati batas itu —
+// dan yang terpotong di ekor justru baris yang SUDAH distempel "sudah
+// diberitahukan". Potongan itu lubang yang sama dengan "…dan N lagi" dulu.
+//
+// Laporan yang muat dikirim apa adanya (satu pesan, byte demi byte sama).
+// Yang tidak muat dipecah per BARIS jadi beberapa pesan bernomor. Hanya pesan
+// pertama yang diawali "🟢 LAPIS 2" — itu jangkar LIKE patokan "sejak" dan
+// cron periksa-ai; pesan lanjutan SENGAJA berawalan lain supaya tidak pernah
+// terbaca sebagai laporan kedua.
+
+/** Panjang maksimum satu pesan = ambang potong kirimPesan (BATAS_TEKS_PESAN_TG).
+ *  Ditulis ulang di sini, bukan diimpor, supaya berkas ini tetap tanpa impor
+ *  (dipakai juga oleh kode peramban); uji memastikan keduanya sama. */
+export const BATAS_PESAN_LAPIS2 = 4000;
+/** Awalan pesan lanjutan. JANGAN diubah menjadi "🟢 LAPIS 2…". */
+export const AWALAN_LANJUTAN_LAPIS2 = "↪️ LAPIS 2 lanjutan";
+
+/** Pecah teks laporan Lapis 2 menjadi pesan-pesan ≤ `batas` karakter. */
+export function pecahPesanLapis2(teks: string, batas: number = BATAS_PESAN_LAPIS2): string[] {
+  if (teks.length <= batas) return [teks];
+  const semula = teks.split("\n");
+  // Judul pesan lanjutan meminjam ekor baris kepala: "· cek mutasi 1 Nov-2 Nov · #12".
+  const ekor = (semula[0] ?? "").replace(/^🟢 LAPIS 2\s*/, "").trim();
+  const judul = (k: number, n: number) => `${AWALAN_LANJUTAN_LAPIS2} ${k}/${n}` + (ekor ? ` ${ekor}` : "");
+  const penutup = (k: number, n: number) => `↪️ bersambung ke pesan ${k + 1}/${n}`;
+  // Ruang judul + baris kosong + penutup, dengan nomor terpanjang yang mungkin.
+  const muat = batas - (judul(999, 999).length + penutup(999, 999).length + 4);
+  // Jaring: baris tunggal yang lebih panjang dari ruang dipecah per huruf
+  // (per titik kode, supaya emoji tidak terbelah). Laporan normal tidak punya.
+  const baris: string[] = [];
+  for (const b of semula) {
+    if (b.length <= muat) { baris.push(b); continue; }
+    let potong = "";
+    for (const h of Array.from(b)) {
+      if (potong.length + h.length > muat) { baris.push(potong); potong = ""; }
+      potong += h;
+    }
+    baris.push(potong);
+  }
+  const panjang = (xs: string[]) => xs.reduce((s, x) => s + x.length, 0) + Math.max(0, xs.length - 1);
+  const bagian: string[][] = [];
+  let kini: string[] = [];
+  for (const b of baris) {
+    // `while`, bukan `if`: sisa sesudah pecah di baris kosong ditambah baris
+    // berikutnya masih bisa melewati ruang — diulang sampai muat.
+    while (kini.length && panjang([...kini, b]) > muat) {
+      // Pecah di batas blok (baris kosong) kalau bagian ini masih terisi
+      // setidaknya separuh — supaya satu blok tidak terbelah tanpa perlu.
+      const kosong = kini.lastIndexOf("");
+      const di = kosong > 0 && panjang(kini.slice(0, kosong)) >= muat / 2 ? kosong : kini.length;
+      bagian.push(kini.slice(0, di));
+      kini = kini.slice(di);
+      while (kini.length && kini[0] === "") kini.shift();
+    }
+    kini.push(b);
+  }
+  if (kini.length) bagian.push(kini);
+  const n = bagian.length;
+  return bagian.map((xs, i) => {
+    const k = i + 1;
+    const isi = k === 1 ? xs : [judul(k, n), ...xs];
+    return (k < n ? [...isi, "", penutup(k, n)] : isi).join("\n");
+  });
 }

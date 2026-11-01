@@ -266,6 +266,12 @@ export function AutoRunner({
           // alarm REF yang dikirim ke gadai dan cocok ke "uang lama".
           alarmRef: h.alarmRef,
           uangLama: h.uangLama,
+          // id baris tanpa pemilik yang boleh distempel (1 Nov 2026). Pass
+          // TIDAK lagi menstempel sendiri — tandaiSelesai yang menstempel,
+          // sesudah laporannya tercatat. Tanpa baris ini tidak ada yang
+          // distempel: tiap baris disebut lagi selamanya, dan 100 baris
+          // tertua mengunci jatah baca sehingga yang baru tak pernah terbaca.
+          idNganggur: h.idNganggur,
         });
         const tutup = await tandaiSelesai(jobId, ringkasBerkas, [bersih(hasilKredit), bersih(hasilDebet)]);
         ubahTerakhir("selesai");

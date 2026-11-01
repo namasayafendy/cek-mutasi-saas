@@ -104,7 +104,8 @@ export async function buatLembarLapis2(
 }
 
 /** Sisipkan baris tautan di BARIS KE-3 teks laporan Lapis 2 (sesudah dua
- *  baris kepala). Pesan yang terpotong 4000 karakter tetap membawanya. */
+ *  baris kepala). Laporan yang dipecah jadi beberapa pesan (pecahPesanLapis2)
+ *  membawanya di pesan pertama. */
 export function sisipkanBarisLembar(teksLapis2: string, baris: string): string {
   const L = teksLapis2.split("\n");
   L.splice(2, 0, baris);
